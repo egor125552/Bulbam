@@ -1,112 +1,59 @@
-import { badRequest, conflict, forbidden, notFound } from "../../../core/errors";
-import type { Env } from "../../../platform/cloudflare";
+import { ApiError, badRequest, notFound } from "../../../core/errors";
+import type { DurableObjectNamespace, Env } from "../../../platform/cloudflare";
+import type { DirectConversation } from "../../messaging/domain/models";
 import type { MessagingRepository } from "../../messaging/ports/messaging-repository";
-import type { RealtimePublisher } from "../../messaging/ports/realtime-publisher";
-import type { UserDirectory } from "../../messaging/ports/user-directory";
+import type { DirectoryUser, UserDirectory } from "../../messaging/ports/user-directory";
 import type { IncomingCallNotificationPublisher } from "../../notifications/application/push-notification-service";
-import type {
-  D1CallRepository,
-  StoredCall,
-  StoredCallSignal
-} from "../infrastructure/d1-call-repository";
+import type { CallRoomSignal } from "../infrastructure/call-room";
+import { makeIceServers } from "../infrastructure/webrtc-config";
 
-export interface CallActor {
-  userId: string;
-}
-
-interface IceServer {
-  urls: string | string[];
-  username?: string;
-  credential?: string;
-}
+export interface CallActor { userId: string; }
 
 export class CallService {
   constructor(
-    private readonly calls: D1CallRepository,
+    private readonly rooms: DurableObjectNamespace,
     private readonly messaging: MessagingRepository,
     private readonly users: UserDirectory,
-    private readonly realtime: RealtimePublisher,
     private readonly env: Env,
     private readonly notifications?: IncomingCallNotificationPublisher,
     private readonly defer?: (promise: Promise<unknown>) => void
   ) {}
 
-  initialize(): Promise<void> {
-    return this.calls.initialize();
-  }
-
-  async iceServers(): Promise<IceServer[]> {
-    const stun: IceServer[] = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
-    if (!this.env.TURN_KEY_ID || !this.env.TURN_KEY_API_TOKEN) return stun;
-
-    try {
-      const response = await fetch(
-        `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(this.env.TURN_KEY_ID)}/credentials/generate-ice-servers`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${this.env.TURN_KEY_API_TOKEN}`,
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({ ttl: 7200 })
-        }
-      );
-      if (!response.ok) {
-        console.warn(`[Calls] TURN credentials returned HTTP ${response.status}; using STUN only`);
-        return stun;
-      }
-
-      const payload = await response.json() as { iceServers?: unknown };
-      if (!Array.isArray(payload.iceServers) || payload.iceServers.length === 0) {
-        console.warn("[Calls] TURN credentials response had no iceServers; using STUN only");
-        return stun;
-      }
-
-      const iceServers = payload.iceServers.filter(isIceServer);
-      return iceServers.length ? iceServers : stun;
-    } catch (error) {
-      console.warn("[Calls] TURN credentials could not be generated; using STUN only", error);
-      return stun;
-    }
+  async iceServers(actor: CallActor) {
+    return makeIceServers(this.env, actor.userId);
   }
 
   async start(actor: CallActor, rawConversationId: string) {
     const conversationId = validateUuid(rawConversationId, "conversationId");
-    const conversation = await this.messaging.findConversationForUser(conversationId, actor.userId);
-    if (!conversation) notFound("chat_not_found", "Диалог не найден.");
-
-    const calleeUserId = conversation.participantAId === actor.userId
-      ? conversation.participantBId
-      : conversation.participantAId;
-    if (await this.calls.hasActiveCall([actor.userId, calleeUserId])) {
-      conflict("call_busy", "У одного из участников уже есть активный звонок.");
-    }
-
-    const call: StoredCall = {
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const calleeUserId = otherParticipant(conversation, actor.userId);
+    const caller = await this.users.findUser(actor.userId) ?? deletedUser(actor.userId);
+    const callee = await this.users.findUser(calleeUserId) ?? deletedUser(calleeUserId);
+    const now = Date.now();
+    const call = {
       callId: crypto.randomUUID(),
       conversationId,
       callerUserId: actor.userId,
       calleeUserId,
+      caller,
+      callee,
       status: "ringing",
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       answeredAt: null,
       endedAt: null,
       endedByUserId: null
     };
-    await this.calls.insert(call);
-    const view = await this.view(call, actor.userId);
-    const calleeView = await this.view(call, calleeUserId);
 
-    await this.realtime.publishToUsers([calleeUserId], {
-      type: "call.ringing",
-      call: calleeView
+    const payload = await this.roomRequest(conversationId, "/start", {
+      method: "POST",
+      body: JSON.stringify({ call })
     });
 
     if (this.notifications) {
-      const caller = await this.users.findUser(actor.userId);
       const task = this.notifications.notifyIncomingCall({
         recipientUserId: calleeUserId,
-        callerDisplayName: caller?.displayName ?? "Бульбам",
+        callerDisplayName: caller.displayName,
         callId: call.callId,
         conversationId
       }).catch((error) => console.warn("[CallPush] notification failed", error));
@@ -114,137 +61,137 @@ export class CallService {
       else await task;
     }
 
-    return view;
+    return withPeer(payload.call, actor.userId);
   }
 
-  async get(actor: CallActor, rawCallId: string) {
-    const call = await this.requireParticipant(actor, rawCallId);
-    return this.view(call, actor.userId);
-  }
-
-  async answer(actor: CallActor, rawCallId: string) {
-    const call = await this.requireParticipant(actor, rawCallId);
-    if (call.calleeUserId !== actor.userId) {
-      forbidden("call_answer_forbidden", "Ответить на этот звонок может только получатель.");
-    }
-    if (call.status !== "ringing") {
-      conflict("call_not_ringing", "Этот звонок уже не ожидает ответа.");
-    }
-    const updated = await this.calls.transition(call.callId, ["ringing"], "accepted", actor.userId, Date.now());
-    if (!updated) conflict("call_state_changed", "Состояние звонка уже изменилось.");
-    await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
-      type: "call.answered",
-      callId: updated.callId,
-      answeredAt: updated.answeredAt
-    });
-    return this.view(updated, actor.userId);
-  }
-
-  async decline(actor: CallActor, rawCallId: string) {
-    const call = await this.requireParticipant(actor, rawCallId);
-    if (call.calleeUserId !== actor.userId) {
-      forbidden("call_decline_forbidden", "Отклонить этот звонок может только получатель.");
-    }
-    if (call.status !== "ringing") {
-      conflict("call_not_ringing", "Этот звонок уже не ожидает ответа.");
-    }
-    const updated = await this.calls.transition(call.callId, ["ringing"], "declined", actor.userId, Date.now());
-    if (!updated) conflict("call_state_changed", "Состояние звонка уже изменилось.");
-    await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
-      type: "call.declined",
-      callId: updated.callId,
-      endedAt: updated.endedAt
-    });
-    await this.calls.deleteSignals(updated.callId);
-    return this.view(updated, actor.userId);
-  }
-
-  async end(actor: CallActor, rawCallId: string) {
-    const call = await this.requireParticipant(actor, rawCallId);
-    if (call.status === "declined" || call.status === "ended") return this.view(call, actor.userId);
-    const updated = await this.calls.transition(
-      call.callId,
-      ["ringing", "accepted"],
-      "ended",
-      actor.userId,
-      Date.now()
-    );
-    if (!updated) {
-      const latest = await this.calls.find(call.callId);
-      if (!latest) notFound("call_not_found", "Звонок не найден.");
-      return this.view(latest, actor.userId);
-    }
-    await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
-      type: "call.ended",
-      callId: updated.callId,
-      endedAt: updated.endedAt,
-      endedByUserId: updated.endedByUserId
-    });
-    await this.calls.deleteSignals(updated.callId);
-    return this.view(updated, actor.userId);
-  }
-
-  async signal(actor: CallActor, rawCallId: string, body: Record<string, unknown>) {
-    const call = await this.requireParticipant(actor, rawCallId);
-    if (call.status !== "accepted") {
-      conflict("call_not_accepted", "Сигнал WebRTC можно передавать только после ответа на звонок.");
-    }
-    const { kind, payload } = validateSignal(body);
-    if (kind === "offer" && actor.userId !== call.callerUserId) {
-      forbidden("call_offer_forbidden", "WebRTC offer создаёт инициатор звонка.");
-    }
-    if (kind === "answer" && actor.userId !== call.calleeUserId) {
-      forbidden("call_answer_signal_forbidden", "WebRTC answer создаёт получатель звонка.");
-    }
-
-    const signal = await this.calls.insertSignal(call.callId, actor.userId, kind, payload, Date.now());
-    const recipientUserId = actor.userId === call.callerUserId ? call.calleeUserId : call.callerUserId;
-    await this.realtime.publishToUsers([recipientUserId], {
-      type: "call.signal",
-      callId: call.callId,
-      signal
-    });
-    return signal;
-  }
-
-  async signals(actor: CallActor, rawCallId: string, rawAfter: string | null) {
-    const call = await this.requireParticipant(actor, rawCallId);
-    const after = validateSequence(rawAfter);
-    const signals = await this.calls.listSignals(call.callId, after, 100);
-    return signals.filter((signal) => signal.senderUserId !== actor.userId);
-  }
-
-  private async requireParticipant(actor: CallActor, rawCallId: string): Promise<StoredCall> {
+  async get(actor: CallActor, rawConversationId: string, rawCallId: string) {
+    const conversationId = validateUuid(rawConversationId, "conversationId");
     const callId = validateUuid(rawCallId, "callId");
-    const call = await this.calls.find(callId);
-    if (!call) notFound("call_not_found", "Звонок не найден.");
-    if (call.callerUserId !== actor.userId && call.calleeUserId !== actor.userId) {
-      notFound("call_not_found", "Звонок не найден.");
-    }
-    return call;
+    await this.requireConversation(conversationId, actor.userId);
+    const payload = await this.roomRequest(
+      conversationId,
+      `/call?callId=${encodeURIComponent(callId)}&viewerUserId=${encodeURIComponent(actor.userId)}`
+    );
+    return payload.call;
   }
 
-  private async view(call: StoredCall, viewerUserId: string) {
-    const peerUserId = call.callerUserId === viewerUserId ? call.calleeUserId : call.callerUserId;
-    const peer = await this.users.findUser(peerUserId);
-    return {
-      ...call,
-      direction: call.callerUserId === viewerUserId ? "outgoing" : "incoming",
-      peer: peer ?? { userId: peerUserId, username: "deleted", displayName: "Удалённый аккаунт" }
-    };
+  async answer(actor: CallActor, rawConversationId: string, rawCallId: string) {
+    return this.transition(actor, rawConversationId, rawCallId, "answer");
+  }
+
+  async decline(actor: CallActor, rawConversationId: string, rawCallId: string) {
+    return this.transition(actor, rawConversationId, rawCallId, "decline");
+  }
+
+  async end(actor: CallActor, rawConversationId: string, rawCallId: string) {
+    return this.transition(actor, rawConversationId, rawCallId, "end");
+  }
+
+  async signal(
+    actor: CallActor,
+    rawConversationId: string,
+    rawCallId: string,
+    body: Record<string, unknown>
+  ) {
+    const conversationId = validateUuid(rawConversationId, "conversationId");
+    const callId = validateUuid(rawCallId, "callId");
+    await this.requireConversation(conversationId, actor.userId);
+    const { kind, payload } = validateSignal(body);
+    const response = await this.roomRequest(conversationId, "/signal", {
+      method: "POST",
+      body: JSON.stringify({
+        callId,
+        actorUserId: actor.userId,
+        kind,
+        payload
+      })
+    });
+    return response.signal;
+  }
+
+  async signals(
+    actor: CallActor,
+    rawConversationId: string,
+    rawCallId: string,
+    rawAfter: string | null
+  ) {
+    const conversationId = validateUuid(rawConversationId, "conversationId");
+    const callId = validateUuid(rawCallId, "callId");
+    await this.requireConversation(conversationId, actor.userId);
+    const after = validateSequence(rawAfter);
+    const payload = await this.roomRequest(
+      conversationId,
+      `/signals?callId=${encodeURIComponent(callId)}&viewerUserId=${encodeURIComponent(actor.userId)}&after=${after}`
+    );
+    return Array.isArray(payload.signals) ? payload.signals : [];
+  }
+
+  private async transition(
+    actor: CallActor,
+    rawConversationId: string,
+    rawCallId: string,
+    action: "answer" | "decline" | "end"
+  ) {
+    const conversationId = validateUuid(rawConversationId, "conversationId");
+    const callId = validateUuid(rawCallId, "callId");
+    await this.requireConversation(conversationId, actor.userId);
+    const payload = await this.roomRequest(conversationId, "/transition", {
+      method: "POST",
+      body: JSON.stringify({ callId, actorUserId: actor.userId, action })
+    });
+    return payload.call;
+  }
+
+  private async requireConversation(conversationId: string, userId: string): Promise<DirectConversation> {
+    const conversation = await this.messaging.findConversationForUser(conversationId, userId);
+    if (!conversation) notFound("chat_not_found", "Диалог не найден.");
+    return conversation;
+  }
+
+  private async roomRequest(
+    conversationId: string,
+    path: string,
+    init?: RequestInit
+  ): Promise<Record<string, any>> {
+    const response = await this.rooms.getByName(conversationId).fetch(
+      new Request(`https://call-room.internal${path}`, {
+        ...init,
+        headers: {
+          "content-type": "application/json",
+          ...(init?.headers ?? {})
+        }
+      })
+    );
+    let payload: any = null;
+    try { payload = await response.json(); } catch {}
+    if (!response.ok || !payload?.ok) {
+      throw new ApiError(
+        response.status || 500,
+        payload?.error?.code || "call_room_failure",
+        payload?.error?.message || "Не удалось обработать звонок."
+      );
+    }
+    return payload;
   }
 }
 
-function isIceServer(value: unknown): value is IceServer {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const server = value as Record<string, unknown>;
-  const urls = server.urls;
-  const validUrls = typeof urls === "string" ||
-    (Array.isArray(urls) && urls.length > 0 && urls.every((url) => typeof url === "string"));
-  if (!validUrls) return false;
-  if (server.username !== undefined && typeof server.username !== "string") return false;
-  if (server.credential !== undefined && typeof server.credential !== "string") return false;
-  return true;
+function withPeer(call: any, viewerUserId: string) {
+  if (!call || typeof call !== "object") return call;
+  return {
+    ...call,
+    direction: call.callerUserId === viewerUserId ? "outgoing" : "incoming",
+    peer: call.callerUserId === viewerUserId ? call.callee : call.caller
+  };
+}
+
+function otherParticipant(conversation: DirectConversation, userId: string): string {
+  return conversation.participantAId === userId
+    ? conversation.participantBId
+    : conversation.participantAId;
+}
+
+function deletedUser(userId: string): DirectoryUser {
+  return { userId, username: "deleted", displayName: "Удалённый аккаунт" };
 }
 
 function validateUuid(value: string, field: string): string {
@@ -264,7 +211,7 @@ function validateSequence(value: string | null): number {
 }
 
 function validateSignal(body: Record<string, unknown>): {
-  kind: StoredCallSignal["kind"];
+  kind: CallRoomSignal["kind"];
   payload: unknown;
 } {
   const kind = body.kind;
@@ -276,7 +223,6 @@ function validateSignal(body: Record<string, unknown>): {
   if (!encoded || encoded.length > 64 * 1024) {
     badRequest("call_signal_too_large", "WebRTC-сигнал слишком большой.");
   }
-
   if (kind === "offer" || kind === "answer") {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       badRequest("invalid_session_description", "Некорректное описание WebRTC-сессии.");
@@ -294,6 +240,5 @@ function validateSignal(body: Record<string, unknown>): {
       badRequest("invalid_ice_candidate", "Некорректный ICE-кандидат.");
     }
   }
-
   return { kind, payload };
 }
