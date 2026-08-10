@@ -13,7 +13,19 @@ export const elements = {
   inviteCard: document.querySelector("#invite-card"),
   inviteForm: document.querySelector("#invite-form"),
   newInvite: document.querySelector("#new-invite"),
-  newInviteCode: document.querySelector("#new-invite-code")
+  newInviteCode: document.querySelector("#new-invite-code"),
+  newChatButton: document.querySelector("#new-chat-button"),
+  userSearchPanel: document.querySelector("#user-search-panel"),
+  userSearchInput: document.querySelector("#user-search-input"),
+  userSearchResults: document.querySelector("#user-search-results"),
+  chatList: document.querySelector("#chat-list"),
+  conversationTitle: document.querySelector("#conversation-title"),
+  conversationPeer: document.querySelector("#conversation-peer"),
+  conversationEmpty: document.querySelector("#conversation-empty"),
+  messageList: document.querySelector("#message-list"),
+  messageForm: document.querySelector("#message-form"),
+  messageInput: document.querySelector("#message-input"),
+  sendMessageButton: document.querySelector("#send-message")
 };
 
 let currentAccount = null;
@@ -38,6 +50,7 @@ export function showSignedOut() {
   elements.signedIn.hidden = true;
   elements.inviteCard.hidden = true;
   elements.sessionsRoot.replaceChildren();
+  window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account: null } }));
 }
 
 export function showSignedIn(account, session) {
@@ -50,4 +63,5 @@ export function showSignedIn(account, session) {
   document.querySelector("#account-id").textContent = account.userId;
   document.querySelector("#account-role").textContent = account.role;
   elements.inviteCard.hidden = !["owner", "admin"].includes(account.role);
+  window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account } }));
 }
