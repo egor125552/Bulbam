@@ -14,6 +14,20 @@ export class DurableObjectRealtime {
     return this.namespace.getByName(userId).fetch(request);
   }
 
+  async hasActiveConnections(userId: string): Promise<boolean> {
+    if (!this.namespace) return false;
+    try {
+      const response = await this.namespace.getByName(userId).fetch(
+        new Request("https://realtime.internal/presence")
+      );
+      if (!response.ok) return false;
+      const payload = await response.json() as { connected?: unknown };
+      return payload.connected === true;
+    } catch {
+      return false;
+    }
+  }
+
   async publishToUsers(userIds: string[], event: Record<string, unknown>): Promise<void> {
     if (!this.namespace) return;
     const payload = JSON.stringify(event);
