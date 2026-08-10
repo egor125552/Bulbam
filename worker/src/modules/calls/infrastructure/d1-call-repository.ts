@@ -43,6 +43,19 @@ export class D1CallRepository {
     return ensureCallsSchema(this.db);
   }
 
+  async expireStale(now: number): Promise<void> {
+    await this.initialize();
+    await this.db
+      .prepare(
+        `UPDATE calls
+         SET status = 'ended', ended_at = ?, ended_by_user_id = NULL
+         WHERE (status = 'ringing' AND created_at < ?)
+            OR (status = 'accepted' AND answered_at IS NOT NULL AND answered_at < ?)`
+      )
+      .bind(now, now - 90_000, now - 8 * 60 * 60 * 1000)
+      .run();
+  }
+
   async hasActiveCall(userIds: string[]): Promise<boolean> {
     await this.initialize();
     if (!userIds.length) return false;
