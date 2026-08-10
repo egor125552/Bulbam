@@ -13,6 +13,20 @@
       "binding": "DB"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME",
+        "class_name": "UserRealtime"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "realtime-v1",
+      "new_sqlite_classes": ["UserRealtime"]
+    }
+  ],
   "observability": {
     "enabled": true
   }
