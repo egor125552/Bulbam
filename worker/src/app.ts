@@ -85,6 +85,7 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
       : null;
 
     if (url.pathname === "/api/ready") {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
       if (!identityRepository || !messagingRepository || !pushRepository) return storageBindingMissing();
       if (!env.CALL_ROOM) return callsBindingMissing();
       try {
