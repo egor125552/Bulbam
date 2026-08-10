@@ -37,3 +37,17 @@ export function validateMessageInput(body: Record<string, unknown>) {
 
   return { text, clientMessageId: rawClientMessageId };
 }
+
+export function validateDeliveryReceiptInput(body: Record<string, unknown>): string[] {
+  const rawMessageIds = body.messageIds;
+  if (!Array.isArray(rawMessageIds) || rawMessageIds.length < 1 || rawMessageIds.length > 100) {
+    badRequest("invalid_delivery_receipt", "Нужно передать от 1 до 100 идентификаторов сообщений.");
+  }
+
+  const messageIds = [...new Set(rawMessageIds)];
+  if (messageIds.some((messageId) => typeof messageId !== "string" || !UUID.test(messageId))) {
+    badRequest("invalid_delivery_receipt", "Некорректный идентификатор сообщения.");
+  }
+
+  return messageIds as string[];
+}

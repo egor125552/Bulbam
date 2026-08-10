@@ -13,6 +13,12 @@ export interface StoredMessage {
   clientMessageId: string;
   text: string;
   createdAt: number;
+  deliveredAt: number | null;
+}
+
+export interface DeliveryReceiptUpdate {
+  message: StoredMessage;
+  changed: boolean;
 }
 
 export interface MessagingActor {
