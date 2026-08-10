@@ -214,7 +214,7 @@ function validateSignal(body: Record<string, unknown>): {
   payload: unknown;
 } {
   const kind = body.kind;
-  if (kind !== "offer" && kind !== "answer" && kind !== "ice") {
+  if (kind !== "offer" && kind !== "answer" && kind !== "ice" && kind !== "resume") {
     badRequest("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
   }
   const payload = body.payload;
@@ -222,6 +222,14 @@ function validateSignal(body: Record<string, unknown>): {
   if (!encoded || encoded.length > 64 * 1024) {
     badRequest("call_signal_too_large", "WebRTC-сигнал слишком большой.");
   }
+
+  if (kind === "resume") {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      badRequest("invalid_call_resume", "Некорректный запрос восстановления звонка.");
+    }
+    return { kind, payload };
+  }
+
   if (kind === "offer" || kind === "answer") {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       badRequest("invalid_session_description", "Некорректное описание WebRTC-сессии.");
