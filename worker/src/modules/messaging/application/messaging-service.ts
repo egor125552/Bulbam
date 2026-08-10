@@ -1,4 +1,5 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
+import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
 import type { DirectConversation, MessagingActor, StoredMessage } from "../domain/models";
 import {
   validateConversationId,
@@ -14,7 +15,9 @@ export class MessagingService {
   constructor(
     private readonly repository: MessagingRepository,
     private readonly users: UserDirectory,
-    private readonly realtime: RealtimePublisher
+    private readonly realtime: RealtimePublisher,
+    private readonly notifications?: MessageNotificationPublisher,
+    private readonly defer?: (promise: Promise<unknown>) => void
   ) {}
 
   initialize(): Promise<void> {
@@ -81,6 +84,22 @@ export class MessagingService {
         conversationId,
         message: result.message
       });
+
+      if (this.notifications) {
+        const recipientUserId = peerUserId(conversation, actor.userId);
+        const sender = await this.users.findUser(actor.userId);
+        const pushTask = this.notifications.notifyNewMessage({
+          recipientUserId,
+          senderDisplayName: sender?.displayName ?? "Бульбам",
+          conversationId,
+          messageId: result.message.messageId,
+          text: result.message.text
+        }).catch((error) => {
+          console.warn("[Push] notification task failed", error);
+        });
+        if (this.defer) this.defer(pushTask);
+        else await pushTask;
+      }
     }
 
     return {
@@ -151,10 +170,8 @@ export class MessagingService {
   }
 
   private async chatSummary(userId: string, conversation: DirectConversation, knownPeer?: DirectoryUser) {
-    const peerUserId = conversation.participantAId === userId
-      ? conversation.participantBId
-      : conversation.participantAId;
-    const peer = knownPeer ?? await this.users.findUser(peerUserId) ?? deletedUser(peerUserId);
+    const peerUser = peerUserId(conversation, userId);
+    const peer = knownPeer ?? await this.users.findUser(peerUser) ?? deletedUser(peerUser);
     const lastMessage = await this.repository.findLatestMessage(conversation.conversationId);
     return {
       conversationId: conversation.conversationId,
@@ -168,6 +185,12 @@ export class MessagingService {
 
 function participants(conversation: DirectConversation): string[] {
   return [conversation.participantAId, conversation.participantBId];
+}
+
+function peerUserId(conversation: DirectConversation, userId: string): string {
+  return conversation.participantAId === userId
+    ? conversation.participantBId
+    : conversation.participantAId;
 }
 
 function deletedUser(userId: string): DirectoryUser {

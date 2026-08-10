@@ -1,20 +1,24 @@
 {
   "name": "bulbam",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
-    "check:web": "for f in web/app.js web/js/*.js; do node --check \"$f\" || exit 1; done",
+    "check:web": "for f in web/app.js web/sw.js web/js/*.js; do node --check \"$f\" || exit 1; done",
     "check:worker": "wrangler deploy --dry-run",
     "test": "vitest run",
     "test:registration": "vitest run test/registration-smoke.test.js --reporter=verbose",
     "test:messaging": "vitest run test/messaging-smoke.test.js --reporter=verbose",
     "verify": "npm run check && npm run check:web && npm run check:worker && npm test"
   },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  },
   "devDependencies": {
+    "@types/web-push": "^3.6.4",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0",
     "wrangler": "^4.0.0"

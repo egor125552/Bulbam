@@ -3,6 +3,7 @@
   "name": "bulbam-api",
   "main": "worker/src/index.ts",
   "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./web",
     "binding": "ASSETS",

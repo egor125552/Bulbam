@@ -20,6 +20,10 @@ export class UserRealtime {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === "/presence") {
+      return Response.json({ connected: this.state.getWebSockets().length > 0 });
+    }
+
     if (request.method === "POST" && url.pathname === "/emit") {
       const text = await request.text();
       if (new TextEncoder().encode(text).byteLength > MAX_EVENT_BYTES) {

@@ -1,4 +1,5 @@
 import { api, deviceName } from "./api.js";
+import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
 import { announce, elements, showSignedIn, showSignedOut } from "./ui.js";
 
@@ -84,6 +85,7 @@ async function login(event) {
 async function logout() {
   elements.logoutButton.disabled = true;
   try {
+    await detachPushSubscription();
     await api("/api/v1/auth/logout", { method: "POST" });
     showSignedOut();
     announce("Вы вышли из аккаунта.");
