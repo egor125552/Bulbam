@@ -19,10 +19,22 @@ export function normalizeUsername(raw: string): string {
   return username;
 }
 
+export function normalizeDisplayNameForSearch(raw: string): string {
+  return raw.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("ru-RU");
+}
+
 export function validateDisplayName(raw: string): string {
-  const value = raw.trim().replace(/\s+/g, " ");
+  const value = raw.normalize("NFKC").trim().replace(/\s+/g, " ");
   if (value.length < 1 || value.length > 64) {
     badRequest("invalid_display_name", "Имя должно содержать от 1 до 64 символов.");
+  }
+  return value;
+}
+
+export function validateUserSearchQuery(raw: string): string {
+  const value = raw.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (value.length < 2 || value.length > 64) {
+    badRequest("invalid_search_query", "Для поиска введи от 2 до 64 символов.");
   }
   return value;
 }
