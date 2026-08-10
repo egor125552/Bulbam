@@ -3,6 +3,8 @@ import { announce, elements, getCurrentAccount } from "./ui.js";
 
 let registrationPromise = null;
 let config = null;
+let pushActive = false;
+let foregroundTimer = null;
 
 export function setupPushNotifications() {
   elements.pushEnableButton.addEventListener("click", () => void enablePush());
@@ -14,6 +16,7 @@ export function setupPushNotifications() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void clearBadge();
+    if (pushActive) void sendForegroundState(document.visibilityState === "visible");
   });
 
   if (pushSupported()) {
@@ -23,7 +26,9 @@ export function setupPushNotifications() {
 
 export async function detachPushSubscription() {
   if (!pushSupported() || !getCurrentAccount()) return;
+  setPushActive(false);
   try {
+    await sendForegroundState(false, true);
     const registration = await ensureRegistration();
     const subscription = await registration.pushManager.getSubscription();
     if (!subscription) return;
@@ -39,16 +44,19 @@ export async function detachPushSubscription() {
 async function refreshPushState() {
   const account = getCurrentAccount();
   if (!account) {
+    setPushActive(false);
     setUi("Войдите в аккаунт, чтобы настроить уведомления.", false, false);
     return;
   }
 
   if (!pushSupported()) {
+    setPushActive(false);
     setUi("Этот браузер не поддерживает Web Push для Бульбама.", false, false);
     return;
   }
 
   if (isIosFamily() && !isStandalone()) {
+    setPushActive(false);
     setUi(
       "На iPhone или iPad сначала добавьте Бульбам на экран Домой и откройте его как приложение.",
       false,
@@ -60,6 +68,7 @@ async function refreshPushState() {
   try {
     config = await api("/api/v1/push/config");
     if (!config.configured || !config.vapidPublicKey) {
+      setPushActive(false);
       setUi("Сервер push-уведомлений ещё не настроен.", false, false);
       return;
     }
@@ -68,10 +77,12 @@ async function refreshPushState() {
     const subscription = await registration.pushManager.getSubscription();
     if (Notification.permission === "granted" && subscription) {
       await syncSubscription(subscription);
+      setPushActive(true);
       setUi("Push-уведомления включены на этом устройстве.", false, true);
       return;
     }
 
+    setPushActive(false);
     if (Notification.permission === "denied") {
       setUi("Уведомления запрещены в настройках браузера или системы.", false, false);
       return;
@@ -79,6 +90,7 @@ async function refreshPushState() {
 
     setUi("Push-уведомления выключены на этом устройстве.", true, false);
   } catch (error) {
+    setPushActive(false);
     setUi(`Не удалось проверить push-уведомления: ${error.message}`, true, false);
   }
 }
@@ -96,6 +108,7 @@ async function enablePush() {
       ? "granted"
       : await Notification.requestPermission();
     if (permission !== "granted") {
+      setPushActive(false);
       setUi("Разрешение на уведомления не выдано.", permission !== "denied", false);
       announce("Уведомления не включены.");
       return;
@@ -111,9 +124,11 @@ async function enablePush() {
     }
 
     await syncSubscription(subscription);
+    setPushActive(true);
     setUi("Push-уведомления включены на этом устройстве.", false, true);
     announce("Push-уведомления Бульбама включены.");
   } catch (error) {
+    setPushActive(false);
     setUi(`Не удалось включить уведомления: ${error.message}`, true, false);
     announce(`Не удалось включить уведомления: ${error.message}`);
   } finally {
@@ -123,7 +138,9 @@ async function enablePush() {
 
 async function disablePush() {
   elements.pushDisableButton.disabled = true;
+  setPushActive(false);
   try {
+    await sendForegroundState(false, true);
     const registration = await ensureRegistration();
     const subscription = await registration.pushManager.getSubscription();
     if (subscription) {
@@ -160,6 +177,38 @@ async function syncSubscription(subscription) {
       keys: serialized.keys
     })
   });
+}
+
+function setPushActive(active) {
+  pushActive = active;
+  clearInterval(foregroundTimer);
+  foregroundTimer = null;
+  if (!active || !getCurrentAccount()) return;
+
+  void sendForegroundState(document.visibilityState === "visible");
+  if (document.visibilityState === "visible") {
+    foregroundTimer = setInterval(() => {
+      if (pushActive && document.visibilityState === "visible") void sendForegroundState(true);
+    }, 20_000);
+  }
+}
+
+async function sendForegroundState(visible, keepalive = false) {
+  if (!getCurrentAccount()) return;
+  try {
+    await api("/api/v1/push/foreground", {
+      method: "POST",
+      keepalive,
+      body: JSON.stringify({ visible })
+    });
+    if (pushActive && visible && !foregroundTimer) {
+      foregroundTimer = setInterval(() => {
+        if (pushActive && document.visibilityState === "visible") void sendForegroundState(true);
+      }, 20_000);
+    }
+  } catch {
+    // Presence is an optimization. A failed heartbeat must not break messaging.
+  }
 }
 
 function ensureRegistration() {
