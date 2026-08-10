@@ -42,10 +42,17 @@ export interface AssetsBinding {
   fetch(request: Request): Promise<Response>;
 }
 
+export interface ExecutionContextLike {
+  waitUntil(promise: Promise<unknown>): void;
+}
+
 export interface Env {
   ASSETS: AssetsBinding;
   DB?: D1Database;
   REALTIME?: DurableObjectNamespace;
   DEBUG_ERRORS?: string;
   SMOKE_SECRET?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 }
