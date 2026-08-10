@@ -97,7 +97,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
       tag: `call-${input.callId}`,
       icon: "/icon.svg",
       data: {
-        url: `/?call=${encodeURIComponent(input.callId)}`,
+        url: `/?chat=${encodeURIComponent(input.conversationId)}&call=${encodeURIComponent(input.callId)}`,
         callId: input.callId,
         conversationId: input.conversationId
       }
