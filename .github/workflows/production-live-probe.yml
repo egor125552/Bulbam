@@ -70,6 +70,27 @@ jobs:
           echo "Unexpected production session lookup response."
           exit 1
 
+      - name: Probe PBKDF2 diagnostic endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== GET /api/diagnostics/password-hash ==="
+          status=$(curl --silent --show-error \
+            --output pbkdf2.json \
+            --write-out '%{http_code}' \
+            "$BASE_URL/api/diagnostics/password-hash")
+          echo "HTTP $status"
+          cat pbkdf2.json
+          echo
+
+          if [ "$status" = "200" ]; then
+            echo "PBKDF2 self-test works in production."
+            exit 0
+          fi
+
+          echo "PBKDF2 self-test failed in production."
+          exit 1
+
       - name: Probe password verification without a real account
         shell: bash
         run: |
