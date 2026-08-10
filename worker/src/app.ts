@@ -58,7 +58,7 @@ export async function handleRequest(
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
-    const push = pushRepository ? new PushNotificationService(pushRepository, realtime, env) : null;
+    const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
     const messaging = messagingRepository && identity
       ? new MessagingService(
           messagingRepository,
@@ -166,6 +166,7 @@ export async function handleRequest(
           "GET /api/v1/push/config",
           "PUT /api/v1/push/subscription",
           "DELETE /api/v1/push/subscription",
+          "POST /api/v1/push/foreground",
           "GET /api/v1/realtime (WebSocket)"
         ]
       });
