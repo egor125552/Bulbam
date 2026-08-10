@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0f766e">
   <title>Бульбам</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -12,7 +15,7 @@
 
   <header class="site-header">
     <div>
-      <p class="eyebrow">Bulbam 0.3 · Phase 2</p>
+      <p class="eyebrow">Bulbam 0.4 · PWA + Push</p>
       <h1>Бульбам</h1>
       <p>Личные чаты, которые не пропадают после перезагрузки.</p>
     </div>
@@ -122,6 +125,13 @@
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
             <button id="logout" type="button">Выйти</button>
+          </section>
+
+          <section class="card" aria-labelledby="notifications-title">
+            <h2 id="notifications-title">Push-уведомления</h2>
+            <p id="push-status">Проверяю поддержку уведомлений.</p>
+            <button id="push-enable" type="button">Включить уведомления</button>
+            <button id="push-disable" type="button" hidden>Отключить уведомления</button>
           </section>
 
           <section class="card" aria-labelledby="sessions-title">
