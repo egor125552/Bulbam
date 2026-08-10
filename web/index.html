@@ -12,17 +12,15 @@
 
   <header class="site-header">
     <div>
-      <p class="eyebrow">Bulbam 0.1</p>
+      <p class="eyebrow">Bulbam 0.2 · Phase 1</p>
       <h1>Бульбам</h1>
-      <p>Сначала надёжный мессенджер. Картошка будет чуть позже.</p>
+      <p>Аккаунты, приглашения и сессии устройств. Без картофельной магии в фундаменте.</p>
     </div>
   </header>
 
   <main id="main" tabindex="-1">
-    <section class="card" aria-labelledby="foundation-title">
-      <h2 id="foundation-title">Фундамент запущен</h2>
-      <p>Это первая веб-оболочка нового мессенджера. Сейчас она проверяет связь с новым Worker.</p>
-
+    <section class="card" aria-labelledby="health-title">
+      <h2 id="health-title">Состояние системы</h2>
       <dl class="status-grid">
         <div>
           <dt>Веб-клиент</dt>
@@ -32,15 +30,96 @@
           <dt>Worker</dt>
           <dd id="worker-status">проверяется…</dd>
         </div>
+        <div>
+          <dt>Хранилище</dt>
+          <dd id="storage-status">проверяется…</dd>
+        </div>
       </dl>
-
       <button id="check-server" type="button">Проверить сервер ещё раз</button>
-      <p id="live-status" class="live-status" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="card" aria-labelledby="next-title">
-      <h2 id="next-title">Что строим следующим</h2>
-      <p>Аккаунты по приглашениям, затем постоянные личные чаты с серверным хранением и состояниями «отправлено», «доставлено» и «прочитано».</p>
+    <section id="signed-out" class="stack" aria-labelledby="account-start-title" hidden>
+      <h2 id="account-start-title" class="visually-hidden">Вход и регистрация</h2>
+
+      <div class="card">
+        <h3>Создать аккаунт</h3>
+        <p>Для регистрации нужен одноразовый код приглашения.</p>
+        <form id="register-form" class="form-stack">
+          <label>
+            Username
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="egor">
+          </label>
+          <label>
+            Отображаемое имя
+            <input name="displayName" autocomplete="name" required maxlength="64" placeholder="Егор">
+          </label>
+          <label>
+            Пароль
+            <input name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+          </label>
+          <label>
+            Код приглашения
+            <input name="inviteCode" autocomplete="off" required maxlength="160">
+          </label>
+          <button type="submit">Создать аккаунт</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>Войти</h3>
+        <form id="login-form" class="form-stack">
+          <label>
+            Username
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
+          </label>
+          <label>
+            Пароль
+            <input name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
+          </label>
+          <button type="submit">Войти</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="signed-in" class="stack" aria-labelledby="account-title" hidden>
+      <div class="card">
+        <h2 id="account-title">Аккаунт</h2>
+        <dl class="details-list">
+          <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
+          <div><dt>Username</dt><dd id="account-username"></dd></div>
+          <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
+          <div><dt>Роль</dt><dd id="account-role"></dd></div>
+        </dl>
+        <button id="logout" type="button">Выйти</button>
+      </div>
+
+      <div class="card">
+        <h2>Устройства и сессии</h2>
+        <p>Каждый вход получает отдельную сессию. Любую из них можно завершить.</p>
+        <div id="sessions"></div>
+        <button id="refresh-sessions" type="button">Обновить список сессий</button>
+      </div>
+
+      <div id="invite-card" class="card" hidden>
+        <h2>Новое приглашение</h2>
+        <p>Доступно владельцу и администратору. Каждый код одноразовый.</p>
+        <form id="invite-form" class="form-stack">
+          <label>
+            Сколько часов действует код
+            <input name="expiresInHours" type="number" min="1" max="720" value="168" inputmode="numeric">
+          </label>
+          <button type="submit">Создать приглашение</button>
+        </form>
+        <div id="new-invite" class="result-box" hidden>
+          <p><strong>Скопируй код сейчас. Второй раз сервер его не покажет.</strong></p>
+          <code id="new-invite-code"></code>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="status-title">
+      <h2 id="status-title">Что происходит</h2>
+      <p id="live-status" class="live-status" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
     </section>
   </main>
 
