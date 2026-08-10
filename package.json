@@ -7,8 +7,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
+    "check:web": "node --check web/app.js",
     "test": "vitest run",
-    "verify": "npm run check && npm test"
+    "verify": "npm run check && npm run check:web && npm test"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
