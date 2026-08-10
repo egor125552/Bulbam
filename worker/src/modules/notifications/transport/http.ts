@@ -32,5 +32,12 @@ export async function handlePushHttp(
     return methodNotAllowed(["PUT", "DELETE"]);
   }
 
+  if (url.pathname === "/api/v1/push/foreground") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const actor = await authenticate(request);
+    await service.markForeground(actor.userId, await readJsonObject(request));
+    return json({ ok: true });
+  }
+
   return null;
 }
