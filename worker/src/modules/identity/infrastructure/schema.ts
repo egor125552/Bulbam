@@ -5,8 +5,8 @@ const BOOTSTRAP_OWNER_INVITE_HASH = "f859b29b4179dbf528a6c166e615ed0cf5c2994cc91
 const migrations = [
   {
     version: 1,
-    sql: `
-      CREATE TABLE IF NOT EXISTS invites (
+    statements: [
+      `CREATE TABLE IF NOT EXISTS invites (
         invite_id TEXT PRIMARY KEY,
         code_hash TEXT NOT NULL UNIQUE,
         created_by_user_id TEXT,
@@ -15,9 +15,8 @@ const migrations = [
         expires_at INTEGER,
         used_at INTEGER,
         used_by_user_id TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS accounts (
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounts (
         user_id TEXT PRIMARY KEY,
         username TEXT NOT NULL COLLATE NOCASE UNIQUE,
         display_name TEXT NOT NULL,
@@ -27,9 +26,8 @@ const migrations = [
         created_at INTEGER NOT NULL,
         disabled_at INTEGER,
         FOREIGN KEY (invite_id) REFERENCES invites(invite_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS sessions (
+      )`,
+      `CREATE TABLE IF NOT EXISTS sessions (
         session_id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         token_hash TEXT NOT NULL UNIQUE,
@@ -39,16 +37,11 @@ const migrations = [
         last_seen_at INTEGER NOT NULL,
         revoked_at INTEGER,
         FOREIGN KEY (user_id) REFERENCES accounts(user_id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_sessions_user_active
-        ON sessions(user_id, revoked_at, expires_at);
-      CREATE INDEX IF NOT EXISTS idx_sessions_token
-        ON sessions(token_hash);
-      CREATE INDEX IF NOT EXISTS idx_invites_code
-        ON invites(code_hash);
-
-      INSERT OR IGNORE INTO invites (
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id, revoked_at, expires_at)",
+      "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash)",
+      "CREATE INDEX IF NOT EXISTS idx_invites_code ON invites(code_hash)",
+      `INSERT OR IGNORE INTO invites (
         invite_id,
         code_hash,
         created_by_user_id,
@@ -66,8 +59,8 @@ const migrations = [
         NULL,
         NULL,
         NULL
-      );
-    `
+      )`
+    ]
   }
 ] as const;
 
@@ -83,15 +76,23 @@ export function ensureIdentitySchema(db: D1Database): Promise<void> {
   return initialization;
 }
 
+async function runStatement(db: D1Database, sql: string): Promise<void> {
+  const result = await db.prepare(sql).run();
+  if (result.success === false) {
+    throw new Error(result.error ?? "D1 statement failed");
+  }
+}
+
 async function initialize(db: D1Database): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
+  await runStatement(
+    db,
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
       module TEXT NOT NULL,
       version INTEGER NOT NULL,
       applied_at INTEGER NOT NULL,
       PRIMARY KEY (module, version)
-    );
-  `);
+    )`
+  );
 
   const applied = await db
     .prepare("SELECT version FROM schema_migrations WHERE module = ? ORDER BY version")
@@ -101,7 +102,11 @@ async function initialize(db: D1Database): Promise<void> {
 
   for (const migration of migrations) {
     if (appliedVersions.has(migration.version)) continue;
-    await db.exec(migration.sql);
+
+    for (const statement of migration.statements) {
+      await runStatement(db, statement);
+    }
+
     await db
       .prepare("INSERT OR IGNORE INTO schema_migrations(module, version, applied_at) VALUES (?, ?, ?)")
       .bind("identity", migration.version, Date.now())
