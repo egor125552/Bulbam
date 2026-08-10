@@ -1,7 +1,6 @@
 import webpush from "web-push";
 import { badRequest } from "../../../core/errors";
 import type { Env } from "../../../platform/cloudflare";
-import type { DurableObjectRealtime } from "../../realtime/public";
 import type {
   D1PushRepository,
   PushSubscriptionRecord
@@ -22,7 +21,6 @@ export interface MessageNotificationPublisher {
 export class PushNotificationService implements MessageNotificationPublisher {
   constructor(
     private readonly repository: D1PushRepository,
-    private readonly realtime: DurableObjectRealtime,
     private readonly env: Env
   ) {}
 
@@ -57,12 +55,19 @@ export class PushNotificationService implements MessageNotificationPublisher {
     await this.repository.removeForUser(userId, endpoint);
   }
 
+  async markForeground(userId: string, raw: Record<string, unknown>): Promise<void> {
+    if (typeof raw.visible !== "boolean") {
+      badRequest("invalid_push_presence", "Некорректное состояние видимости приложения.");
+    }
+    await this.repository.setForeground(userId, raw.visible, Date.now());
+  }
+
   async notifyNewMessage(input: MessageNotificationInput): Promise<void> {
     if (!this.configured()) return;
 
-    // Visible clients keep receiving the existing WebSocket event. Push is the
-    // fallback for a user whose Bulbam window is not currently active.
-    if (await this.realtime.hasActiveConnections(input.recipientUserId)) return;
+    // A short foreground lease is stronger than merely having a WebSocket:
+    // browsers may keep sockets alive briefly after a PWA goes into background.
+    if (await this.repository.isForeground(input.recipientUserId, Date.now())) return;
 
     const subscriptions = await this.repository.listForUser(input.recipientUserId);
     if (!subscriptions.length) return;
