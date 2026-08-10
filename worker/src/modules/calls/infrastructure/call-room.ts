@@ -21,7 +21,7 @@ export interface CallRoomSignal {
   sequence: number;
   callId: string;
   senderUserId: string;
-  kind: "offer" | "answer" | "ice";
+  kind: "offer" | "answer" | "ice" | "resume";
   payload: unknown;
   createdAt: number;
 }
@@ -166,9 +166,12 @@ export class CallRoom {
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, actorUserId)) return notFoundResponse();
     if (call.status !== "accepted") return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
-    if (kind !== "offer" && kind !== "answer" && kind !== "ice") return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
+    if (kind !== "offer" && kind !== "answer" && kind !== "ice" && kind !== "resume") {
+      return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
+    }
     if (kind === "offer" && actorUserId !== call.callerUserId) return forbidden("call_offer_forbidden", "Offer создаёт инициатор звонка.");
     if (kind === "answer" && actorUserId !== call.calleeUserId) return forbidden("call_answer_signal_forbidden", "Answer создаёт получатель звонка.");
+    if (kind === "resume" && actorUserId !== call.calleeUserId) return forbidden("call_resume_forbidden", "Resume запрашивает получатель звонка.");
 
     const currentSignals = await this.state.storage.get<CallRoomSignal[]>(SIGNALS_KEY) ?? [];
     const now = Date.now();
