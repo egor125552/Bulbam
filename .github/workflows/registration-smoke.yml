@@ -19,6 +19,10 @@ on:
       - "package.json"
       - ".github/workflows/registration-smoke.yml"
 
+concurrency:
+  group: registration-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
