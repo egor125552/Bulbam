@@ -6,13 +6,15 @@ import {
   verifyPassword
 } from "../../../core/crypto";
 import { ApiError, conflict, forbidden, unauthorized } from "../../../core/errors";
-import type { AuthenticatedSession, Session } from "../domain/models";
+import type { AuthenticatedSession, PublicAccount, Session } from "../domain/models";
+import { validateUserSearchQuery } from "../domain/validation";
 import type { IdentityRepository } from "../ports/identity-repository";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_INVITE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SMOKE_INVITE_TTL_MS = 30 * 60 * 1000;
 const DUMMY_PASSWORD_HASH =
   "PBKDF2-SHA256$100000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
 
@@ -115,6 +117,15 @@ export class IdentityService {
     }
   }
 
+  async searchUsers(authenticated: AuthenticatedSession, rawQuery: string): Promise<PublicAccount[]> {
+    const query = validateUserSearchQuery(rawQuery);
+    return this.repository.searchPublicAccounts(query, authenticated.account.userId, 20);
+  }
+
+  async findPublicAccountById(userId: string): Promise<PublicAccount | null> {
+    return this.repository.findPublicAccountById(userId);
+  }
+
   async createInvite(authenticated: AuthenticatedSession, expiresInHours?: number) {
     if (authenticated.account.role !== "owner" && authenticated.account.role !== "admin") {
       forbidden("invite_permission_denied", "Создавать приглашения может только администратор.");
@@ -125,18 +136,36 @@ export class IdentityService {
         ? Math.round(expiresInHours * 60 * 60 * 1000)
         : DEFAULT_INVITE_TTL_MS;
     const ttl = Math.max(60 * 60 * 1000, Math.min(MAX_INVITE_TTL_MS, requestedTtl));
+    return this.issueInvite(authenticated.account.userId, ttl);
+  }
+
+  async createSmokeInvite() {
+    return this.issueInvite(null, SMOKE_INVITE_TTL_MS);
+  }
+
+  async findSmokeUserIds(prefix: string): Promise<string[]> {
+    if (!/^smoke_[a-z0-9_]+$/i.test(prefix)) {
+      throw new ApiError(400, "invalid_smoke_prefix", "Некорректный smoke-префикс.");
+    }
+    return this.repository.findUserIdsByUsernamePrefix(prefix);
+  }
+
+  async deleteUsersByIds(userIds: string[]): Promise<void> {
+    await this.repository.deleteAccountsByUserIds(userIds);
+  }
+
+  private async issueInvite(createdByUserId: string | null, ttl: number) {
     const now = Date.now();
     const code = newInviteCode();
     const codeHash = await sha256Hex(code);
     const invite = await this.repository.createInvite({
       inviteId: crypto.randomUUID(),
       codeHash,
-      createdByUserId: authenticated.account.userId,
+      createdByUserId,
       roleGrant: "member",
       createdAt: now,
       expiresAt: now + ttl
     });
-
     return { invite, code };
   }
 
