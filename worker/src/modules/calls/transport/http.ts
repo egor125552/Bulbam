@@ -12,7 +12,7 @@ export async function handleCallHttp(
   if (url.pathname === "/api/v1/calls/ice") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     await authenticate(request);
-    return json({ ok: true, iceServers: service.iceServers() });
+    return json({ ok: true, iceServers: await service.iceServers() });
   }
 
   const startMatch = url.pathname.match(/^\/api\/v1\/chats\/([^/]+)\/calls$/);
