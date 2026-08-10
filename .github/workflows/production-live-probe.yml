@@ -47,6 +47,29 @@ jobs:
             exit 1
           fi
 
+      - name: Probe D1 session lookup without PBKDF2
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== GET /api/v1/auth/me with fake well-formed session ==="
+          token="bs_$(printf '0%.0s' {1..64})"
+          status=$(curl --silent --show-error \
+            --header "authorization: Bearer $token" \
+            --output me.json \
+            --write-out '%{http_code}' \
+            "$BASE_URL/api/v1/auth/me")
+          echo "HTTP $status"
+          cat me.json
+          echo
+
+          if [ "$status" = "401" ] && grep -q 'invalid_session' me.json; then
+            echo "Production SHA-256 + sessions/accounts D1 lookup works."
+            exit 0
+          fi
+
+          echo "Unexpected production session lookup response."
+          exit 1
+
       - name: Probe password verification without a real account
         shell: bash
         run: |
