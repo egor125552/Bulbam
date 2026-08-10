@@ -30,6 +30,10 @@ function storageBindingMissing(): Response {
   );
 }
 
+function turnConfigured(env: Env): boolean {
+  return Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN);
+}
+
 export async function handleRequest(
   request: Request,
   env: Env,
@@ -49,7 +53,10 @@ export async function handleRequest(
         push: {
           configured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT)
         },
-        calls: { transport: "webrtc", relay: "stun" },
+        calls: {
+          transport: "webrtc",
+          relay: turnConfigured(env) ? "cloudflare-turn" : "cloudflare-stun"
+        },
         time: new Date().toISOString()
       });
     }
@@ -82,6 +89,7 @@ export async function handleRequest(
           messagingRepository,
           directory,
           realtime,
+          env,
           push ?? undefined,
           ctx ? (promise) => ctx.waitUntil(promise) : undefined
         )
@@ -119,7 +127,10 @@ export async function handleRequest(
         storage: "ready",
         realtime: realtime.available() ? "ready" : "polling_fallback",
         push: push?.publicConfig().configured ? "ready" : "needs_vapid_keys",
-        calls: "ready",
+        calls: {
+          status: "ready",
+          ice: turnConfigured(env) ? "turn+stun" : "stun"
+        },
         version: VERSION
       });
     }
@@ -176,7 +187,10 @@ export async function handleRequest(
         storage: { binding: env.DB ? "configured" : "missing" },
         realtime: { binding: env.REALTIME ? "configured" : "missing" },
         push: { configured: push?.publicConfig().configured ?? false },
-        calls: { transport: "webrtc", ice: "cloudflare-stun" },
+        calls: {
+          transport: "webrtc",
+          ice: turnConfigured(env) ? "cloudflare-turn+stun" : "cloudflare-stun"
+        },
         endpoints: [
           "GET /api/health",
           "GET /api/ready",
