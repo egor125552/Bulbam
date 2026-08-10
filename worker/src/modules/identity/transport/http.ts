@@ -55,7 +55,7 @@ export async function handleIdentityHttp(
   if (url.pathname === "/api/v1/sessions") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const authenticated = await service.authenticate(sessionToken(request));
-    const sessions = await service.listSessions(authenticated, Date.now());
+    const sessions = await service.listSessions(authenticated);
     return json({
       ok: true,
       sessions: sessions.map((session) => ({
