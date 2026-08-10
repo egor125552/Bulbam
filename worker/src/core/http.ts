@@ -17,7 +17,7 @@ export function methodNotAllowed(allowed: string[]): Response {
   );
 }
 
-export function handleError(error: unknown): Response {
+export function handleError(error: unknown, exposeDetails = false): Response {
   if (error instanceof ApiError) {
     return json(
       {
@@ -33,8 +33,16 @@ export function handleError(error: unknown): Response {
   }
 
   console.error("[Bulbam] unhandled error", error);
+  const diagnostic = error instanceof Error ? error.message : String(error);
   return json(
-    { ok: false, error: { code: "internal_error", message: "Внутренняя ошибка сервера." } },
+    {
+      ok: false,
+      error: {
+        code: "internal_error",
+        message: "Внутренняя ошибка сервера.",
+        ...(exposeDetails ? { diagnostic } : {})
+      }
+    },
     { status: 500 }
   );
 }
