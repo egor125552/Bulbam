@@ -15,7 +15,7 @@
 
   <header class="site-header">
     <div>
-      <p class="eyebrow">Bulbam 0.4 · PWA + Push</p>
+      <p class="eyebrow">Bulbam 0.5 · PWA + Push + Calls</p>
       <h1>Бульбам</h1>
       <p>Личные чаты, которые не пропадают после перезагрузки.</p>
     </div>
@@ -95,8 +95,11 @@
 
         <section class="conversation-pane" aria-labelledby="conversation-title">
           <header class="conversation-header">
-            <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
-            <p id="conversation-peer" class="conversation-peer">Найди человека или открой существующий диалог.</p>
+            <div>
+              <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
+              <p id="conversation-peer" class="conversation-peer">Найди человека или открой существующий диалог.</p>
+            </div>
+            <button id="call-start" type="button" hidden>Позвонить</button>
           </header>
 
           <div id="conversation-empty" class="conversation-empty">
@@ -112,6 +115,19 @@
           </form>
         </section>
       </div>
+
+      <section id="call-panel" class="card" aria-labelledby="call-title" hidden>
+        <h2 id="call-title" tabindex="-1">Звонок</h2>
+        <p id="call-peer"></p>
+        <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+        <div class="call-actions">
+          <button id="call-answer" type="button" hidden>Ответить</button>
+          <button id="call-decline" type="button" hidden>Отклонить</button>
+          <button id="call-mute" type="button" hidden>Выключить микрофон</button>
+          <button id="call-end" type="button" hidden>Завершить звонок</button>
+        </div>
+        <audio id="call-remote-audio" autoplay></audio>
+      </section>
 
       <details class="settings-card">
         <summary>Аккаунт и настройки</summary>
