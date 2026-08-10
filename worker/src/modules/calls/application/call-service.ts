@@ -1,4 +1,5 @@
 import { badRequest, conflict, forbidden, notFound } from "../../../core/errors";
+import type { Env } from "../../../platform/cloudflare";
 import type { MessagingRepository } from "../../messaging/ports/messaging-repository";
 import type { RealtimePublisher } from "../../messaging/ports/realtime-publisher";
 import type { UserDirectory } from "../../messaging/ports/user-directory";
@@ -13,12 +14,19 @@ export interface CallActor {
   userId: string;
 }
 
+interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
 export class CallService {
   constructor(
     private readonly calls: D1CallRepository,
     private readonly messaging: MessagingRepository,
     private readonly users: UserDirectory,
     private readonly realtime: RealtimePublisher,
+    private readonly env: Env,
     private readonly notifications?: IncomingCallNotificationPublisher,
     private readonly defer?: (promise: Promise<unknown>) => void
   ) {}
@@ -27,13 +35,42 @@ export class CallService {
     return this.calls.initialize();
   }
 
-  iceServers() {
-    return [{ urls: ["stun:stun.cloudflare.com:3478"] }];
+  async iceServers(): Promise<IceServer[]> {
+    const stun: IceServer[] = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
+    if (!this.env.TURN_KEY_ID || !this.env.TURN_KEY_API_TOKEN) return stun;
+
+    try {
+      const response = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(this.env.TURN_KEY_ID)}/credentials/generate-ice-servers`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.env.TURN_KEY_API_TOKEN}`,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ ttl: 7200 })
+        }
+      );
+      if (!response.ok) {
+        console.warn(`[Calls] TURN credentials returned HTTP ${response.status}; using STUN only`);
+        return stun;
+      }
+
+      const payload = await response.json() as { iceServers?: unknown };
+      if (!Array.isArray(payload.iceServers) || payload.iceServers.length === 0) {
+        console.warn("[Calls] TURN credentials response had no iceServers; using STUN only");
+        return stun;
+      }
+
+      const iceServers = payload.iceServers.filter(isIceServer);
+      return iceServers.length ? iceServers : stun;
+    } catch (error) {
+      console.warn("[Calls] TURN credentials could not be generated; using STUN only", error);
+      return stun;
+    }
   }
 
   async start(actor: CallActor, rawConversationId: string) {
-    const now = Date.now();
-    await this.calls.expireStale(now);
     const conversationId = validateUuid(rawConversationId, "conversationId");
     const conversation = await this.messaging.findConversationForUser(conversationId, actor.userId);
     if (!conversation) notFound("chat_not_found", "Диалог не найден.");
@@ -51,7 +88,7 @@ export class CallService {
       callerUserId: actor.userId,
       calleeUserId,
       status: "ringing",
-      createdAt: now,
+      createdAt: Date.now(),
       answeredAt: null,
       endedAt: null,
       endedByUserId: null
@@ -179,7 +216,6 @@ export class CallService {
 
   private async requireParticipant(actor: CallActor, rawCallId: string): Promise<StoredCall> {
     const callId = validateUuid(rawCallId, "callId");
-    await this.calls.expireStale(Date.now());
     const call = await this.calls.find(callId);
     if (!call) notFound("call_not_found", "Звонок не найден.");
     if (call.callerUserId !== actor.userId && call.calleeUserId !== actor.userId) {
@@ -197,6 +233,18 @@ export class CallService {
       peer: peer ?? { userId: peerUserId, username: "deleted", displayName: "Удалённый аккаунт" }
     };
   }
+}
+
+function isIceServer(value: unknown): value is IceServer {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const server = value as Record<string, unknown>;
+  const urls = server.urls;
+  const validUrls = typeof urls === "string" ||
+    (Array.isArray(urls) && urls.length > 0 && urls.every((url) => typeof url === "string"));
+  if (!validUrls) return false;
+  if (server.username !== undefined && typeof server.username !== "string") return false;
+  if (server.credential !== undefined && typeof server.credential !== "string") return false;
+  return true;
 }
 
 function validateUuid(value: string, field: string): string {
