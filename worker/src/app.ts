@@ -4,7 +4,20 @@ import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-ident
 import { handleIdentityHttp } from "./modules/identity/transport/http";
 import type { Env } from "./platform/cloudflare";
 
-const VERSION = "0.2.0-phase1";
+const VERSION = "0.2.1-phase1";
+
+function storageBindingMissing(): Response {
+  return json(
+    {
+      ok: false,
+      error: {
+        code: "storage_binding_missing",
+        message: "Хранилище D1 не подключено к Worker."
+      }
+    },
+    { status: 503 }
+  );
+}
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -16,21 +29,48 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         ok: true,
         service: "bulbam-api",
         version: VERSION,
+        storage: {
+          binding: env.DB ? "configured" : "missing"
+        },
         time: new Date().toISOString()
       });
     }
 
-    const repository = new D1IdentityRepository(env.DB);
-    const identity = new IdentityService(repository);
+    const storageRequired = url.pathname === "/api/ready" || url.pathname.startsWith("/api/v1/");
+    if (storageRequired && !env.DB) {
+      return storageBindingMissing();
+    }
+
+    const repository = env.DB ? new D1IdentityRepository(env.DB) : null;
+    const identity = repository ? new IdentityService(repository) : null;
 
     if (url.pathname === "/api/ready") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
-      await repository.initialize();
+      if (!repository) return storageBindingMissing();
+
+      try {
+        await repository.initialize();
+      } catch (error) {
+        console.error("[Bulbam] D1 initialization failed", error);
+        return json(
+          {
+            ok: false,
+            error: {
+              code: "storage_initialization_failed",
+              message: "Хранилище D1 подключено, но не смогло инициализироваться."
+            }
+          },
+          { status: 503 }
+        );
+      }
+
       return json({ ok: true, storage: "ready", version: VERSION });
     }
 
-    const identityResponse = await handleIdentityHttp(request, url, identity);
-    if (identityResponse) return identityResponse;
+    if (identity) {
+      const identityResponse = await handleIdentityHttp(request, url, identity);
+      if (identityResponse) return identityResponse;
+    }
 
     if (url.pathname === "/api" || url.pathname === "/api/") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
@@ -38,6 +78,9 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         ok: true,
         service: "bulbam-api",
         version: VERSION,
+        storage: {
+          binding: env.DB ? "configured" : "missing"
+        },
         endpoints: [
           "GET /api/health",
           "GET /api/ready",
