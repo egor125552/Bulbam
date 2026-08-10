@@ -5,8 +5,10 @@ import type {
   AccountRole,
   AuthenticatedSession,
   Invite,
+  PublicAccount,
   Session
 } from "../domain/models";
+import { normalizeDisplayNameForSearch } from "../domain/validation";
 import type { IdentityRepository, RegisterAccountResult } from "../ports/identity-repository";
 import { ensureIdentitySchema } from "./schema";
 
@@ -31,6 +33,65 @@ export class D1IdentityRepository implements IdentityRepository {
       .bind(username)
       .first<Row>();
     return row ? mapAccountCredentials(row) : null;
+  }
+
+  async findPublicAccountById(userId: string): Promise<PublicAccount | null> {
+    await this.initialize();
+    const row = await this.db
+      .prepare(`
+        SELECT user_id, username, display_name
+        FROM accounts
+        WHERE user_id = ? AND disabled_at IS NULL
+        LIMIT 1
+      `)
+      .bind(userId)
+      .first<Row>();
+    return row ? mapPublicAccount(row) : null;
+  }
+
+  async searchPublicAccounts(query: string, currentUserId: string, limit: number): Promise<PublicAccount[]> {
+    await this.initialize();
+    const usernameQuery = query.trim().replace(/^@/, "").toLowerCase();
+    const displayQuery = normalizeDisplayNameForSearch(query.replace(/^@/, ""));
+    const usernamePrefix = `${escapeLike(usernameQuery)}%`;
+    const displayPrefix = `${escapeLike(displayQuery)}%`;
+    const displayContains = `%${escapeLike(displayQuery)}%`;
+
+    const result = await this.db
+      .prepare(`
+        SELECT user_id, username, display_name
+        FROM accounts
+        WHERE disabled_at IS NULL
+          AND user_id <> ?
+          AND (
+            username LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR display_name_search LIKE ? ESCAPE '\\'
+          )
+        ORDER BY
+          CASE
+            WHEN username = ? COLLATE NOCASE THEN 0
+            WHEN username LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 1
+            WHEN display_name_search = ? THEN 2
+            WHEN display_name_search LIKE ? ESCAPE '\\' THEN 3
+            ELSE 4
+          END,
+          display_name_search,
+          username
+        LIMIT ?
+      `)
+      .bind(
+        currentUserId,
+        usernamePrefix,
+        displayContains,
+        usernameQuery,
+        usernamePrefix,
+        displayQuery,
+        displayPrefix,
+        limit
+      )
+      .all<Row>();
+
+    return (result.results ?? []).map(mapPublicAccount);
   }
 
   async registerAccountWithInvite(input: {
@@ -70,13 +131,15 @@ export class D1IdentityRepository implements IdentityRepository {
         this.db
           .prepare(`
             INSERT INTO accounts (
-              user_id, username, display_name, password_hash, role, invite_id, created_at, disabled_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+              user_id, username, display_name, display_name_search, password_hash,
+              role, invite_id, created_at, disabled_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
           `)
           .bind(
             input.userId,
             input.username,
             input.displayName,
+            normalizeDisplayNameForSearch(input.displayName),
             input.passwordHash,
             role,
             inviteId,
@@ -246,7 +309,7 @@ export class D1IdentityRepository implements IdentityRepository {
   async createInvite(input: {
     inviteId: string;
     codeHash: string;
-    createdByUserId: string;
+    createdByUserId: string | null;
     roleGrant: AccountRole;
     createdAt: number;
     expiresAt: number;
@@ -278,13 +341,40 @@ export class D1IdentityRepository implements IdentityRepository {
       usedByUserId: null
     };
   }
+
+  async findUserIdsByUsernamePrefix(prefix: string): Promise<string[]> {
+    await this.initialize();
+    const result = await this.db
+      .prepare("SELECT user_id FROM accounts WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE")
+      .bind(`${escapeLike(prefix.toLowerCase())}%`)
+      .all<Row>();
+    return (result.results ?? []).map((row) => String(row.user_id));
+  }
+
+  async deleteAccountsByUserIds(userIds: string[]): Promise<void> {
+    await this.initialize();
+    if (!userIds.length) return;
+    const statements = [];
+    for (const userId of userIds) {
+      statements.push(this.db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId));
+      statements.push(this.db.prepare("DELETE FROM accounts WHERE user_id = ?").bind(userId));
+      statements.push(this.db.prepare("DELETE FROM invites WHERE used_by_user_id = ?").bind(userId));
+    }
+    await this.db.batch(statements);
+  }
+}
+
+function mapPublicAccount(row: Row): PublicAccount {
+  return {
+    userId: String(row.user_id),
+    username: String(row.username),
+    displayName: String(row.display_name)
+  };
 }
 
 function mapAccountCredentials(row: Row): AccountCredentials {
   return {
-    userId: String(row.user_id),
-    username: String(row.username),
-    displayName: String(row.display_name),
+    ...mapPublicAccount(row),
     passwordHash: String(row.password_hash),
     role: asRole(row.role),
     createdAt: Number(row.created_at)
@@ -305,4 +395,8 @@ function mapSession(row: Row): Session {
 
 function asRole(value: unknown): AccountRole {
   return value === "owner" || value === "admin" ? value : "member";
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }

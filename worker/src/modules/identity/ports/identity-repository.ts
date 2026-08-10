@@ -4,6 +4,7 @@ import type {
   AccountRole,
   AuthenticatedSession,
   Invite,
+  PublicAccount,
   Session
 } from "../domain/models";
 
@@ -17,6 +18,8 @@ export interface IdentityRepository {
   initialize(): Promise<void>;
 
   findAccountCredentialsByUsername(username: string): Promise<AccountCredentials | null>;
+  findPublicAccountById(userId: string): Promise<PublicAccount | null>;
+  searchPublicAccounts(query: string, currentUserId: string, limit: number): Promise<PublicAccount[]>;
 
   registerAccountWithInvite(input: {
     userId: string;
@@ -44,9 +47,12 @@ export interface IdentityRepository {
   createInvite(input: {
     inviteId: string;
     codeHash: string;
-    createdByUserId: string;
+    createdByUserId: string | null;
     roleGrant: AccountRole;
     createdAt: number;
     expiresAt: number;
   }): Promise<Invite>;
+
+  findUserIdsByUsernamePrefix(prefix: string): Promise<string[]>;
+  deleteAccountsByUserIds(userIds: string[]): Promise<void>;
 }

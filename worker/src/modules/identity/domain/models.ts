@@ -1,9 +1,12 @@
 export type AccountRole = "owner" | "admin" | "member";
 
-export interface Account {
+export interface PublicAccount {
   userId: string;
   username: string;
   displayName: string;
+}
+
+export interface Account extends PublicAccount {
   role: AccountRole;
   createdAt: number;
 }

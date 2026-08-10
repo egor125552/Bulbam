@@ -45,6 +45,13 @@ export async function handleIdentityHttp(
     return clearSessionCookie(json({ ok: true }));
   }
 
+  if (url.pathname === "/api/v1/users/search") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    const authenticated = await service.authenticate(sessionToken(request));
+    const users = await service.searchUsers(authenticated, url.searchParams.get("q") ?? "");
+    return json({ ok: true, users });
+  }
+
   if (url.pathname === "/api/v1/sessions") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const authenticated = await service.authenticate(sessionToken(request));
@@ -90,7 +97,7 @@ export async function handleIdentityHttp(
   return null;
 }
 
-function sessionToken(request: Request): string | null {
+export function sessionToken(request: Request): string | null {
   const authorization = request.headers.get("authorization")?.trim() ?? "";
   if (authorization.toLowerCase().startsWith("bearer ")) {
     const token = authorization.slice(7).trim();

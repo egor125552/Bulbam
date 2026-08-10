@@ -1,4 +1,5 @@
 import type { D1Database } from "../../../platform/cloudflare";
+import { normalizeDisplayNameForSearch } from "../domain/validation";
 
 const BOOTSTRAP_OWNER_INVITE_HASH = "f859b29b4179dbf528a6c166e615ed0cf5c2994cc9108ee4f8849af36a26354c";
 
@@ -61,6 +62,14 @@ const migrations = [
         NULL
       )`
     ]
+  },
+  {
+    version: 2,
+    statements: [
+      "ALTER TABLE accounts ADD COLUMN display_name_search TEXT",
+      "CREATE INDEX IF NOT EXISTS idx_accounts_display_name_search ON accounts(display_name_search)",
+      "CREATE INDEX IF NOT EXISTS idx_accounts_username_search ON accounts(username)"
+    ]
   }
 ] as const;
 
@@ -81,6 +90,22 @@ async function runStatement(db: D1Database, sql: string): Promise<void> {
   if (result.success === false) {
     throw new Error(result.error ?? "D1 statement failed");
   }
+}
+
+async function backfillDisplayNameSearch(db: D1Database): Promise<void> {
+  const result = await db
+    .prepare("SELECT user_id, display_name FROM accounts WHERE display_name_search IS NULL OR display_name_search = ''")
+    .all<{ user_id: string; display_name: string }>();
+  const rows = result.results ?? [];
+  if (!rows.length) return;
+
+  await db.batch(
+    rows.map((row) =>
+      db
+        .prepare("UPDATE accounts SET display_name_search = ? WHERE user_id = ?")
+        .bind(normalizeDisplayNameForSearch(String(row.display_name)), String(row.user_id))
+    )
+  );
 }
 
 async function initialize(db: D1Database): Promise<void> {
@@ -112,4 +137,6 @@ async function initialize(db: D1Database): Promise<void> {
       .bind("identity", migration.version, Date.now())
       .run();
   }
+
+  await backfillDisplayNameSearch(db);
 }

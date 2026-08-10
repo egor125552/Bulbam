@@ -25,6 +25,19 @@ export interface D1Database {
   exec(query: string): Promise<{ count: number; duration: number }>;
 }
 
+export interface DurableObjectStub {
+  fetch(request: Request): Promise<Response>;
+}
+
+export interface DurableObjectNamespace {
+  getByName(name: string): DurableObjectStub;
+}
+
+export interface DurableObjectState {
+  acceptWebSocket(socket: WebSocket): void;
+  getWebSockets(): WebSocket[];
+}
+
 export interface AssetsBinding {
   fetch(request: Request): Promise<Response>;
 }
@@ -32,5 +45,7 @@ export interface AssetsBinding {
 export interface Env {
   ASSETS: AssetsBinding;
   DB?: D1Database;
+  REALTIME?: DurableObjectNamespace;
   DEBUG_ERRORS?: string;
+  SMOKE_SECRET?: string;
 }
