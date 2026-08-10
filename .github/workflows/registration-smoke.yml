@@ -1,0 +1,44 @@
+name: Registration Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "worker/**"
+      - "test/**"
+      - "wrangler*.jsonc"
+      - "package.json"
+      - ".github/workflows/registration-smoke.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "worker/**"
+      - "test/**"
+      - "wrangler*.jsonc"
+      - "package.json"
+      - ".github/workflows/registration-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  register-user:
+    name: Register, authenticate, logout, login
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Simulate real registration
+        run: npm run test:registration
