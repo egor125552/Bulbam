@@ -28,7 +28,17 @@ export const elements = {
   messageList: document.querySelector("#message-list"),
   messageForm: document.querySelector("#message-form"),
   messageInput: document.querySelector("#message-input"),
-  sendMessageButton: document.querySelector("#send-message")
+  sendMessageButton: document.querySelector("#send-message"),
+  callStartButton: document.querySelector("#call-start"),
+  callPanel: document.querySelector("#call-panel"),
+  callTitle: document.querySelector("#call-title"),
+  callPeer: document.querySelector("#call-peer"),
+  callStatus: document.querySelector("#call-status"),
+  callAnswerButton: document.querySelector("#call-answer"),
+  callDeclineButton: document.querySelector("#call-decline"),
+  callMuteButton: document.querySelector("#call-mute"),
+  callEndButton: document.querySelector("#call-end"),
+  callRemoteAudio: document.querySelector("#call-remote-audio")
 };
 
 let currentAccount = null;
