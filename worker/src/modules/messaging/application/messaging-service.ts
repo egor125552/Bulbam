@@ -1,6 +1,11 @@
-import { ApiError, conflict, notFound } from "../../../core/errors";
+import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import type { DirectConversation, MessagingActor, StoredMessage } from "../domain/models";
-import { validateConversationId, validateMessageInput, validateUserId } from "../domain/validation";
+import {
+  validateConversationId,
+  validateDeliveryReceiptInput,
+  validateMessageInput,
+  validateUserId
+} from "../domain/validation";
 import type { MessagingRepository } from "../ports/messaging-repository";
 import type { RealtimePublisher } from "../ports/realtime-publisher";
 import type { DirectoryUser, UserDirectory } from "../ports/user-directory";
@@ -58,7 +63,8 @@ export class MessagingService {
       senderUserId: actor.userId,
       clientMessageId: input.clientMessageId,
       text: input.text,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      deliveredAt: null
     };
 
     const result = await this.repository.insertMessage(message);
@@ -81,6 +87,56 @@ export class MessagingService {
       message: result.message,
       status: "sent" as const,
       duplicate: result.status === "duplicate"
+    };
+  }
+
+  async markDelivered(
+    actor: MessagingActor,
+    rawConversationId: string,
+    body: Record<string, unknown>
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    await this.requireConversation(conversationId, actor.userId);
+    const messageIds = validateDeliveryReceiptInput(body);
+    const updates = await this.repository.markMessagesDelivered(
+      conversationId,
+      actor.userId,
+      messageIds,
+      Date.now()
+    );
+
+    if (updates.length !== messageIds.length) {
+      badRequest(
+        "invalid_delivery_receipt",
+        "Доставку можно подтвердить только для полученных сообщений этого диалога."
+      );
+    }
+
+    const changedBySender = new Map<string, typeof updates>();
+    for (const update of updates) {
+      if (!update.changed) continue;
+      const list = changedBySender.get(update.message.senderUserId) ?? [];
+      list.push(update);
+      changedBySender.set(update.message.senderUserId, list);
+    }
+
+    for (const [senderUserId, changed] of changedBySender) {
+      await this.realtime.publishToUsers([senderUserId], {
+        type: "messages.delivered",
+        conversationId,
+        receipts: changed.map(({ message }) => ({
+          messageId: message.messageId,
+          clientMessageId: message.clientMessageId,
+          deliveredAt: message.deliveredAt
+        }))
+      });
+    }
+
+    return {
+      receipts: updates.map(({ message }) => ({
+        messageId: message.messageId,
+        deliveredAt: message.deliveredAt
+      }))
     };
   }
 
