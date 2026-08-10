@@ -3,6 +3,9 @@
   "name": "bulbam-api-test",
   "main": "worker/src/index.ts",
   "compatibility_date": "2026-08-08",
+  "vars": {
+    "DEBUG_ERRORS": "true"
+  },
   "assets": {
     "directory": "./web",
     "binding": "ASSETS",
