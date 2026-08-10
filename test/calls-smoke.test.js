@@ -27,11 +27,14 @@ function sessionCookie(response) {
   if (!match) throw new Error(`No bulbam_session cookie: ${setCookie}`);
   return `bulbam_session=${match[1]}`;
 }
+async function testEnv() {
+  const worker = server.getWorker("bulbam-api-test");
+  return worker.getEnv();
+}
 async function seedInvite(code, inviteId) {
   const ready = await server.fetch("/api/ready");
   await expectStatus(ready, 200);
-  const worker = server.getWorker("bulbam-api-test");
-  const env = await worker.getEnv();
+  const env = await testEnv();
   const hash = createHash("sha256").update(code).digest("hex");
   await env.DB.prepare(`
     INSERT INTO invites (
@@ -39,6 +42,14 @@ async function seedInvite(code, inviteId) {
       created_at, expires_at, used_at, used_by_user_id
     ) VALUES (?, ?, NULL, 'member', ?, NULL, NULL, NULL)
   `).bind(inviteId, hash, Date.now()).run();
+}
+async function activeCallFor(userId) {
+  const env = await testEnv();
+  const response = await env.REALTIME.getByName(userId).fetch(
+    new Request("https://realtime.internal/active-call")
+  );
+  await expectStatus(response, 200);
+  return (await json(response)).active ?? null;
 }
 async function register({ username, displayName, inviteCode }) {
   const response = await server.fetch("/api/v1/auth/register", {
@@ -102,6 +113,17 @@ describe("one-to-one audio call signaling", () => {
     expect(call.direction).toBe("outgoing");
     expect(call.peer.userId).toBe(beta.account.userId);
 
+    expect(await activeCallFor(alpha.account.userId)).toMatchObject({
+      callId: call.callId,
+      direction: "outgoing",
+      status: "ringing"
+    });
+    expect(await activeCallFor(beta.account.userId)).toMatchObject({
+      callId: call.callId,
+      direction: "incoming",
+      status: "ringing"
+    });
+
     const betaView = await api(callRoot, beta.cookie);
     await expectStatus(betaView, 200);
     expect((await json(betaView)).call).toMatchObject({
@@ -118,10 +140,13 @@ describe("one-to-one audio call signaling", () => {
 
     const differentRoomBusy = await api(betaGammaRoot, gamma.cookie, { method: "POST" });
     await expectStatus(differentRoomBusy, 409);
+    expect(await activeCallFor(gamma.account.userId)).toBeNull();
 
     const answered = await api(`${callRoot}/answer`, beta.cookie, { method: "POST" });
     await expectStatus(answered, 200);
     expect((await json(answered)).call.status).toBe("accepted");
+    expect(await activeCallFor(alpha.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
+    expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
 
     const calleeCannotOffer = await api(`${callRoot}/signals`, beta.cookie, {
       method: "POST",
@@ -199,6 +224,8 @@ describe("one-to-one audio call signaling", () => {
     const ended = await api(`${callRoot}/end`, beta.cookie, { method: "POST" });
     await expectStatus(ended, 200);
     expect((await json(ended)).call).toMatchObject({ status: "ended", endedByUserId: beta.account.userId });
+    expect(await activeCallFor(alpha.account.userId)).toBeNull();
+    expect(await activeCallFor(beta.account.userId)).toBeNull();
 
     const signalAfterEnd = await api(`${callRoot}/signals`, alpha.cookie, {
       method: "POST",
@@ -213,5 +240,7 @@ describe("one-to-one audio call signaling", () => {
       status: "ringing",
       peer: expect.objectContaining({ userId: beta.account.userId })
     });
+    expect(await activeCallFor(gamma.account.userId)).toMatchObject({ callId: gammaCall.callId });
+    expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: gammaCall.callId });
   });
 });
