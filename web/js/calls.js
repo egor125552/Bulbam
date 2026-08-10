@@ -16,6 +16,8 @@ let reconnectTimer = null;
 let heartbeatTimer = null;
 let answeredLocally = false;
 let offerStarted = false;
+let restartInFlight = false;
+let recoveryPending = false;
 let muted = false;
 let iceServersPromise = null;
 
@@ -23,6 +25,7 @@ export function setupCalls() {
   elements.callStartButton.addEventListener("click", () => void startCall());
   elements.callAnswerButton.addEventListener("click", () => void answerCall());
   elements.callDeclineButton.addEventListener("click", () => void declineCall());
+  elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
   elements.callMuteButton.addEventListener("click", toggleMute);
 
@@ -69,6 +72,7 @@ async function startCall() {
     currentCall = result.call;
     answeredLocally = false;
     offerStarted = false;
+    recoveryPending = false;
     showOutgoing(currentCall);
     startCallPolling();
     ringTimeout = setTimeout(() => void timeoutRinging(), 60_000);
@@ -91,6 +95,7 @@ async function answerCall() {
     await ensurePeerConnection();
     const result = await api(callPath("/answer"), { method: "POST" });
     currentCall = result.call;
+    recoveryPending = false;
     showConnectedControls("Соединяем звонок…");
     startCallPolling();
     announce(`Вы ответили ${currentCall.peer.displayName}. Соединяю звук.`);
@@ -104,6 +109,43 @@ async function answerCall() {
     announce(`Не удалось ответить: ${friendlyMediaError(error)}`);
   } finally {
     elements.callAnswerButton.disabled = false;
+  }
+}
+
+async function resumeRecoveredCall() {
+  if (!account || !currentCall || !recoveryPending) return;
+  elements.callResumeButton.disabled = true;
+  try {
+    localStream = await requestMicrophone();
+    await prepareRecoveryCursor();
+    cleanupPeerConnection();
+    remoteCandidates = [];
+    offerStarted = false;
+    recoveryPending = false;
+
+    if (currentCall.status === "accepted") {
+      showConnectedControls("Восстанавливаю аудиосоединение…");
+      startCallPolling();
+      if (currentCall.direction === "outgoing") {
+        await restartOffer();
+      } else {
+        await sendSignal("resume", { reason: "client-reconnect" });
+      }
+    } else if (currentCall.status === "ringing" && currentCall.direction === "outgoing") {
+      showOutgoing(currentCall);
+      startCallPolling();
+    } else {
+      showIncoming(currentCall);
+      startStatePolling();
+    }
+
+    announce(`Звук звонка с ${currentCall.peer.displayName} восстанавливается.`);
+  } catch (error) {
+    recoveryPending = true;
+    showRecoveredCall(`Не удалось восстановить звук: ${friendlyMediaError(error)}`);
+    announce(`Не удалось восстановить звук: ${friendlyMediaError(error)}`);
+  } finally {
+    elements.callResumeButton.disabled = false;
   }
 }
 
@@ -193,17 +235,46 @@ function closeCallRealtime() {
 
 async function handleCallEvent(event) {
   if (!account || !event || typeof event !== "object") return;
+
+  if (event.type === "call.active" && event.call) {
+    if (currentCall) return;
+    currentCall = event.call;
+    answeredLocally = false;
+    offerStarted = false;
+    if (currentCall.status === "ringing" && currentCall.direction === "incoming") {
+      recoveryPending = false;
+      showIncoming(currentCall);
+      startStatePolling();
+      announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+    } else if (currentCall.status === "ringing" || currentCall.status === "accepted") {
+      recoveryPending = true;
+      showRecoveredCall(
+        currentCall.status === "accepted"
+          ? "Активный звонок найден после переподключения. Нажмите «Восстановить звук»."
+          : "Исходящий звонок продолжается. Нажмите «Восстановить звук»."
+      );
+      startStatePolling();
+      announce(`Активный звонок с ${currentCall.peer.displayName} найден.`);
+    } else {
+      currentCall = null;
+      renderIdle();
+    }
+    return;
+  }
+
   if (event.type === "call.ringing" && event.call) {
     if (!currentCall) {
       currentCall = event.call;
       answeredLocally = false;
       offerStarted = false;
+      recoveryPending = false;
       showIncoming(currentCall);
-      startCallPolling();
+      startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
     }
     return;
   }
+
   if (!currentCall || event.callId !== currentCall.callId) return;
 
   if (event.type === "call.answered") {
@@ -212,13 +283,20 @@ async function handleCallEvent(event) {
     clearTimeout(ringTimeout);
     ringTimeout = null;
     if (currentCall.direction === "outgoing") {
-      showConnectedControls("Ответ получен. Соединяю звук…");
-      await beginOfferIfNeeded();
+      if (recoveryPending || !localStream) {
+        recoveryPending = true;
+        showRecoveredCall("Собеседник ответил. Нажмите «Восстановить звук».");
+        startStatePolling();
+      } else {
+        showConnectedControls("Ответ получен. Соединяю звук…");
+        await beginOfferIfNeeded();
+      }
     } else if (!answeredLocally) {
       finishCall("На звонок ответили на другом устройстве.");
     }
     return;
   }
+
   if (event.type === "call.declined") {
     finishCall("Собеседник отклонил звонок.");
     announce("Собеседник отклонил звонок.");
@@ -229,11 +307,14 @@ async function handleCallEvent(event) {
     announce("Звонок завершён.");
     return;
   }
-  if (event.type === "call.signal" && event.signal) await processSignal(event.signal);
+  if (event.type === "call.signal" && event.signal) {
+    if (recoveryPending) return;
+    await processSignal(event.signal);
+  }
 }
 
 async function beginOfferIfNeeded() {
-  if (!currentCall || currentCall.direction !== "outgoing" || offerStarted) return;
+  if (!currentCall || currentCall.direction !== "outgoing" || offerStarted || recoveryPending) return;
   offerStarted = true;
   try {
     const pc = await ensurePeerConnection();
@@ -243,6 +324,27 @@ async function beginOfferIfNeeded() {
   } catch (error) {
     offerStarted = false;
     setCallStatus(`Не удалось создать аудиосоединение: ${error.message}`);
+  }
+}
+
+async function restartOffer() {
+  if (!currentCall || currentCall.direction !== "outgoing" || currentCall.status !== "accepted") return;
+  if (restartInFlight) return;
+  restartInFlight = true;
+  try {
+    cleanupPeerConnection();
+    remoteCandidates = [];
+    const pc = await ensurePeerConnection();
+    const offer = await pc.createOffer({ iceRestart: true });
+    await pc.setLocalDescription(offer);
+    offerStarted = true;
+    await sendSignal("offer", { type: offer.type, sdp: offer.sdp });
+    setCallStatus("Восстанавливаю аудиосоединение…");
+  } catch (error) {
+    offerStarted = false;
+    setCallStatus(`Не удалось восстановить аудиосоединение: ${error.message}`);
+  } finally {
+    restartInFlight = false;
   }
 }
 
@@ -294,13 +396,39 @@ async function sendSignal(kind, payload) {
   if (result.signal?.sequence) processedSignalSequences.add(result.signal.sequence);
 }
 
+async function prepareRecoveryCursor() {
+  if (!currentCall || currentCall.status !== "accepted") return;
+  try {
+    const result = await api(`${callPath("/signals")}?after=0`);
+    for (const signal of result.signals ?? []) {
+      const sequence = Number(signal.sequence) || 0;
+      if (sequence > 0) processedSignalSequences.add(sequence);
+      signalPollCursor = Math.max(signalPollCursor, sequence);
+    }
+  } catch {
+    // Resume itself still creates a fresh negotiation if history lookup fails.
+  }
+}
+
 async function processSignal(signal) {
   if (!currentCall || signal.callId !== currentCall.callId) return;
   if (signal.senderUserId === account?.userId || processedSignalSequences.has(signal.sequence)) return;
   processedSignalSequences.add(signal.sequence);
+
   try {
-    const pc = await ensurePeerConnection();
+    if (signal.kind === "resume") {
+      if (currentCall.direction === "outgoing" && !recoveryPending) {
+        await restartOffer();
+      }
+      return;
+    }
+
+    let pc = await ensurePeerConnection();
     if (signal.kind === "offer") {
+      if (pc.signalingState !== "stable") {
+        cleanupPeerConnection();
+        pc = await ensurePeerConnection();
+      }
       await pc.setRemoteDescription(signal.payload);
       await flushRemoteCandidates();
       const answer = await pc.createAnswer();
@@ -340,6 +468,13 @@ function startCallPolling() {
   void pollSignals();
   void pollCallState();
 }
+
+function startStatePolling() {
+  clearInterval(statePollTimer);
+  statePollTimer = setInterval(() => void pollCallState(), 2_500);
+  void pollCallState();
+}
+
 function stopCallPolling() {
   clearInterval(signalPollTimer);
   clearInterval(statePollTimer);
@@ -348,7 +483,7 @@ function stopCallPolling() {
 }
 
 async function pollSignals() {
-  if (!currentCall || currentCall.status !== "accepted") return;
+  if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
   try {
     const result = await api(`${callPath("/signals")}?after=${signalPollCursor}`);
     for (const signal of result.signals ?? []) {
@@ -369,8 +504,14 @@ async function pollCallState() {
       clearTimeout(ringTimeout);
       ringTimeout = null;
       if (latest.direction === "outgoing") {
-        showConnectedControls("Ответ получен. Соединяю звук…");
-        await beginOfferIfNeeded();
+        if (recoveryPending || !localStream) {
+          recoveryPending = true;
+          showRecoveredCall("Собеседник ответил. Нажмите «Восстановить звук».");
+          startStatePolling();
+        } else {
+          showConnectedControls("Ответ получен. Соединяю звук…");
+          await beginOfferIfNeeded();
+        }
       } else if (!answeredLocally) {
         finishCall("На звонок ответили на другом устройстве.");
       }
@@ -393,19 +534,25 @@ async function restoreCallFromUrl() {
     const result = await api(
       `/api/v1/chats/${encodeURIComponent(conversationId)}/calls/${encodeURIComponent(callId)}`
     );
-    if (result.call?.direction === "incoming" && result.call.status === "ringing") {
-      currentCall = result.call;
-      answeredLocally = false;
+    currentCall = result.call;
+    if (currentCall?.direction === "incoming" && currentCall.status === "ringing") {
+      recoveryPending = false;
       showIncoming(currentCall);
-      startCallPolling();
+      startStatePolling();
       elements.callTitle.focus();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
-    } else if (result.call?.status === "ringing") {
-      currentCall = result.call;
-      showOutgoing(currentCall);
-      startCallPolling();
+    } else if (currentCall?.status === "ringing" || currentCall?.status === "accepted") {
+      recoveryPending = true;
+      showRecoveredCall(
+        currentCall.status === "accepted"
+          ? "Активный звонок открыт. Нажмите «Восстановить звук»."
+          : "Исходящий звонок открыт. Нажмите «Восстановить звук»."
+      );
+      startStatePolling();
+      elements.callTitle.focus();
     } else {
-      renderFinished("Этот звонок уже завершён или на него уже ответили.");
+      currentCall = null;
+      renderFinished("Этот звонок уже завершён.");
     }
   } catch (error) {
     announce(`Не удалось открыть звонок: ${error.message}`);
@@ -439,10 +586,12 @@ function showIncoming(call) {
   setCallStatus("Входящий аудиозвонок.");
   elements.callAnswerButton.hidden = false;
   elements.callDeclineButton.hidden = false;
+  elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
   syncCallButton();
 }
+
 function showOutgoing(call) {
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Исходящий звонок";
@@ -450,28 +599,48 @@ function showOutgoing(call) {
   setCallStatus("Ожидаю ответа…");
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
+  elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
 }
+
 function showConnectedControls(status) {
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Аудиозвонок";
   setCallStatus(status);
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
+  elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
 }
+
+function showRecoveredCall(status) {
+  if (!currentCall) return;
+  elements.callPanel.hidden = false;
+  elements.callTitle.textContent = "Активный звонок";
+  elements.callPeer.textContent = `${currentCall.peer.displayName}, @${currentCall.peer.username}`;
+  setCallStatus(status);
+  elements.callAnswerButton.hidden = true;
+  elements.callDeclineButton.hidden = true;
+  elements.callResumeButton.hidden = false;
+  elements.callMuteButton.hidden = true;
+  elements.callEndButton.hidden = false;
+  syncCallButton();
+}
+
 function finishCall(message) {
   cleanupMedia();
   currentCall = null;
   answeredLocally = false;
   offerStarted = false;
+  recoveryPending = false;
   renderFinished(message);
   syncCallButton();
 }
+
 function renderFinished(message) {
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Звонок";
@@ -479,23 +648,29 @@ function renderFinished(message) {
   setCallStatus(message);
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
+  elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
 }
+
 function renderIdle() {
   elements.callPanel.hidden = true;
   elements.callPeer.textContent = "";
   elements.callStatus.textContent = "Звонок не активен.";
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
+  elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
 }
+
 function setCallStatus(text) { elements.callStatus.textContent = text; }
+
 function syncCallButton() {
   const chatSelected = Boolean(account) && !elements.messageForm.hidden && elements.conversationPeer.textContent.trim().startsWith("@");
   elements.callStartButton.hidden = !chatSelected || Boolean(currentCall);
 }
+
 function toggleMute() {
   if (!localStream) return;
   muted = !muted;
@@ -503,6 +678,7 @@ function toggleMute() {
   elements.callMuteButton.textContent = muted ? "Включить микрофон" : "Выключить микрофон";
   announce(muted ? "Микрофон выключен." : "Микрофон включён.");
 }
+
 function cleanupMedia() {
   clearTimeout(ringTimeout);
   ringTimeout = null;
@@ -513,10 +689,12 @@ function cleanupMedia() {
   signalPollCursor = 0;
   remoteCandidates = [];
   muted = false;
+  restartInFlight = false;
   iceServersPromise = null;
   elements.callMuteButton.textContent = "Выключить микрофон";
   elements.callRemoteAudio.srcObject = null;
 }
+
 function cleanupPeerConnection() {
   if (peerConnection) {
     try { peerConnection.close(); } catch {}
@@ -524,12 +702,15 @@ function cleanupPeerConnection() {
   peerConnection = null;
   remoteCandidates = [];
 }
+
 function stopLocalStream() {
   if (localStream) for (const track of localStream.getTracks()) track.stop();
   localStream = null;
 }
+
 function resetCallRuntime() {
   clearTimeout(ringTimeout);
+  ringTimeout = null;
   stopCallPolling();
   cleanupPeerConnection();
   stopLocalStream();
@@ -537,9 +718,12 @@ function resetCallRuntime() {
   signalPollCursor = 0;
   answeredLocally = false;
   offerStarted = false;
+  restartInFlight = false;
+  recoveryPending = false;
   muted = false;
   iceServersPromise = null;
 }
+
 function friendlyMediaError(error) {
   if (error?.name === "NotAllowedError") return "нет разрешения на микрофон";
   if (error?.name === "NotFoundError") return "микрофон не найден";
