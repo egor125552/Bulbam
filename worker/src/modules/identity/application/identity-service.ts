@@ -14,7 +14,7 @@ const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_INVITE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DUMMY_PASSWORD_HASH =
-  "PBKDF2-SHA256$210000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
+  "PBKDF2-SHA256$100000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
 
 export class IdentityService {
   constructor(private readonly repository: IdentityRepository) {}

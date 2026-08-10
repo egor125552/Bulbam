@@ -1,5 +1,6 @@
 const PASSWORD_ALGORITHM = "PBKDF2-SHA256";
-const PASSWORD_ITERATIONS = 210_000;
+const PASSWORD_ITERATIONS = 100_000;
+const PASSWORD_MAX_SUPPORTED_ITERATIONS = 100_000;
 const PASSWORD_KEY_BYTES = 32;
 const PASSWORD_SALT_BYTES = 16;
 
@@ -64,7 +65,15 @@ export async function verifyPassword(password: string, encoded: string): Promise
   const iterations = Number.parseInt(iterationsRaw, 10);
   const salt = hexToBytes(saltHex);
   const expected = hexToBytes(keyHex);
-  if (!Number.isSafeInteger(iterations) || iterations < 50_000 || !salt || !expected) return false;
+  if (
+    !Number.isSafeInteger(iterations) ||
+    iterations < 50_000 ||
+    iterations > PASSWORD_MAX_SUPPORTED_ITERATIONS ||
+    !salt ||
+    !expected
+  ) {
+    return false;
+  }
 
   const actual = await derivePasswordKey(password, salt, iterations);
   return constantTimeEqual(actual, expected);
