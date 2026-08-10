@@ -40,6 +40,14 @@ export function setupCalls() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && account && !callSocket) connectCallRealtime();
   });
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "bulbam.call-push") {
+        void handleVisibleCallPush(event.data.data ?? {});
+      }
+    });
+  }
 }
 
 async function switchAccount(nextAccount) {
@@ -53,6 +61,41 @@ async function switchAccount(nextAccount) {
   if (!account) return;
   connectCallRealtime();
   await restoreCallFromUrl();
+}
+
+async function handleVisibleCallPush(data) {
+  if (!account || currentCall) return;
+  const callId = typeof data?.callId === "string" ? data.callId : "";
+  const conversationId = typeof data?.conversationId === "string" ? data.conversationId : "";
+  if (!callId || !conversationId) return;
+
+  try {
+    const result = await api(
+      `/api/v1/chats/${encodeURIComponent(conversationId)}/calls/${encodeURIComponent(callId)}`
+    );
+    if (!result.call || currentCall) return;
+    currentCall = result.call;
+    answeredLocally = false;
+    offerStarted = false;
+
+    if (currentCall.direction === "incoming" && currentCall.status === "ringing") {
+      recoveryPending = false;
+      showIncoming(currentCall);
+      startStatePolling();
+      announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      return;
+    }
+
+    if (currentCall.status === "ringing" || currentCall.status === "accepted") {
+      recoveryPending = true;
+      showRecoveredCall("Активный звонок найден. Нажмите «Восстановить звук».");
+      startStatePolling();
+    } else {
+      currentCall = null;
+    }
+  } catch {
+    // Realtime may have already delivered or the short-lived call may have ended.
+  }
 }
 
 async function startCall() {
