@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Бульбам</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">К основному содержимому</a>
+
+  <header class="site-header">
+    <div>
+      <p class="eyebrow">Bulbam 0.1</p>
+      <h1>Бульбам</h1>
+      <p>Сначала надёжный мессенджер. Картошка будет чуть позже.</p>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="card" aria-labelledby="foundation-title">
+      <h2 id="foundation-title">Фундамент запущен</h2>
+      <p>Это первая веб-оболочка нового мессенджера. Сейчас она проверяет связь с новым Worker.</p>
+
+      <dl class="status-grid">
+        <div>
+          <dt>Веб-клиент</dt>
+          <dd>работает</dd>
+        </div>
+        <div>
+          <dt>Worker</dt>
+          <dd id="worker-status">проверяется…</dd>
+        </div>
+      </dl>
+
+      <button id="check-server" type="button">Проверить сервер ещё раз</button>
+      <p id="live-status" class="live-status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="next-title">
+      <h2 id="next-title">Что строим следующим</h2>
+      <p>Аккаунты по приглашениям, затем постоянные личные чаты с серверным хранением и состояниями «отправлено», «доставлено» и «прочитано».</p>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
