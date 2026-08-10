@@ -1,0 +1,52 @@
+name: Verify Live Auth Fix
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: https://bulbam-api.k69ysrndm7.workers.dev
+
+    steps:
+      - name: Check live health
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --output health.json --write-out '%{http_code}' "$BASE_URL/api/health")
+          echo "HTTP $status"
+          cat health.json
+          echo
+          test "$status" = "200"
+          grep -q '0.2.3-phase1' health.json
+
+      - name: Check live wrong login
+        shell: bash
+        run: |
+          set -euo pipefail
+          username="missing_$(date +%s)_$RANDOM"
+          payload=$(printf '{"username":"%s","password":"ProbePassword-2026!","deviceName":"GitHub Actions live auth fix"}' "$username")
+          status=$(curl --silent --show-error --request POST --header 'content-type: application/json' --output login.json --write-out '%{http_code}' --data "$payload" "$BASE_URL/api/v1/auth/login")
+          echo "HTTP $status"
+          cat login.json
+          echo
+          test "$status" = "401"
+          grep -q 'invalid_credentials' login.json
+
+      - name: Check live invalid invite registration path
+        shell: bash
+        run: |
+          set -euo pipefail
+          username="probe_$(date +%s)_$RANDOM"
+          payload=$(printf '{"username":"%s","displayName":"Production probe","password":"ProbePassword-2026!","inviteCode":"BULBAM-PROBE-INVALID-INVITE","deviceName":"GitHub Actions live auth fix"}' "$username")
+          status=$(curl --silent --show-error --request POST --header 'content-type: application/json' --output register.json --write-out '%{http_code}' --data "$payload" "$BASE_URL/api/v1/auth/register")
+          echo "HTTP $status"
+          cat register.json
+          echo
+          test "$status" = "400"
+          grep -q 'invite_invalid' register.json
