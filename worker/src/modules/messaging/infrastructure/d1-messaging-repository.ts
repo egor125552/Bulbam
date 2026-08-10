@@ -1,5 +1,5 @@
 import type { D1Database } from "../../../platform/cloudflare";
-import type { DirectConversation, StoredMessage } from "../domain/models";
+import type { DeliveryReceiptUpdate, DirectConversation, StoredMessage } from "../domain/models";
 import type { InsertMessageResult, MessagingRepository } from "../ports/messaging-repository";
 import { ensureMessagingSchema } from "./schema";
 
@@ -74,10 +74,23 @@ export class D1MessagingRepository implements MessagingRepository {
     await this.initialize();
     const result = await this.db
       .prepare(`
-        SELECT message_id, conversation_id, sender_user_id, client_message_id, body, created_at
-        FROM messages
-        WHERE conversation_id = ?
-        ORDER BY created_at DESC, message_id DESC
+        SELECT
+          m.message_id,
+          m.conversation_id,
+          m.sender_user_id,
+          m.client_message_id,
+          m.body,
+          m.created_at,
+          (
+            SELECT r.delivered_at
+            FROM message_receipts r
+            WHERE r.message_id = m.message_id
+            ORDER BY r.delivered_at DESC
+            LIMIT 1
+          ) AS delivered_at
+        FROM messages m
+        WHERE m.conversation_id = ?
+        ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT ?
       `)
       .bind(conversationId, limit)
@@ -130,14 +143,87 @@ export class D1MessagingRepository implements MessagingRepository {
     return { status: "conflict" };
   }
 
+  async markMessagesDelivered(
+    conversationId: string,
+    recipientUserId: string,
+    messageIds: string[],
+    now: number
+  ): Promise<DeliveryReceiptUpdate[]> {
+    await this.initialize();
+    if (!messageIds.length) return [];
+
+    const placeholders = messageIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(`
+        SELECT
+          m.message_id,
+          m.conversation_id,
+          m.sender_user_id,
+          m.client_message_id,
+          m.body,
+          m.created_at,
+          (
+            SELECT r.delivered_at
+            FROM message_receipts r
+            WHERE r.message_id = m.message_id
+              AND r.recipient_user_id = ?
+            LIMIT 1
+          ) AS delivered_at
+        FROM messages m
+        WHERE m.conversation_id = ?
+          AND m.message_id IN (${placeholders})
+          AND m.sender_user_id <> ?
+      `)
+      .bind(recipientUserId, conversationId, ...messageIds, recipientUserId)
+      .all<Row>();
+
+    const messages = (result.results ?? []).map(mapMessage);
+    const pending = messages.filter((message) => message.deliveredAt === null);
+    if (pending.length) {
+      await this.db.batch(
+        pending.map((message) =>
+          this.db
+            .prepare(`
+              INSERT INTO message_receipts (message_id, recipient_user_id, delivered_at, read_at)
+              VALUES (?, ?, ?, NULL)
+              ON CONFLICT(message_id, recipient_user_id) DO UPDATE SET
+                delivered_at = COALESCE(message_receipts.delivered_at, excluded.delivered_at)
+            `)
+            .bind(message.messageId, recipientUserId, now)
+        )
+      );
+    }
+
+    return messages.map((message) => ({
+      changed: message.deliveredAt === null,
+      message: {
+        ...message,
+        deliveredAt: message.deliveredAt ?? now
+      }
+    }));
+  }
+
   async findLatestMessage(conversationId: string): Promise<StoredMessage | null> {
     await this.initialize();
     const row = await this.db
       .prepare(`
-        SELECT message_id, conversation_id, sender_user_id, client_message_id, body, created_at
-        FROM messages
-        WHERE conversation_id = ?
-        ORDER BY created_at DESC, message_id DESC
+        SELECT
+          m.message_id,
+          m.conversation_id,
+          m.sender_user_id,
+          m.client_message_id,
+          m.body,
+          m.created_at,
+          (
+            SELECT r.delivered_at
+            FROM message_receipts r
+            WHERE r.message_id = m.message_id
+            ORDER BY r.delivered_at DESC
+            LIMIT 1
+          ) AS delivered_at
+        FROM messages m
+        WHERE m.conversation_id = ?
+        ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT 1
       `)
       .bind(conversationId)
@@ -165,6 +251,11 @@ export class D1MessagingRepository implements MessagingRepository {
     if (!conversationIds.size) return;
     const statements = [];
     for (const conversationId of conversationIds) {
+      statements.push(
+        this.db
+          .prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)")
+          .bind(conversationId)
+      );
       statements.push(this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId));
       statements.push(this.db.prepare("DELETE FROM direct_conversations WHERE conversation_id = ?").bind(conversationId));
     }
@@ -174,9 +265,22 @@ export class D1MessagingRepository implements MessagingRepository {
   private async findByClientMessageId(senderUserId: string, clientMessageId: string): Promise<StoredMessage | null> {
     const row = await this.db
       .prepare(`
-        SELECT message_id, conversation_id, sender_user_id, client_message_id, body, created_at
-        FROM messages
-        WHERE sender_user_id = ? AND client_message_id = ?
+        SELECT
+          m.message_id,
+          m.conversation_id,
+          m.sender_user_id,
+          m.client_message_id,
+          m.body,
+          m.created_at,
+          (
+            SELECT r.delivered_at
+            FROM message_receipts r
+            WHERE r.message_id = m.message_id
+            ORDER BY r.delivered_at DESC
+            LIMIT 1
+          ) AS delivered_at
+        FROM messages m
+        WHERE m.sender_user_id = ? AND m.client_message_id = ?
         LIMIT 1
       `)
       .bind(senderUserId, clientMessageId)
@@ -202,7 +306,8 @@ function mapMessage(row: Row): StoredMessage {
     senderUserId: String(row.sender_user_id),
     clientMessageId: String(row.client_message_id),
     text: String(row.body),
-    createdAt: Number(row.created_at)
+    createdAt: Number(row.created_at),
+    deliveredAt: row.delivered_at == null ? null : Number(row.delivered_at)
   };
 }
 
