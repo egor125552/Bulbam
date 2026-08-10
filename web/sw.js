@@ -16,18 +16,7 @@ self.addEventListener("push", (event) => {
     data = { title: "Бульбам", body: event.data.text() };
   }
 
-  const notification = self.registration.showNotification(data.title || "Бульбам", {
-    body: data.body || "",
-    icon: data.icon || "/icon.svg",
-    tag: data.tag,
-    data: data.data || { url: "/" }
-  });
-
-  const badge = typeof self.navigator?.setAppBadge === "function"
-    ? self.navigator.setAppBadge().catch(() => {})
-    : Promise.resolve();
-
-  event.waitUntil(Promise.all([notification, badge]));
+  event.waitUntil(handlePush(data));
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -38,6 +27,37 @@ self.addEventListener("notificationclick", (event) => {
 
   event.waitUntil(openOrFocus(target.href));
 });
+
+async function handlePush(data) {
+  const windowClients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true
+  });
+  const visibleClients = windowClients.filter(
+    (client) => client.url.startsWith(self.location.origin) && client.visibilityState === "visible"
+  );
+
+  if (data.kind === "call" && visibleClients.length) {
+    // Realtime is normally the foreground path. Push is still sent server-side
+    // for reliability; when the app is genuinely visible, use it only as a
+    // second delivery path and avoid a duplicate system notification.
+    for (const client of visibleClients) {
+      client.postMessage({ type: "bulbam.call-push", data: data.data || {} });
+    }
+    return;
+  }
+
+  await self.registration.showNotification(data.title || "Бульбам", {
+    body: data.body || "",
+    icon: data.icon || "/icon.svg",
+    tag: data.tag,
+    data: data.data || { url: "/" }
+  });
+
+  if (data.kind === "message" && typeof self.navigator?.setAppBadge === "function") {
+    try { await self.navigator.setAppBadge(); } catch {}
+  }
+}
 
 async function openOrFocus(targetUrl) {
   const windowClients = await self.clients.matchAll({
