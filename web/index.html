@@ -12,33 +12,21 @@
 
   <header class="site-header">
     <div>
-      <p class="eyebrow">Bulbam 0.2 · Phase 1</p>
+      <p class="eyebrow">Bulbam 0.3 · Phase 2</p>
       <h1>Бульбам</h1>
-      <p>Аккаунты, приглашения и сессии устройств. Без картофельной магии в фундаменте.</p>
+      <p>Личные чаты, которые не пропадают после перезагрузки.</p>
     </div>
   </header>
 
   <main id="main" tabindex="-1">
-    <section class="card" aria-labelledby="health-title">
-      <h2 id="health-title">Состояние системы</h2>
-      <dl class="status-grid">
-        <div>
-          <dt>Веб-клиент</dt>
-          <dd>работает</dd>
-        </div>
-        <div>
-          <dt>Worker</dt>
-          <dd id="worker-status">проверяется…</dd>
-        </div>
-        <div>
-          <dt>Хранилище</dt>
-          <dd id="storage-status">проверяется…</dd>
-        </div>
-      </dl>
-      <button id="check-server" type="button">Проверить сервер ещё раз</button>
+    <section class="system-strip" aria-labelledby="health-title">
+      <h2 id="health-title" class="visually-hidden">Состояние системы</h2>
+      <span>Worker: <strong id="worker-status">проверяется…</strong></span>
+      <span>Хранилище: <strong id="storage-status">проверяется…</strong></span>
+      <button id="check-server" type="button">Проверить сервер</button>
     </section>
 
-    <section id="signed-out" class="stack" aria-labelledby="account-start-title" hidden>
+    <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
       <h2 id="account-start-title" class="visually-hidden">Вход и регистрация</h2>
 
       <div class="card">
@@ -81,44 +69,89 @@
       </div>
     </section>
 
-    <section id="signed-in" class="stack" aria-labelledby="account-title" hidden>
-      <div class="card">
-        <h2 id="account-title">Аккаунт</h2>
-        <dl class="details-list">
-          <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
-          <div><dt>Username</dt><dd id="account-username"></dd></div>
-          <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
-          <div><dt>Роль</dt><dd id="account-role"></dd></div>
-        </dl>
-        <button id="logout" type="button">Выйти</button>
+    <section id="signed-in" class="signed-in" aria-label="Мессенджер" hidden>
+      <div class="messenger-shell">
+        <aside class="chat-sidebar" aria-labelledby="chats-title">
+          <div class="sidebar-heading">
+            <h2 id="chats-title">Чаты</h2>
+            <button id="new-chat-button" type="button" aria-expanded="false" aria-controls="user-search-panel">Новый чат</button>
+          </div>
+
+          <section id="user-search-panel" class="search-panel" aria-labelledby="search-users-title" hidden>
+            <h3 id="search-users-title" class="visually-hidden">Найти человека</h3>
+            <label for="user-search-input">Найти человека</label>
+            <input id="user-search-input" type="search" autocomplete="off" placeholder="Имя или @username" aria-describedby="user-search-hint">
+            <p id="user-search-hint" class="hint">Начни вводить имя или username. Минимум 2 символа.</p>
+            <ul id="user-search-results" class="user-results" aria-label="Результаты поиска"></ul>
+          </section>
+
+          <nav aria-label="Личные диалоги">
+            <div id="chat-list" class="chat-list"></div>
+          </nav>
+        </aside>
+
+        <section class="conversation-pane" aria-labelledby="conversation-title">
+          <header class="conversation-header">
+            <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
+            <p id="conversation-peer" class="conversation-peer">Найди человека или открой существующий диалог.</p>
+          </header>
+
+          <div id="conversation-empty" class="conversation-empty">
+            <p>Сообщения появятся здесь.</p>
+          </div>
+
+          <ol id="message-list" class="message-list" aria-label="Сообщения" role="log"></ol>
+
+          <form id="message-form" class="composer" hidden>
+            <label class="visually-hidden" for="message-input">Сообщение</label>
+            <textarea id="message-input" name="text" rows="2" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
+            <button id="send-message" type="submit">Отправить</button>
+          </form>
+        </section>
       </div>
 
-      <div class="card">
-        <h2>Устройства и сессии</h2>
-        <p>Каждый вход получает отдельную сессию. Любую из них можно завершить.</p>
-        <div id="sessions"></div>
-        <button id="refresh-sessions" type="button">Обновить список сессий</button>
-      </div>
+      <details class="settings-card">
+        <summary>Аккаунт и настройки</summary>
+        <div class="settings-grid">
+          <section class="card" aria-labelledby="account-title">
+            <h2 id="account-title">Аккаунт</h2>
+            <dl class="details-list">
+              <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
+              <div><dt>Username</dt><dd id="account-username"></dd></div>
+              <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
+              <div><dt>Роль</dt><dd id="account-role"></dd></div>
+            </dl>
+            <button id="logout" type="button">Выйти</button>
+          </section>
 
-      <div id="invite-card" class="card" hidden>
-        <h2>Новое приглашение</h2>
-        <p>Доступно владельцу и администратору. Каждый код одноразовый.</p>
-        <form id="invite-form" class="form-stack">
-          <label>
-            Сколько часов действует код
-            <input name="expiresInHours" type="number" min="1" max="720" value="168" inputmode="numeric">
-          </label>
-          <button type="submit">Создать приглашение</button>
-        </form>
-        <div id="new-invite" class="result-box" hidden>
-          <p><strong>Скопируй код сейчас. Второй раз сервер его не покажет.</strong></p>
-          <code id="new-invite-code"></code>
+          <section class="card" aria-labelledby="sessions-title">
+            <h2 id="sessions-title">Устройства и сессии</h2>
+            <p>Каждый вход получает отдельную сессию. Любую из них можно завершить.</p>
+            <div id="sessions"></div>
+            <button id="refresh-sessions" type="button">Обновить список сессий</button>
+          </section>
+
+          <section id="invite-card" class="card" aria-labelledby="invite-title" hidden>
+            <h2 id="invite-title">Новое приглашение</h2>
+            <p>Доступно владельцу и администратору. Каждый код одноразовый.</p>
+            <form id="invite-form" class="form-stack">
+              <label>
+                Сколько часов действует код
+                <input name="expiresInHours" type="number" min="1" max="720" value="168" inputmode="numeric">
+              </label>
+              <button type="submit">Создать приглашение</button>
+            </form>
+            <div id="new-invite" class="result-box" hidden>
+              <p><strong>Скопируй код сейчас. Второй раз сервер его не покажет.</strong></p>
+              <code id="new-invite-code"></code>
+            </div>
+          </section>
         </div>
-      </div>
+      </details>
     </section>
 
-    <section class="card" aria-labelledby="status-title">
-      <h2 id="status-title">Что происходит</h2>
+    <section class="status-card" aria-labelledby="status-title">
+      <h2 id="status-title" class="visually-hidden">Что происходит</h2>
       <p id="live-status" class="live-status" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
     </section>
   </main>
