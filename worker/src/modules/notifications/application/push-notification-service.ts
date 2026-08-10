@@ -90,7 +90,11 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   }
 
   async notifyIncomingCall(input: IncomingCallNotificationInput): Promise<void> {
-    await this.notifyWhenBackground(input.recipientUserId, {
+    // Calls are latency-sensitive. Always send the push to subscribed devices;
+    // the Service Worker suppresses the system notification when a Bulbam
+    // window is actually visible. This avoids a stale server foreground lease
+    // swallowing a call when a mobile browser is frozen immediately on hide.
+    await this.notifyAll(input.recipientUserId, {
       kind: "call",
       title: `Входящий звонок — ${input.callerDisplayName}`,
       body: "Нажмите, чтобы открыть Бульбам и ответить.",
@@ -111,7 +115,15 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   ): Promise<void> {
     if (!this.configured()) return;
     if (await this.repository.isForeground(recipientUserId, Date.now())) return;
+    await this.notifyAll(recipientUserId, payload, ttl);
+  }
 
+  private async notifyAll(
+    recipientUserId: string,
+    payload: Record<string, unknown>,
+    ttl: number
+  ): Promise<void> {
+    if (!this.configured()) return;
     const subscriptions = await this.repository.listForUser(recipientUserId);
     if (!subscriptions.length) return;
     const encoded = JSON.stringify(payload);
