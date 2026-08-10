@@ -68,12 +68,23 @@ export class CallRoom {
     if (current && isActive(current)) {
       return result({ ok: false, error: { code: "call_busy", message: "В этом диалоге уже есть активный звонок." } }, 409);
     }
-    const call: CallRoomRecord = { ...incoming, status: "ringing", updatedAt: Date.now(), answeredAt: null, endedAt: null, endedByUserId: null };
+    const call: CallRoomRecord = {
+      ...incoming,
+      status: "ringing",
+      updatedAt: Date.now(),
+      answeredAt: null,
+      endedAt: null,
+      endedByUserId: null
+    };
     await Promise.all([
       this.state.storage.put(CALL_KEY, call),
       this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
     ]);
-    await this.realtime.publishToUsers([call.calleeUserId], { type: "call.ringing", call: publicCall(call, call.calleeUserId) });
+    await this.syncActivePointers(call);
+    await this.realtime.publishToUsers([call.calleeUserId], {
+      type: "call.ringing",
+      call: publicCall(call, call.calleeUserId)
+    });
     return result({ ok: true, call });
   }
 
@@ -100,8 +111,12 @@ export class CallRoom {
       const now = Date.now();
       const updated: CallRoomRecord = { ...call, status: "accepted", answeredAt: now, updatedAt: now };
       await this.state.storage.put(CALL_KEY, updated);
+      await this.syncActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
-        type: "call.answered", callId: updated.callId, conversationId: updated.conversationId, answeredAt: updated.answeredAt
+        type: "call.answered",
+        callId: updated.callId,
+        conversationId: updated.conversationId,
+        answeredAt: updated.answeredAt
       });
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }
@@ -110,9 +125,16 @@ export class CallRoom {
       if (actorUserId !== call.calleeUserId) return forbidden("call_decline_forbidden", "Отклонить может только получатель звонка.");
       if (call.status !== "ringing") return conflictResponse("call_not_ringing", "Звонок уже не ожидает ответа.");
       const updated = endRecord(call, "declined", actorUserId);
-      await Promise.all([this.state.storage.put(CALL_KEY, updated), this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])]);
+      await Promise.all([
+        this.state.storage.put(CALL_KEY, updated),
+        this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
+      ]);
+      await this.clearActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
-        type: "call.declined", callId: updated.callId, conversationId: updated.conversationId, endedAt: updated.endedAt
+        type: "call.declined",
+        callId: updated.callId,
+        conversationId: updated.conversationId,
+        endedAt: updated.endedAt
       });
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }
@@ -120,9 +142,17 @@ export class CallRoom {
     if (action === "end") {
       if (!isActive(call)) return result({ ok: true, call: publicCall(call, actorUserId) });
       const updated = endRecord(call, "ended", actorUserId);
-      await Promise.all([this.state.storage.put(CALL_KEY, updated), this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])]);
+      await Promise.all([
+        this.state.storage.put(CALL_KEY, updated),
+        this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
+      ]);
+      await this.clearActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
-        type: "call.ended", callId: updated.callId, conversationId: updated.conversationId, endedAt: updated.endedAt, endedByUserId: updated.endedByUserId
+        type: "call.ended",
+        callId: updated.callId,
+        conversationId: updated.conversationId,
+        endedAt: updated.endedAt,
+        endedByUserId: updated.endedByUserId
       });
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }
@@ -141,20 +171,26 @@ export class CallRoom {
     if (kind === "answer" && actorUserId !== call.calleeUserId) return forbidden("call_answer_signal_forbidden", "Answer создаёт получатель звонка.");
 
     const currentSignals = await this.state.storage.get<CallRoomSignal[]>(SIGNALS_KEY) ?? [];
+    const now = Date.now();
     const signal: CallRoomSignal = {
       sequence: (currentSignals.at(-1)?.sequence ?? 0) + 1,
       callId,
       senderUserId: actorUserId,
       kind,
       payload: body.payload,
-      createdAt: Date.now()
+      createdAt: now
     };
     await Promise.all([
       this.state.storage.put(SIGNALS_KEY, [...currentSignals, signal].slice(-MAX_SIGNALS)),
-      this.state.storage.put(CALL_KEY, { ...call, updatedAt: Date.now() })
+      this.state.storage.put(CALL_KEY, { ...call, updatedAt: now })
     ]);
     const recipientUserId = actorUserId === call.callerUserId ? call.calleeUserId : call.callerUserId;
-    await this.realtime.publishToUsers([recipientUserId], { type: "call.signal", callId, conversationId: call.conversationId, signal });
+    await this.realtime.publishToUsers([recipientUserId], {
+      type: "call.signal",
+      callId,
+      conversationId: call.conversationId,
+      signal
+    });
     return result({ ok: true, signal }, 201);
   }
 
@@ -163,7 +199,10 @@ export class CallRoom {
     if (!call || call.callId !== callId || !participant(call, viewerUserId)) return notFoundResponse();
     const cursor = Number.isSafeInteger(after) && after >= 0 ? after : 0;
     const stored = await this.state.storage.get<CallRoomSignal[]>(SIGNALS_KEY) ?? [];
-    return result({ ok: true, signals: stored.filter((signal) => signal.sequence > cursor && signal.senderUserId !== viewerUserId) });
+    return result({
+      ok: true,
+      signals: stored.filter((signal) => signal.sequence > cursor && signal.senderUserId !== viewerUserId)
+    });
   }
 
   private async current(): Promise<CallRoomRecord | null> {
@@ -171,11 +210,35 @@ export class CallRoom {
     if (!call || !isStale(call, Date.now())) return call ?? null;
     if (!isActive(call)) return call;
     const expired = endRecord(call, "ended", "system-timeout");
-    await Promise.all([this.state.storage.put(CALL_KEY, expired), this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])]);
+    await Promise.all([
+      this.state.storage.put(CALL_KEY, expired),
+      this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
+    ]);
+    await this.clearActivePointers(expired);
     await this.realtime.publishToUsers([expired.callerUserId, expired.calleeUserId], {
-      type: "call.ended", callId: expired.callId, conversationId: expired.conversationId, endedAt: expired.endedAt, endedByUserId: expired.endedByUserId, reason: "timeout"
+      type: "call.ended",
+      callId: expired.callId,
+      conversationId: expired.conversationId,
+      endedAt: expired.endedAt,
+      endedByUserId: expired.endedByUserId,
+      reason: "timeout"
     });
     return expired;
+  }
+
+  private async syncActivePointers(call: CallRoomRecord): Promise<void> {
+    const expiresAt = activeExpiresAt(call);
+    await Promise.all([
+      this.realtime.setActiveCall(call.callerUserId, publicCall(call, call.callerUserId), expiresAt),
+      this.realtime.setActiveCall(call.calleeUserId, publicCall(call, call.calleeUserId), expiresAt)
+    ]);
+  }
+
+  private async clearActivePointers(call: CallRoomRecord): Promise<void> {
+    await Promise.all([
+      this.realtime.clearActiveCall(call.callerUserId),
+      this.realtime.clearActiveCall(call.calleeUserId)
+    ]);
   }
 }
 
@@ -186,6 +249,11 @@ function publicCall(call: CallRoomRecord, viewerUserId: string) {
     peer: call.callerUserId === viewerUserId ? call.callee : call.caller
   };
 }
+
+function activeExpiresAt(call: CallRoomRecord): number {
+  return call.updatedAt + (call.status === "ringing" ? RINGING_TTL_MS : ACCEPTED_TTL_MS);
+}
+
 function endRecord(call: CallRoomRecord, status: "declined" | "ended", actorUserId: string): CallRoomRecord {
   const now = Date.now();
   return { ...call, status, updatedAt: now, endedAt: now, endedByUserId: actorUserId };
@@ -208,7 +276,20 @@ function asCall(value: unknown): CallRoomRecord | null {
   const calleeUserId = stringValue(raw.calleeUserId);
   const createdAt = Number(raw.createdAt);
   if (!caller || !callee || !callId || !conversationId || !callerUserId || !calleeUserId || !Number.isFinite(createdAt)) return null;
-  return { callId, conversationId, callerUserId, calleeUserId, caller, callee, status: "ringing", createdAt, updatedAt: createdAt, answeredAt: null, endedAt: null, endedByUserId: null };
+  return {
+    callId,
+    conversationId,
+    callerUserId,
+    calleeUserId,
+    caller,
+    callee,
+    status: "ringing",
+    createdAt,
+    updatedAt: createdAt,
+    answeredAt: null,
+    endedAt: null,
+    endedByUserId: null
+  };
 }
 function asPeer(value: unknown): CallPeerSnapshot | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -228,5 +309,8 @@ function forbidden(code: string, message: string) { return result({ ok: false, e
 function conflictResponse(code: string, message: string) { return result({ ok: false, error: { code, message } }, 409); }
 function notFoundResponse() { return result({ ok: false, error: { code: "call_not_found", message: "Звонок не найден." } }, 404); }
 function result(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8" } });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
 }
