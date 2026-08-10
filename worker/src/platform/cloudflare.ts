@@ -55,4 +55,6 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
 }
