@@ -10,8 +10,7 @@
   },
   "d1_databases": [
     {
-      "binding": "DB",
-      "database_name": "bulbam-primary"
+      "binding": "DB"
     }
   ],
   "observability": {
