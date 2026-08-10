@@ -28,6 +28,46 @@ export class DurableObjectRealtime {
     }
   }
 
+  async setActiveCall(
+    userId: string,
+    call: Record<string, unknown>,
+    expiresAt: number
+  ): Promise<void> {
+    if (!this.namespace) return;
+    try {
+      const response = await this.namespace.getByName(userId).fetch(
+        new Request("https://realtime.internal/active-call", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ call, expiresAt })
+        })
+      );
+      if (!response.ok) {
+        console.warn(`[Realtime] active call state for ${userId} returned ${response.status}`);
+      }
+    } catch (error) {
+      console.warn(`[Realtime] active call state for ${userId} failed`, error);
+    }
+  }
+
+  async clearActiveCall(userId: string): Promise<void> {
+    if (!this.namespace) return;
+    try {
+      const response = await this.namespace.getByName(userId).fetch(
+        new Request("https://realtime.internal/active-call", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ call: null })
+        })
+      );
+      if (!response.ok) {
+        console.warn(`[Realtime] clear active call for ${userId} returned ${response.status}`);
+      }
+    } catch (error) {
+      console.warn(`[Realtime] clear active call for ${userId} failed`, error);
+    }
+  }
+
   async publishToUsers(userIds: string[], event: Record<string, unknown>): Promise<void> {
     if (!this.namespace) return;
     const payload = JSON.stringify(event);
