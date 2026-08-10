@@ -32,4 +32,5 @@ export interface AssetsBinding {
 export interface Env {
   ASSETS: AssetsBinding;
   DB: D1Database;
+  DEBUG_ERRORS?: string;
 }
