@@ -7,22 +7,26 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function hexToBytes(hex: string): Uint8Array | null {
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> | null {
   if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) return null;
-  const bytes = new Uint8Array(hex.length / 2);
+  const bytes = new Uint8Array(new ArrayBuffer(hex.length / 2));
   for (let index = 0; index < bytes.length; index += 1) {
     bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   }
   return bytes;
 }
 
-function randomBytes(length: number): Uint8Array {
-  const bytes = new Uint8Array(length);
+function randomBytes(length: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(new ArrayBuffer(length));
   crypto.getRandomValues(bytes);
   return bytes;
 }
 
-async function derivePasswordKey(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
+async function derivePasswordKey(
+  password: string,
+  salt: Uint8Array<ArrayBuffer>,
+  iterations: number
+): Promise<Uint8Array<ArrayBuffer>> {
   const material = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(password),
