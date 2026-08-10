@@ -1,0 +1,73 @@
+name: Production Live Probe
+
+on:
+  push:
+    branches:
+      - agent/production-live-probe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: https://bulbam-api.k69ysrndm7.workers.dev
+
+    steps:
+      - name: Probe health
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== GET /api/health ==="
+          curl --fail-with-body --silent --show-error \
+            --dump-header health.headers \
+            "$BASE_URL/api/health" | tee health.json
+          echo
+          echo "--- response headers ---"
+          cat health.headers
+
+      - name: Probe ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== GET /api/ready ==="
+          status=$(curl --silent --show-error \
+            --output ready.json \
+            --write-out '%{http_code}' \
+            "$BASE_URL/api/ready")
+          echo "HTTP $status"
+          cat ready.json
+          echo
+          if [ "$status" != "200" ]; then
+            echo "Production D1 readiness failed."
+            exit 1
+          fi
+
+      - name: Probe registration path without creating an account
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== POST /api/v1/auth/register with intentionally invalid invite ==="
+          username="probe_$(date +%s)_$RANDOM"
+          payload=$(printf '{"username":"%s","displayName":"Production probe","password":"ProbePassword-2026!","inviteCode":"BULBAM-PROBE-INVALID-INVITE","deviceName":"GitHub Actions production probe"}' "$username")
+          status=$(curl --silent --show-error \
+            --request POST \
+            --header 'content-type: application/json' \
+            --output register.json \
+            --write-out '%{http_code}' \
+            --data "$payload" \
+            "$BASE_URL/api/v1/auth/register")
+          echo "HTTP $status"
+          cat register.json
+          echo
+
+          if [ "$status" = "400" ] && grep -q 'invite_invalid' register.json; then
+            echo "Registration path reached production D1 successfully."
+            exit 0
+          fi
+
+          echo "Unexpected production registration response."
+          exit 1
