@@ -153,13 +153,12 @@ export class CallService {
     path: string,
     init?: RequestInit
   ): Promise<Record<string, any>> {
+    const headers = new Headers(init?.headers);
+    headers.set("content-type", "application/json");
     const response = await this.rooms.getByName(conversationId).fetch(
       new Request(`https://call-room.internal${path}`, {
         ...init,
-        headers: {
-          "content-type": "application/json",
-          ...(init?.headers ?? {})
-        }
+        headers
       })
     );
     let payload: any = null;
