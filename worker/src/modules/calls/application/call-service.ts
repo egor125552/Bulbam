@@ -1,15 +1,20 @@
-import { ApiError, badRequest, notFound } from "../../../core/errors";
+import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import type { DurableObjectNamespace, Env } from "../../../platform/cloudflare";
 import type { DirectConversation } from "../../messaging/domain/models";
 import type { MessagingRepository } from "../../messaging/ports/messaging-repository";
 import type { DirectoryUser, UserDirectory } from "../../messaging/ports/user-directory";
 import type { IncomingCallNotificationPublisher } from "../../notifications/application/push-notification-service";
+import { DurableObjectRealtime } from "../../realtime/public";
 import type { CallRoomSignal } from "../infrastructure/call-room";
 import { makeIceServers } from "../infrastructure/webrtc-config";
 
 export interface CallActor { userId: string; }
 
+const RINGING_SLOT_MS = 2 * 60 * 1000;
+
 export class CallService {
+  private readonly realtime: DurableObjectRealtime;
+
   constructor(
     private readonly rooms: DurableObjectNamespace,
     private readonly messaging: MessagingRepository,
@@ -17,7 +22,9 @@ export class CallService {
     private readonly env: Env,
     private readonly notifications?: IncomingCallNotificationPublisher,
     private readonly defer?: (promise: Promise<unknown>) => void
-  ) {}
+  ) {
+    this.realtime = new DurableObjectRealtime(env.REALTIME);
+  }
 
   async iceServers(actor: CallActor) {
     return makeIceServers(this.env, actor.userId);
@@ -45,10 +52,43 @@ export class CallService {
       endedByUserId: null
     };
 
-    const payload = await this.roomRequest(conversationId, "/start", {
-      method: "POST",
-      body: JSON.stringify({ call })
-    });
+    let claimedUsers: string[] = [];
+    if (this.realtime.available()) {
+      const expiresAt = now + RINGING_SLOT_MS;
+      const callerClaimed = await this.realtime.claimActiveCall(
+        actor.userId,
+        withPeer(call, actor.userId),
+        expiresAt
+      );
+      if (!callerClaimed) {
+        conflict("call_busy", "Вы уже участвуете в другом активном звонке.");
+      }
+      claimedUsers = [actor.userId];
+
+      const calleeClaimed = await this.realtime.claimActiveCall(
+        calleeUserId,
+        withPeer(call, calleeUserId),
+        expiresAt
+      );
+      if (!calleeClaimed) {
+        await this.realtime.clearActiveCall(actor.userId, call.callId);
+        conflict("call_busy", "Собеседник уже участвует в другом активном звонке.");
+      }
+      claimedUsers.push(calleeUserId);
+    }
+
+    let payload: Record<string, any>;
+    try {
+      payload = await this.roomRequest(conversationId, "/start", {
+        method: "POST",
+        body: JSON.stringify({ call })
+      });
+    } catch (error) {
+      await Promise.all(
+        claimedUsers.map((userId) => this.realtime.clearActiveCall(userId, call.callId))
+      );
+      throw error;
+    }
 
     if (this.notifications) {
       const task = this.notifications.notifyIncomingCall({
