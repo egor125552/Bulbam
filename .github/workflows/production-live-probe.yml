@@ -47,6 +47,32 @@ jobs:
             exit 1
           fi
 
+      - name: Probe password verification without a real account
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== POST /api/v1/auth/login with nonexistent user ==="
+          username="missing_$(date +%s)_$RANDOM"
+          payload=$(printf '{"username":"%s","password":"ProbePassword-2026!","deviceName":"GitHub Actions production probe"}' "$username")
+          status=$(curl --silent --show-error \
+            --request POST \
+            --header 'content-type: application/json' \
+            --output login.json \
+            --write-out '%{http_code}' \
+            --data "$payload" \
+            "$BASE_URL/api/v1/auth/login")
+          echo "HTTP $status"
+          cat login.json
+          echo
+
+          if [ "$status" = "401" ] && grep -q 'invalid_credentials' login.json; then
+            echo "Production password verification path works."
+            exit 0
+          fi
+
+          echo "Unexpected production login response."
+          exit 1
+
       - name: Probe registration path without creating an account
         shell: bash
         run: |
