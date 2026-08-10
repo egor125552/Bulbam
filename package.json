@@ -1,15 +1,18 @@
 {
   "name": "bulbam",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run check && npm test"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
+    "vitest": "^4.1.0",
     "wrangler": "^4.0.0"
   }
 }
