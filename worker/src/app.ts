@@ -5,11 +5,14 @@ import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/h
 import { MessagingService } from "./modules/messaging/application/messaging-service";
 import { D1MessagingRepository } from "./modules/messaging/infrastructure/d1-messaging-repository";
 import { handleMessagingHttp } from "./modules/messaging/transport/http";
+import { PushNotificationService } from "./modules/notifications/application/push-notification-service";
+import { D1PushRepository } from "./modules/notifications/infrastructure/d1-push-repository";
+import { handlePushHttp } from "./modules/notifications/transport/http";
 import { DurableObjectRealtime } from "./modules/realtime/public";
-import type { Env } from "./platform/cloudflare";
+import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
-const VERSION = "0.3.0-phase2";
+const VERSION = "0.4.0-pwa-push";
 
 function storageBindingMissing(): Response {
   return json(
@@ -24,7 +27,11 @@ function storageBindingMissing(): Response {
   );
 }
 
-export async function handleRequest(request: Request, env: Env): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContextLike
+): Promise<Response> {
   const url = new URL(request.url);
 
   try {
@@ -36,6 +43,9 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         version: VERSION,
         storage: { binding: env.DB ? "configured" : "missing" },
         realtime: { binding: env.REALTIME ? "configured" : "missing" },
+        push: {
+          configured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT)
+        },
         time: new Date().toISOString()
       });
     }
@@ -46,22 +56,27 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
     const identity = identityRepository ? new IdentityService(identityRepository) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
+    const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
+    const push = pushRepository ? new PushNotificationService(pushRepository, realtime, env) : null;
     const messaging = messagingRepository && identity
       ? new MessagingService(
           messagingRepository,
           { findUser: (userId) => identity.findPublicAccountById(userId) },
-          realtime
+          realtime,
+          push ?? undefined,
+          ctx ? (promise) => ctx.waitUntil(promise) : undefined
         )
       : null;
 
     if (url.pathname === "/api/ready") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
-      if (!identityRepository || !messagingRepository) return storageBindingMissing();
+      if (!identityRepository || !messagingRepository || !pushRepository) return storageBindingMissing();
 
       try {
         await identityRepository.initialize();
         await messagingRepository.initialize();
+        await pushRepository.initialize();
       } catch (error) {
         console.error("[Bulbam] D1 initialization failed", error);
         return json(
@@ -80,6 +95,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         ok: true,
         storage: "ready",
         realtime: realtime.available() ? "ready" : "polling_fallback",
+        push: push?.publicConfig().configured ? "ready" : "needs_vapid_keys",
         version: VERSION
       });
     }
@@ -94,16 +110,24 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       if (identityResponse) return identityResponse;
     }
 
-    if (identity && messaging) {
-      const authenticateMessaging = async (incoming: Request) => {
-        const authenticated = await identity.authenticate(sessionToken(incoming));
-        return { userId: authenticated.account.userId };
-      };
+    const authenticate = identity
+      ? async (incoming: Request) => {
+          const authenticated = await identity.authenticate(sessionToken(incoming));
+          return { userId: authenticated.account.userId };
+        }
+      : null;
+
+    if (identity && push && authenticate) {
+      const pushResponse = await handlePushHttp(request, url, push, authenticate);
+      if (pushResponse) return pushResponse;
+    }
+
+    if (identity && messaging && authenticate) {
       const messagingResponse = await handleMessagingHttp(
         request,
         url,
         messaging,
-        authenticateMessaging
+        authenticate
       );
       if (messagingResponse) return messagingResponse;
     }
@@ -122,6 +146,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         version: VERSION,
         storage: { binding: env.DB ? "configured" : "missing" },
         realtime: { binding: env.REALTIME ? "configured" : "missing" },
+        push: { configured: push?.publicConfig().configured ?? false },
         endpoints: [
           "GET /api/health",
           "GET /api/ready",
@@ -137,6 +162,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           "POST /api/v1/chats/direct",
           "GET /api/v1/chats/:conversationId/messages",
           "POST /api/v1/chats/:conversationId/messages",
+          "POST /api/v1/chats/:conversationId/receipts/delivered",
+          "GET /api/v1/push/config",
+          "PUT /api/v1/push/subscription",
+          "DELETE /api/v1/push/subscription",
           "GET /api/v1/realtime (WebSocket)"
         ]
       });
