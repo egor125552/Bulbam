@@ -239,8 +239,8 @@ export class CallRoom {
 
   private async clearActivePointers(call: CallRoomRecord): Promise<void> {
     await Promise.all([
-      this.realtime.clearActiveCall(call.callerUserId),
-      this.realtime.clearActiveCall(call.calleeUserId)
+      this.realtime.clearActiveCall(call.callerUserId, call.callId),
+      this.realtime.clearActiveCall(call.calleeUserId, call.callId)
     ]);
   }
 }
