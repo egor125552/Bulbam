@@ -1,10 +1,15 @@
 import { handleError, json, methodNotAllowed } from "./core/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
-import { handleIdentityHttp } from "./modules/identity/transport/http";
+import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
+import { MessagingService } from "./modules/messaging/application/messaging-service";
+import { D1MessagingRepository } from "./modules/messaging/infrastructure/d1-messaging-repository";
+import { handleMessagingHttp } from "./modules/messaging/transport/http";
+import { DurableObjectRealtime } from "./modules/realtime/public";
 import type { Env } from "./platform/cloudflare";
+import { handleSmokeHttp } from "./smoke";
 
-const VERSION = "0.2.3-phase1";
+const VERSION = "0.3.0-phase2";
 
 function storageBindingMissing(): Response {
   return json(
@@ -29,27 +34,34 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         ok: true,
         service: "bulbam-api",
         version: VERSION,
-        storage: {
-          binding: env.DB ? "configured" : "missing"
-        },
+        storage: { binding: env.DB ? "configured" : "missing" },
+        realtime: { binding: env.REALTIME ? "configured" : "missing" },
         time: new Date().toISOString()
       });
     }
 
     const storageRequired = url.pathname === "/api/ready" || url.pathname.startsWith("/api/v1/");
-    if (storageRequired && !env.DB) {
-      return storageBindingMissing();
-    }
+    if (storageRequired && !env.DB) return storageBindingMissing();
 
-    const repository = env.DB ? new D1IdentityRepository(env.DB) : null;
-    const identity = repository ? new IdentityService(repository) : null;
+    const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
+    const identity = identityRepository ? new IdentityService(identityRepository) : null;
+    const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
+    const realtime = new DurableObjectRealtime(env.REALTIME);
+    const messaging = messagingRepository && identity
+      ? new MessagingService(
+          messagingRepository,
+          { findUser: (userId) => identity.findPublicAccountById(userId) },
+          realtime
+        )
+      : null;
 
     if (url.pathname === "/api/ready") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
-      if (!repository) return storageBindingMissing();
+      if (!identityRepository || !messagingRepository) return storageBindingMissing();
 
       try {
-        await repository.initialize();
+        await identityRepository.initialize();
+        await messagingRepository.initialize();
       } catch (error) {
         console.error("[Bulbam] D1 initialization failed", error);
         return json(
@@ -64,12 +76,42 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         );
       }
 
-      return json({ ok: true, storage: "ready", version: VERSION });
+      return json({
+        ok: true,
+        storage: "ready",
+        realtime: realtime.available() ? "ready" : "polling_fallback",
+        version: VERSION
+      });
+    }
+
+    if (identity && messaging) {
+      const smokeResponse = await handleSmokeHttp(request, url, env, identity, messaging);
+      if (smokeResponse) return smokeResponse;
     }
 
     if (identity) {
       const identityResponse = await handleIdentityHttp(request, url, identity);
       if (identityResponse) return identityResponse;
+    }
+
+    if (identity && messaging) {
+      const authenticateMessaging = async (incoming: Request) => {
+        const authenticated = await identity.authenticate(sessionToken(incoming));
+        return { userId: authenticated.account.userId };
+      };
+      const messagingResponse = await handleMessagingHttp(
+        request,
+        url,
+        messaging,
+        authenticateMessaging
+      );
+      if (messagingResponse) return messagingResponse;
+    }
+
+    if (url.pathname === "/api/v1/realtime" && identity) {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
+      const authenticated = await identity.authenticate(sessionToken(request));
+      return realtime.connect(authenticated.account.userId, request);
     }
 
     if (url.pathname === "/api" || url.pathname === "/api/") {
@@ -78,9 +120,8 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         ok: true,
         service: "bulbam-api",
         version: VERSION,
-        storage: {
-          binding: env.DB ? "configured" : "missing"
-        },
+        storage: { binding: env.DB ? "configured" : "missing" },
+        realtime: { binding: env.REALTIME ? "configured" : "missing" },
         endpoints: [
           "GET /api/health",
           "GET /api/ready",
@@ -88,9 +129,15 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           "POST /api/v1/auth/login",
           "GET /api/v1/auth/me",
           "POST /api/v1/auth/logout",
+          "GET /api/v1/users/search?q=...",
           "GET /api/v1/sessions",
           "DELETE /api/v1/sessions/:sessionId",
-          "POST /api/v1/invites"
+          "POST /api/v1/invites",
+          "GET /api/v1/chats",
+          "POST /api/v1/chats/direct",
+          "GET /api/v1/chats/:conversationId/messages",
+          "POST /api/v1/chats/:conversationId/messages",
+          "GET /api/v1/realtime (WebSocket)"
         ]
       });
     }
