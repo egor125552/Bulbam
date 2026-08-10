@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { createTestHarness } from "wrangler";
 
 const server = createTestHarness({
-  workers: [{ configPath: "./wrangler.jsonc" }]
+  workers: [{ configPath: "./wrangler.test.jsonc" }]
 });
 
 beforeAll(async () => {
@@ -21,10 +21,17 @@ async function readJson(response) {
   return response.json();
 }
 
+async function expectStatus(response, status) {
+  if (response.status !== status) {
+    const diagnostic = await response.clone().text();
+    throw new Error(`Expected HTTP ${status}, received ${response.status}: ${diagnostic}`);
+  }
+}
+
 describe("bulbam-api integration", () => {
   test("health endpoint starts without touching durable storage", async () => {
     const response = await server.fetch("/api/health");
-    expect(response.status).toBe(200);
+    await expectStatus(response, 200);
     const body = await readJson(response);
     expect(body.ok).toBe(true);
     expect(body.service).toBe("bulbam-api");
@@ -32,7 +39,7 @@ describe("bulbam-api integration", () => {
 
   test("ready endpoint initializes the identity D1 schema", async () => {
     const response = await server.fetch("/api/ready");
-    expect(response.status).toBe(200);
+    await expectStatus(response, 200);
     const body = await readJson(response);
     expect(body).toMatchObject({ ok: true, storage: "ready" });
   });
@@ -50,7 +57,7 @@ describe("bulbam-api integration", () => {
       })
     });
 
-    expect(response.status).toBe(400);
+    await expectStatus(response, 400);
     const body = await readJson(response);
     expect(body.ok).toBe(false);
     expect(body.error.code).toBe("invite_invalid");
