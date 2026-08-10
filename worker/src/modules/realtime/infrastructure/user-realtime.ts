@@ -30,33 +30,15 @@ export class UserRealtime {
       return Response.json({ connected: this.state.getWebSockets().length > 0 });
     }
 
-    if (request.method === "POST" && url.pathname === "/active-call") {
-      let payload: unknown;
-      try {
-        payload = await request.json();
-      } catch {
-        return new Response("invalid active call", { status: 400 });
+    if (url.pathname === "/active-call") {
+      if (request.method === "GET") {
+        const active = await this.activeCall();
+        return Response.json({ active: active?.call ?? null, expiresAt: active?.expiresAt ?? null });
       }
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        return new Response("invalid active call", { status: 400 });
+      if (request.method === "POST") {
+        return this.updateActiveCall(request);
       }
-      const body = payload as Record<string, unknown>;
-      if (body.call === null) {
-        await this.state.storage.delete(ACTIVE_CALL_KEY);
-        return new Response(null, { status: 204 });
-      }
-      if (!body.call || typeof body.call !== "object" || Array.isArray(body.call)) {
-        return new Response("invalid active call", { status: 400 });
-      }
-      const expiresAt = Number(body.expiresAt);
-      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-        return new Response("invalid active call expiry", { status: 400 });
-      }
-      await this.state.storage.put<StoredActiveCall>(ACTIVE_CALL_KEY, {
-        call: body.call as Record<string, unknown>,
-        expiresAt
-      });
-      return new Response(null, { status: 204 });
+      return new Response("method not allowed", { status: 405 });
     }
 
     if (request.method === "POST" && url.pathname === "/emit") {
@@ -108,6 +90,59 @@ export class UserRealtime {
 
   webSocketError(): void {}
 
+  private async updateActiveCall(request: Request): Promise<Response> {
+    let payload: unknown;
+    try {
+      payload = await request.json();
+    } catch {
+      return new Response("invalid active call", { status: 400 });
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return new Response("invalid active call", { status: 400 });
+    }
+
+    const body = payload as Record<string, unknown>;
+    const operation = typeof body.operation === "string" ? body.operation : "set";
+    const requestedCallId = typeof body.callId === "string" ? body.callId : "";
+
+    if (operation === "clear" || body.call === null) {
+      const current = await this.activeCall();
+      if (!current) return new Response(null, { status: 204 });
+      const currentCallId = callIdOf(current.call);
+      if (requestedCallId && currentCallId && currentCallId !== requestedCallId) {
+        return new Response("active call changed", { status: 409 });
+      }
+      await this.state.storage.delete(ACTIVE_CALL_KEY);
+      return new Response(null, { status: 204 });
+    }
+
+    if (!body.call || typeof body.call !== "object" || Array.isArray(body.call)) {
+      return new Response("invalid active call", { status: 400 });
+    }
+    const call = body.call as Record<string, unknown>;
+    const incomingCallId = callIdOf(call);
+    if (!incomingCallId) return new Response("invalid active call id", { status: 400 });
+
+    const expiresAt = Number(body.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      return new Response("invalid active call expiry", { status: 400 });
+    }
+
+    const current = await this.activeCall();
+    if (current) {
+      const currentCallId = callIdOf(current.call);
+      if (currentCallId && currentCallId !== incomingCallId) {
+        return Response.json(
+          { ok: false, busy: true, callId: currentCallId },
+          { status: 409 }
+        );
+      }
+    }
+
+    await this.state.storage.put<StoredActiveCall>(ACTIVE_CALL_KEY, { call, expiresAt });
+    return Response.json({ ok: true, claimed: operation === "claim" });
+  }
+
   private async activeCall(): Promise<StoredActiveCall | null> {
     const active = await this.state.storage.get<StoredActiveCall>(ACTIVE_CALL_KEY);
     if (!active) return null;
@@ -123,6 +158,10 @@ export class UserRealtime {
       safeSend(socket, message);
     }
   }
+}
+
+function callIdOf(call: Record<string, unknown>): string {
+  return typeof call.callId === "string" ? call.callId : "";
 }
 
 function safeSend(socket: WebSocket, message: string): void {
