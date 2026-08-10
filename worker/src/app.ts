@@ -1,4 +1,7 @@
 import { handleError, json, methodNotAllowed } from "./core/http";
+import { CallService } from "./modules/calls/application/call-service";
+import { D1CallRepository } from "./modules/calls/infrastructure/d1-call-repository";
+import { handleCallHttp } from "./modules/calls/transport/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
@@ -12,7 +15,7 @@ import { DurableObjectRealtime } from "./modules/realtime/public";
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
-const VERSION = "0.4.0-pwa-push";
+const VERSION = "0.5.0-audio-calls";
 
 function storageBindingMissing(): Response {
   return json(
@@ -46,6 +49,7 @@ export async function handleRequest(
         push: {
           configured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT)
         },
+        calls: { transport: "webrtc", relay: "stun" },
         time: new Date().toISOString()
       });
     }
@@ -57,12 +61,26 @@ export async function handleRequest(
     const identity = identityRepository ? new IdentityService(identityRepository) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
+    const callRepository = env.DB ? new D1CallRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
-    const messaging = messagingRepository && identity
+    const directory = identity
+      ? { findUser: (userId: string) => identity.findPublicAccountById(userId) }
+      : null;
+    const messaging = messagingRepository && directory
       ? new MessagingService(
           messagingRepository,
-          { findUser: (userId) => identity.findPublicAccountById(userId) },
+          directory,
+          realtime,
+          push ?? undefined,
+          ctx ? (promise) => ctx.waitUntil(promise) : undefined
+        )
+      : null;
+    const calls = callRepository && messagingRepository && directory
+      ? new CallService(
+          callRepository,
+          messagingRepository,
+          directory,
           realtime,
           push ?? undefined,
           ctx ? (promise) => ctx.waitUntil(promise) : undefined
@@ -70,13 +88,18 @@ export async function handleRequest(
       : null;
 
     if (url.pathname === "/api/ready") {
-      if (request.method !== "GET") return methodNotAllowed(["GET"]);
-      if (!identityRepository || !messagingRepository || !pushRepository) return storageBindingMissing();
+      if (
+        !identityRepository ||
+        !messagingRepository ||
+        !pushRepository ||
+        !callRepository
+      ) return storageBindingMissing();
 
       try {
         await identityRepository.initialize();
         await messagingRepository.initialize();
         await pushRepository.initialize();
+        await callRepository.initialize();
       } catch (error) {
         console.error("[Bulbam] D1 initialization failed", error);
         return json(
@@ -96,6 +119,7 @@ export async function handleRequest(
         storage: "ready",
         realtime: realtime.available() ? "ready" : "polling_fallback",
         push: push?.publicConfig().configured ? "ready" : "needs_vapid_keys",
+        calls: "ready",
         version: VERSION
       });
     }
@@ -120,6 +144,11 @@ export async function handleRequest(
     if (identity && push && authenticate) {
       const pushResponse = await handlePushHttp(request, url, push, authenticate);
       if (pushResponse) return pushResponse;
+    }
+
+    if (identity && calls && authenticate) {
+      const callResponse = await handleCallHttp(request, url, calls, authenticate);
+      if (callResponse) return callResponse;
     }
 
     if (identity && messaging && authenticate) {
@@ -147,6 +176,7 @@ export async function handleRequest(
         storage: { binding: env.DB ? "configured" : "missing" },
         realtime: { binding: env.REALTIME ? "configured" : "missing" },
         push: { configured: push?.publicConfig().configured ?? false },
+        calls: { transport: "webrtc", ice: "cloudflare-stun" },
         endpoints: [
           "GET /api/health",
           "GET /api/ready",
@@ -163,6 +193,13 @@ export async function handleRequest(
           "GET /api/v1/chats/:conversationId/messages",
           "POST /api/v1/chats/:conversationId/messages",
           "POST /api/v1/chats/:conversationId/receipts/delivered",
+          "POST /api/v1/chats/:conversationId/calls",
+          "GET /api/v1/calls/:callId",
+          "POST /api/v1/calls/:callId/answer",
+          "POST /api/v1/calls/:callId/decline",
+          "POST /api/v1/calls/:callId/end",
+          "GET|POST /api/v1/calls/:callId/signals",
+          "GET /api/v1/calls/ice",
           "GET /api/v1/push/config",
           "PUT /api/v1/push/subscription",
           "DELETE /api/v1/push/subscription",
