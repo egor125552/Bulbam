@@ -60,24 +60,32 @@ async function api(path, cookie, options = {}) {
     }
   });
 }
+async function openChat(owner, peer) {
+  const response = await api("/api/v1/chats/direct", owner.cookie, {
+    method: "POST",
+    body: JSON.stringify({ userId: peer.account.userId })
+  });
+  await expectStatus(response, 200);
+  return (await json(response)).chat;
+}
 
 describe("one-to-one audio call signaling", () => {
-  test("keeps live call state, recovery and WebRTC signaling in the conversation Durable Object", async () => {
+  test("keeps call state, recovery and user-wide busy slots in Durable Objects", async () => {
     const inviteA = "BULBAM-CALL-SMOKE-ALPHA-2026";
     const inviteB = "BULBAM-CALL-SMOKE-BETA-2026";
+    const inviteC = "BULBAM-CALL-SMOKE-GAMMA-2026";
     await seedInvite(inviteA, "call-smoke-alpha-invite");
     await seedInvite(inviteB, "call-smoke-beta-invite");
+    await seedInvite(inviteC, "call-smoke-gamma-invite");
 
     const alpha = await register({ username: "call_alpha", displayName: "Егор Звонок", inviteCode: inviteA });
     const beta = await register({ username: "call_beta", displayName: "Настя Звонок", inviteCode: inviteB });
+    const gamma = await register({ username: "call_gamma", displayName: "Третий Звонок", inviteCode: inviteC });
 
-    const open = await api("/api/v1/chats/direct", alpha.cookie, {
-      method: "POST",
-      body: JSON.stringify({ userId: beta.account.userId })
-    });
-    await expectStatus(open, 200);
-    const chat = (await json(open)).chat;
+    const chat = await openChat(alpha, beta);
+    const betaGammaChat = await openChat(gamma, beta);
     const root = `/api/v1/chats/${chat.conversationId}/calls`;
+    const betaGammaRoot = `/api/v1/chats/${betaGammaChat.conversationId}/calls`;
 
     const ice = await api("/api/v1/calls/ice", alpha.cookie);
     await expectStatus(ice, 200);
@@ -105,8 +113,11 @@ describe("one-to-one audio call signaling", () => {
     const callerCannotAnswer = await api(`${callRoot}/answer`, alpha.cookie, { method: "POST" });
     await expectStatus(callerCannotAnswer, 403);
 
-    const busy = await api(root, beta.cookie, { method: "POST" });
-    await expectStatus(busy, 409);
+    const sameRoomBusy = await api(root, beta.cookie, { method: "POST" });
+    await expectStatus(sameRoomBusy, 409);
+
+    const differentRoomBusy = await api(betaGammaRoot, gamma.cookie, { method: "POST" });
+    await expectStatus(differentRoomBusy, 409);
 
     const answered = await api(`${callRoot}/answer`, beta.cookie, { method: "POST" });
     await expectStatus(answered, 200);
@@ -195,8 +206,12 @@ describe("one-to-one audio call signaling", () => {
     });
     await expectStatus(signalAfterEnd, 409);
 
-    const nextCall = await api(root, alpha.cookie, { method: "POST" });
-    await expectStatus(nextCall, 201);
-    expect((await json(nextCall)).call.status).toBe("ringing");
+    const gammaAfterRelease = await api(betaGammaRoot, gamma.cookie, { method: "POST" });
+    await expectStatus(gammaAfterRelease, 201);
+    const gammaCall = (await json(gammaAfterRelease)).call;
+    expect(gammaCall).toMatchObject({
+      status: "ringing",
+      peer: expect.objectContaining({ userId: beta.account.userId })
+    });
   });
 });
