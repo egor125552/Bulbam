@@ -206,14 +206,16 @@ async function loadMessages({ quiet = false } = {}) {
   try {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
     if (!selectedChat || selectedChat.conversationId !== conversationId) return;
+    const serverMessages = result.messages ?? [];
     const pending = messages.filter((message) => message.localState);
-    messages = result.messages ?? [];
+    messages = serverMessages;
     for (const local of pending) {
       if (!messages.some((message) => message.clientMessageId === local.clientMessageId)) {
         messages.push(local);
       }
     }
     renderMessages();
+    void acknowledgeIncomingMessages(conversationId, serverMessages);
   } catch (error) {
     if (!quiet) announce(`Не удалось загрузить сообщения: ${error.message}`);
   }
@@ -267,7 +269,11 @@ function renderMessages() {
       ? " · отправляется"
       : message.localState === "failed"
         ? " · не отправлено"
-        : "";
+        : mine
+          ? message.deliveredAt
+            ? " · доставлено"
+            : " · отправлено"
+          : "";
     meta.textContent = `${formatTime(message.createdAt)}${state}`;
     item.append(author, body, meta);
 
@@ -298,6 +304,7 @@ async function sendCurrentMessage(event) {
     clientMessageId: randomId(),
     text,
     createdAt: Date.now(),
+    deliveredAt: null,
     localState: "pending"
   };
   messages.push(pending);
@@ -329,11 +336,46 @@ async function transmitPending(pending) {
 }
 
 function upsertServerMessage(message) {
-  messages = messages.filter(
-    (existing) => existing.messageId !== message.messageId && existing.clientMessageId !== message.clientMessageId
+  const existing = messages.find(
+    (candidate) => candidate.messageId === message.messageId || candidate.clientMessageId === message.clientMessageId
   );
-  messages.push(message);
+  const merged = {
+    ...(existing ?? {}),
+    ...message,
+    deliveredAt: message.deliveredAt ?? existing?.deliveredAt ?? null
+  };
+  delete merged.localState;
+  messages = messages.filter(
+    (candidate) => candidate.messageId !== message.messageId && candidate.clientMessageId !== message.clientMessageId
+  );
+  messages.push(merged);
   renderMessages();
+}
+
+async function acknowledgeIncomingMessages(conversationId, candidates) {
+  if (!account) return;
+  const accountId = account.userId;
+  const currentGeneration = generation;
+  const messageIds = [...new Set(
+    candidates
+      .filter((message) => message.senderUserId !== accountId && !message.deliveredAt)
+      .map((message) => message.messageId)
+  )];
+  if (!messageIds.length) return;
+
+  try {
+    await api(`/api/v1/chats/${conversationId}/receipts/delivered`, {
+      method: "POST",
+      body: JSON.stringify({ messageIds })
+    });
+  } catch {
+    if (generation !== currentGeneration || account?.userId !== accountId) return;
+    setTimeout(() => {
+      if (generation === currentGeneration && account?.userId === accountId) {
+        void acknowledgeIncomingMessages(conversationId, candidates);
+      }
+    }, 2000);
+  }
 }
 
 function connectRealtime() {
@@ -360,6 +402,8 @@ function connectRealtime() {
     }
     if (payload?.type === "message.created" && payload.message) {
       handleRealtimeMessage(payload);
+    } else if (payload?.type === "messages.delivered" && Array.isArray(payload.receipts)) {
+      handleDeliveredReceipts(payload);
     }
   });
 
@@ -377,7 +421,36 @@ function handleRealtimeMessage(payload) {
   void loadChats({ quiet: true });
 
   if (payload.message.senderUserId !== account?.userId) {
+    void acknowledgeIncomingMessages(payload.conversationId, [payload.message]);
     announce(`Новое сообщение от ${chat?.peer?.displayName ?? "собеседника"}.`);
+  }
+}
+
+function handleDeliveredReceipts(payload) {
+  const receipts = payload.receipts ?? [];
+  if (selectedChat?.conversationId === payload.conversationId) {
+    let changed = false;
+    for (const receipt of receipts) {
+      const message = messages.find(
+        (candidate) => candidate.messageId === receipt.messageId || candidate.clientMessageId === receipt.clientMessageId
+      );
+      if (!message) continue;
+      const nextDeliveredAt = receipt.deliveredAt ?? message.deliveredAt;
+      if (nextDeliveredAt && nextDeliveredAt !== message.deliveredAt) {
+        message.deliveredAt = nextDeliveredAt;
+        changed = true;
+      }
+    }
+    if (changed) renderMessages();
+  }
+
+  const chat = chats.find((candidate) => candidate.conversationId === payload.conversationId);
+  if (chat?.lastMessage) {
+    const receipt = receipts.find(
+      (candidate) => candidate.messageId === chat.lastMessage.messageId ||
+        candidate.clientMessageId === chat.lastMessage.clientMessageId
+    );
+    if (receipt?.deliveredAt) chat.lastMessage.deliveredAt = receipt.deliveredAt;
   }
 }
 
