@@ -61,6 +61,6 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     return env.ASSETS.fetch(request);
   } catch (error) {
-    return handleError(error);
+    return handleError(error, env.DEBUG_ERRORS === "true");
   }
 }
