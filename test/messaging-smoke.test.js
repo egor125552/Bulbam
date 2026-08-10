@@ -81,7 +81,7 @@ async function api(path, cookie, options = {}) {
 }
 
 describe("persistent direct messaging", () => {
-  test("searches by display name and keeps ten idempotent messages visible to both users", async () => {
+  test("searches by display name, keeps ten idempotent messages, and records honest delivery", async () => {
     const inviteA = "BULBAM-MSG-SMOKE-ALPHA-2026";
     const inviteB = "BULBAM-MSG-SMOKE-BETA-2026";
     await seedInvite(inviteA, "msg-smoke-alpha-invite");
@@ -118,6 +118,7 @@ describe("persistent direct messaging", () => {
       await expectStatus(response, 201);
       const payload = await json(response);
       expect(payload.status).toBe("sent");
+      expect(payload.message.deliveredAt).toBeNull();
       sent.push(payload.message);
     }
 
@@ -128,6 +129,29 @@ describe("persistent direct messaging", () => {
     await expectStatus(retry, 200);
     expect((await json(retry)).duplicate).toBe(true);
 
+    const delivered = await api(`/api/v1/chats/${chat.conversationId}/receipts/delivered`, beta.cookie, {
+      method: "POST",
+      body: JSON.stringify({ messageIds: [sent[0].messageId] })
+    });
+    await expectStatus(delivered, 200);
+    const deliveredPayload = await json(delivered);
+    expect(deliveredPayload.receipts).toHaveLength(1);
+    expect(deliveredPayload.receipts[0].messageId).toBe(sent[0].messageId);
+    expect(deliveredPayload.receipts[0].deliveredAt).toEqual(expect.any(Number));
+
+    const deliveredAgain = await api(`/api/v1/chats/${chat.conversationId}/receipts/delivered`, beta.cookie, {
+      method: "POST",
+      body: JSON.stringify({ messageIds: [sent[0].messageId] })
+    });
+    await expectStatus(deliveredAgain, 200);
+    expect((await json(deliveredAgain)).receipts[0].deliveredAt).toBe(deliveredPayload.receipts[0].deliveredAt);
+
+    const fakeOwnDelivery = await api(`/api/v1/chats/${chat.conversationId}/receipts/delivered`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({ messageIds: [sent[0].messageId] })
+    });
+    await expectStatus(fakeOwnDelivery, 400);
+
     for (const account of [alpha, beta]) {
       const history = await api(`/api/v1/chats/${chat.conversationId}/messages`, account.cookie);
       await expectStatus(history, 200);
@@ -136,6 +160,8 @@ describe("persistent direct messaging", () => {
       expect(payload.messages.map((message) => message.text)).toEqual(
         Array.from({ length: 10 }, (_, index) => `Сообщение ${index + 1}`)
       );
+      expect(payload.messages[0].deliveredAt).toBe(deliveredPayload.receipts[0].deliveredAt);
+      expect(payload.messages[1].deliveredAt).toBeNull();
 
       const chats = await api("/api/v1/chats", account.cookie);
       await expectStatus(chats, 200);
