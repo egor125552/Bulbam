@@ -1,10 +1,11 @@
+import { hashPassword } from "./core/crypto";
 import { handleError, json, methodNotAllowed } from "./core/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp } from "./modules/identity/transport/http";
 import type { Env } from "./platform/cloudflare";
 
-const VERSION = "0.2.1-phase1";
+const VERSION = "0.2.2-phase1-diagnostic";
 
 function storageBindingMissing(): Response {
   return json(
@@ -17,6 +18,13 @@ function storageBindingMissing(): Response {
     },
     { status: 503 }
   );
+}
+
+function errorSummary(error: unknown) {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  return { name: "UnknownError", message: String(error) };
 }
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
@@ -34,6 +42,31 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         },
         time: new Date().toISOString()
       });
+    }
+
+    if (url.pathname === "/api/diagnostics/password-hash") {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
+      const startedAt = performance.now();
+      try {
+        const encoded = await hashPassword("Bulbam production diagnostic password");
+        return json({
+          ok: true,
+          pbkdf2: "working",
+          elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
+          format: encoded.split("$", 1)[0]
+        });
+      } catch (error) {
+        return json(
+          {
+            ok: false,
+            error: {
+              code: "password_hash_failed",
+              ...errorSummary(error)
+            }
+          },
+          { status: 503 }
+        );
+      }
     }
 
     const storageRequired = url.pathname === "/api/ready" || url.pathname.startsWith("/api/v1/");
@@ -84,6 +117,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         endpoints: [
           "GET /api/health",
           "GET /api/ready",
+          "GET /api/diagnostics/password-hash",
           "POST /api/v1/auth/register",
           "POST /api/v1/auth/login",
           "GET /api/v1/auth/me",
