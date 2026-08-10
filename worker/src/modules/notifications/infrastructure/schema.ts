@@ -59,4 +59,18 @@ async function initialize(db: D1Database): Promise<void> {
       .bind("notifications", 1, Date.now())
       .run();
   }
+
+  if (!appliedVersions.has(2)) {
+    await runStatement(
+      db,
+      `CREATE TABLE IF NOT EXISTS push_foreground_presence (
+        user_id TEXT PRIMARY KEY,
+        visible_until INTEGER NOT NULL
+      )`
+    );
+    await db
+      .prepare("INSERT OR IGNORE INTO schema_migrations(module, version, applied_at) VALUES (?, ?, ?)")
+      .bind("notifications", 2, Date.now())
+      .run();
+  }
 }
