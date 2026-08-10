@@ -93,4 +93,34 @@ export class D1PushRepository {
       }
     }));
   }
+
+  async setForeground(userId: string, visible: boolean, now: number): Promise<void> {
+    await this.initialize();
+    if (!visible) {
+      await this.db
+        .prepare("DELETE FROM push_foreground_presence WHERE user_id = ?")
+        .bind(userId)
+        .run();
+      return;
+    }
+
+    const visibleUntil = now + 30_000;
+    await this.db
+      .prepare(
+        `INSERT INTO push_foreground_presence(user_id, visible_until)
+         VALUES (?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET visible_until = excluded.visible_until`
+      )
+      .bind(userId, visibleUntil)
+      .run();
+  }
+
+  async isForeground(userId: string, now: number): Promise<boolean> {
+    await this.initialize();
+    const row = await this.db
+      .prepare("SELECT visible_until FROM push_foreground_presence WHERE user_id = ?")
+      .bind(userId)
+      .first<{ visible_until: number }>();
+    return Boolean(row && Number(row.visible_until) > now);
+  }
 }
