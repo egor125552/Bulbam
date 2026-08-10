@@ -27,6 +27,21 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_messages_sender_client ON messages(sender_user_id, client_message_id)"
     ]
+  },
+  {
+    version: 2,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS message_receipts (
+        message_id TEXT NOT NULL,
+        recipient_user_id TEXT NOT NULL,
+        delivered_at INTEGER,
+        read_at INTEGER,
+        PRIMARY KEY (message_id, recipient_user_id),
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_message_receipts_recipient ON message_receipts(recipient_user_id, delivered_at)",
+      "CREATE INDEX IF NOT EXISTS idx_message_receipts_message ON message_receipts(message_id)"
+    ]
   }
 ] as const;
 
