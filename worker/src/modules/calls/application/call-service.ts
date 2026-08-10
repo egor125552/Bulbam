@@ -1,4 +1,4 @@
-import { ApiError, badRequest, conflict, forbidden, notFound } from "../../../core/errors";
+import { badRequest, conflict, forbidden, notFound } from "../../../core/errors";
 import type { MessagingRepository } from "../../messaging/ports/messaging-repository";
 import type { RealtimePublisher } from "../../messaging/ports/realtime-publisher";
 import type { UserDirectory } from "../../messaging/ports/user-directory";
@@ -32,6 +32,8 @@ export class CallService {
   }
 
   async start(actor: CallActor, rawConversationId: string) {
+    const now = Date.now();
+    await this.calls.expireStale(now);
     const conversationId = validateUuid(rawConversationId, "conversationId");
     const conversation = await this.messaging.findConversationForUser(conversationId, actor.userId);
     if (!conversation) notFound("chat_not_found", "Диалог не найден.");
@@ -49,7 +51,7 @@ export class CallService {
       callerUserId: actor.userId,
       calleeUserId,
       status: "ringing",
-      createdAt: Date.now(),
+      createdAt: now,
       answeredAt: null,
       endedAt: null,
       endedByUserId: null
@@ -177,6 +179,7 @@ export class CallService {
 
   private async requireParticipant(actor: CallActor, rawCallId: string): Promise<StoredCall> {
     const callId = validateUuid(rawCallId, "callId");
+    await this.calls.expireStale(Date.now());
     const call = await this.calls.find(callId);
     if (!call) notFound("call_not_found", "Звонок не найден.");
     if (call.callerUserId !== actor.userId && call.calleeUserId !== actor.userId) {
