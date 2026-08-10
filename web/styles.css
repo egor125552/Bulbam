@@ -33,7 +33,7 @@ body {
 
 .site-header,
 main {
-  width: min(46rem, calc(100% - 2rem));
+  width: min(50rem, calc(100% - 2rem));
   margin-inline: auto;
 }
 
@@ -52,9 +52,13 @@ main {
   font-weight: 700;
 }
 
-main {
+main,
+.stack {
   display: grid;
   gap: 1rem;
+}
+
+main {
   padding-bottom: 3rem;
 }
 
@@ -64,29 +68,58 @@ main {
   border-radius: 1rem;
 }
 
-.card h2 {
+.card h2,
+.card h3 {
   margin-top: 0;
 }
 
-.status-grid {
+.status-grid,
+.details-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: 0.75rem;
   margin: 1.25rem 0;
 }
 
-.status-grid div {
+.status-grid div,
+.details-list div {
   padding: 0.9rem;
   border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
   border-radius: 0.75rem;
+  overflow-wrap: anywhere;
 }
 
-.status-grid dt {
+.status-grid dt,
+.details-list dt {
   font-weight: 700;
 }
 
-.status-grid dd {
+.status-grid dd,
+.details-list dd {
   margin: 0.25rem 0 0;
+}
+
+.form-stack {
+  display: grid;
+  gap: 1rem;
+  max-width: 34rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in srgb, CanvasText 40%, transparent);
+  border-radius: 0.65rem;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
 }
 
 button {
@@ -102,7 +135,8 @@ button {
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+input:focus-visible {
   outline: 3px solid Highlight;
   outline-offset: 3px;
 }
@@ -114,4 +148,57 @@ button:disabled {
 
 .live-status {
   min-height: 1.5rem;
+}
+
+.session-list {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.session-list li {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem;
+  border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  border-radius: 0.75rem;
+}
+
+.session-list span {
+  font-size: 0.92rem;
+}
+
+.session-list button {
+  justify-self: start;
+}
+
+.result-box {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 2px solid currentColor;
+  border-radius: 0.75rem;
+}
+
+.result-box code {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-size: 1rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+[hidden] {
+  display: none !important;
 }
