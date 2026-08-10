@@ -9,6 +9,7 @@
     "check": "tsc --noEmit",
     "check:web": "for f in web/app.js web/js/*.js; do node --check \"$f\" || exit 1; done",
     "test": "vitest run",
+    "test:registration": "vitest run test/registration-smoke.test.js --reporter=verbose",
     "verify": "npm run check && npm run check:web && npm test"
   },
   "devDependencies": {
