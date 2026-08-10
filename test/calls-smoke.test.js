@@ -62,7 +62,7 @@ async function api(path, cookie, options = {}) {
 }
 
 describe("one-to-one audio call signaling", () => {
-  test("keeps live call state and WebRTC signaling in the conversation Durable Object", async () => {
+  test("keeps live call state, recovery and WebRTC signaling in the conversation Durable Object", async () => {
     const inviteA = "BULBAM-CALL-SMOKE-ALPHA-2026";
     const inviteB = "BULBAM-CALL-SMOKE-BETA-2026";
     await seedInvite(inviteA, "call-smoke-alpha-invite");
@@ -133,11 +133,12 @@ describe("one-to-one audio call signaling", () => {
       expect.objectContaining({ sequence: offer.sequence, senderUserId: alpha.account.userId, kind: "offer" })
     ]);
 
-    const answerSignal = await api(`${callRoot}/signals`, beta.cookie, {
+    const answerSignalResponse = await api(`${callRoot}/signals`, beta.cookie, {
       method: "POST",
       body: JSON.stringify({ kind: "answer", payload: { type: "answer", sdp: "v=0\r\nmock-answer" } })
     });
-    await expectStatus(answerSignal, 201);
+    await expectStatus(answerSignalResponse, 201);
+    const answerSignal = (await json(answerSignalResponse)).signal;
 
     const iceSignal = await api(`${callRoot}/signals`, alpha.cookie, {
       method: "POST",
@@ -152,13 +153,37 @@ describe("one-to-one audio call signaling", () => {
     });
     await expectStatus(iceSignal, 201);
 
+    const callerCannotRequestResume = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "resume", payload: { reason: "wrong-side" } })
+    });
+    await expectStatus(callerCannotRequestResume, 403);
+
+    const resumeResponse = await api(`${callRoot}/signals`, beta.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "resume", payload: { reason: "client-reconnect" } })
+    });
+    await expectStatus(resumeResponse, 201);
+    const resume = (await json(resumeResponse)).signal;
+    expect(resume.kind).toBe("resume");
+    expect(resume.sequence).toBeGreaterThan(answerSignal.sequence);
+
     const signalsForAlpha = await api(`${callRoot}/signals?after=${offer.sequence}`, alpha.cookie);
     await expectStatus(signalsForAlpha, 200);
     const alphaSignals = (await json(signalsForAlpha)).signals;
     expect(alphaSignals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ senderUserId: beta.account.userId, kind: "answer" })
+      expect.objectContaining({ senderUserId: beta.account.userId, kind: "answer" }),
+      expect.objectContaining({ senderUserId: beta.account.userId, kind: "resume" })
     ]));
     expect(alphaSignals.some((signal) => signal.senderUserId === alpha.account.userId)).toBe(false);
+
+    const recoveredView = await api(callRoot, alpha.cookie);
+    await expectStatus(recoveredView, 200);
+    expect((await json(recoveredView)).call).toMatchObject({
+      status: "accepted",
+      direction: "outgoing",
+      peer: expect.objectContaining({ userId: beta.account.userId })
+    });
 
     const ended = await api(`${callRoot}/end`, beta.cookie, { method: "POST" });
     await expectStatus(ended, 200);
