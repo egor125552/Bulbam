@@ -1,5 +1,11 @@
 import { api } from "./api.js";
-import { announce, elements, getCurrentAccount } from "./ui.js";
+import {
+  applySelectedAudioProfileToTrack,
+  getSelectedAudioProfile,
+  requestCallMicrophone,
+  tuneAudioSender
+} from "./audio-profiles.js";
+import { announce, elements } from "./ui.js";
 
 let account = null;
 let currentCall = null;
@@ -35,6 +41,9 @@ export function setupCalls() {
 
   window.addEventListener("bulbam:account-changed", (event) => {
     void switchAccount(event.detail?.account ?? null);
+  });
+  window.addEventListener("bulbam:audio-profile-changed", () => {
+    void applyAudioProfileDuringCall();
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -94,7 +103,7 @@ async function handleVisibleCallPush(data) {
       currentCall = null;
     }
   } catch {
-    // Realtime may have already delivered or the short-lived call may have ended.
+    // Realtime may already have delivered the event or the short-lived call may have ended.
   }
 }
 
@@ -119,7 +128,7 @@ async function startCall() {
     showOutgoing(currentCall);
     startCallPolling();
     ringTimeout = setTimeout(() => void timeoutRinging(), 60_000);
-    announce(`Звоним ${currentCall.peer.displayName}.`);
+    announce(`Звоним ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
     stopLocalStream();
     announce(`Не удалось начать звонок: ${friendlyMediaError(error)}`);
@@ -141,7 +150,7 @@ async function answerCall() {
     recoveryPending = false;
     showConnectedControls("Соединяем звонок…");
     startCallPolling();
-    announce(`Вы ответили ${currentCall.peer.displayName}. Соединяю звук.`);
+    announce(`Вы ответили ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
     answeredLocally = false;
     cleanupPeerConnection();
@@ -169,11 +178,8 @@ async function resumeRecoveredCall() {
     if (currentCall.status === "accepted") {
       showConnectedControls("Восстанавливаю аудиосоединение…");
       startCallPolling();
-      if (currentCall.direction === "outgoing") {
-        await restartOffer();
-      } else {
-        await sendSignal("resume", { reason: "client-reconnect" });
-      }
+      if (currentCall.direction === "outgoing") await restartOffer();
+      else await sendSignal("resume", { reason: "client-reconnect" });
     } else if (currentCall.status === "ringing" && currentCall.direction === "outgoing") {
       showOutgoing(currentCall);
       startCallPolling();
@@ -212,7 +218,7 @@ async function endCall() {
   try {
     await api(callPath("/end"), { method: "POST" });
   } catch {
-    // Локальный микрофон всё равно выключаем даже при обрыве сети.
+    // Local microphone must still stop if the network disappears during hangup.
   } finally {
     finishCall("Звонок завершён.");
     announce("Звонок завершён.");
@@ -397,7 +403,15 @@ async function ensurePeerConnection() {
   const iceServers = await getIceServers();
   const pc = new RTCPeerConnection({ iceServers });
   peerConnection = pc;
-  for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+
+  for (const track of localStream.getTracks()) {
+    const sender = pc.addTrack(track, localStream);
+    if (track.kind === "audio") {
+      try { await tuneAudioSender(sender); } catch {
+        // Encoder bitrate control is an enhancement; capture settings remain valid if unsupported.
+      }
+    }
+  }
 
   pc.addEventListener("icecandidate", (event) => {
     if (!event.candidate || !currentCall) return;
@@ -419,7 +433,7 @@ async function ensurePeerConnection() {
   pc.addEventListener("connectionstatechange", () => {
     if (peerConnection !== pc) return;
     if (pc.connectionState === "connected") {
-      setCallStatus("Разговор идёт.");
+      setCallStatus(`Разговор идёт. Режим: ${getSelectedAudioProfile().label}.`);
       announce(`Аудиозвонок с ${currentCall?.peer?.displayName ?? "собеседником"} соединён.`);
     } else if (pc.connectionState === "connecting") {
       setCallStatus("Соединяю аудио…");
@@ -428,6 +442,27 @@ async function ensurePeerConnection() {
     }
   });
   return pc;
+}
+
+async function applyAudioProfileDuringCall() {
+  const track = localStream?.getAudioTracks?.()[0];
+  if (!track) return;
+  const profile = getSelectedAudioProfile();
+  try {
+    const result = await applySelectedAudioProfileToTrack(track);
+    const sender = peerConnection?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
+    if (sender) {
+      try { await tuneAudioSender(sender); } catch {}
+    }
+
+    if (result?.mismatches?.length) {
+      announce(`Режим «${profile.label}» применён частично. Проверьте фактические параметры в настройках звука.`);
+    } else {
+      announce(`Режим звука «${profile.label}» применён к текущему микрофону.`);
+    }
+  } catch (error) {
+    announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
+  }
 }
 
 async function sendSignal(kind, payload) {
@@ -460,9 +495,7 @@ async function processSignal(signal) {
 
   try {
     if (signal.kind === "resume") {
-      if (currentCall.direction === "outgoing" && !recoveryPending) {
-        await restartOffer();
-      }
+      if (currentCall.direction === "outgoing" && !recoveryPending) await restartOffer();
       return;
     }
 
@@ -542,6 +575,7 @@ async function pollCallState() {
     const result = await api(callPath());
     const latest = result.call;
     if (!latest) return;
+
     if (latest.status === "accepted" && currentCall.status === "ringing") {
       currentCall = latest;
       clearTimeout(ringTimeout);
@@ -560,6 +594,7 @@ async function pollCallState() {
       }
       return;
     }
+
     currentCall = { ...currentCall, ...latest };
     if (latest.status === "declined") finishCall("Собеседник отклонил звонок.");
     else if (latest.status === "ended") finishCall("Звонок завершён.");
@@ -573,6 +608,7 @@ async function restoreCallFromUrl() {
   if (!callId || !conversationId || !account) return;
   url.searchParams.delete("call");
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+
   try {
     const result = await api(
       `/api/v1/chats/${encodeURIComponent(conversationId)}/calls/${encodeURIComponent(callId)}`
@@ -615,11 +651,7 @@ function callPath(suffix = "") {
 }
 
 function requestMicrophone() {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("этот браузер не предоставляет доступ к микрофону");
-  return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: false
-  });
+  return requestCallMicrophone();
 }
 
 function showIncoming(call) {
@@ -639,7 +671,7 @@ function showOutgoing(call) {
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Исходящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
-  setCallStatus("Ожидаю ответа…");
+  setCallStatus(`Ожидаю ответа… Режим: ${getSelectedAudioProfile().label}.`);
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
   elements.callResumeButton.hidden = true;
@@ -707,10 +739,14 @@ function renderIdle() {
   elements.callEndButton.hidden = true;
 }
 
-function setCallStatus(text) { elements.callStatus.textContent = text; }
+function setCallStatus(text) {
+  elements.callStatus.textContent = text;
+}
 
 function syncCallButton() {
-  const chatSelected = Boolean(account) && !elements.messageForm.hidden && elements.conversationPeer.textContent.trim().startsWith("@");
+  const chatSelected = Boolean(account) &&
+    !elements.messageForm.hidden &&
+    elements.conversationPeer.textContent.trim().startsWith("@");
   elements.callStartButton.hidden = !chatSelected || Boolean(currentCall);
 }
 
@@ -747,7 +783,9 @@ function cleanupPeerConnection() {
 }
 
 function stopLocalStream() {
-  if (localStream) for (const track of localStream.getTracks()) track.stop();
+  if (localStream) {
+    for (const track of localStream.getTracks()) track.stop();
+  }
   localStream = null;
 }
 
@@ -770,5 +808,6 @@ function resetCallRuntime() {
 function friendlyMediaError(error) {
   if (error?.name === "NotAllowedError") return "нет разрешения на микрофон";
   if (error?.name === "NotFoundError") return "микрофон не найден";
+  if (error?.name === "OverconstrainedError") return "устройство не поддерживает выбранные параметры";
   return error?.message ?? "неизвестная ошибка";
 }
