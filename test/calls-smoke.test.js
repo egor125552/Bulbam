@@ -46,7 +46,7 @@ async function seedInvite(code, inviteId) {
 async function activeCallFor(userId) {
   const env = await testEnv();
   const response = await env.REALTIME.getByName(userId).fetch(
-    new Request("https://realtime.internal/active-call")
+    "https://realtime.internal/active-call"
   );
   await expectStatus(response, 200);
   return (await json(response)).active ?? null;
