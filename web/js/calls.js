@@ -26,6 +26,23 @@ let restartInFlight = false;
 let recoveryPending = false;
 let muted = false;
 let iceServersPromise = null;
+let lastIceServers = null;
+let disconnectRecoveryTimer = null;
+let recoveryWatchdogTimer = null;
+let recoveryAttempt = 0;
+let qualityMonitorTimer = null;
+let lastInboundAudioStats = null;
+let healthyQualitySamples = 0;
+let jitterBufferTargetMs = null;
+let audioConnectedOnce = false;
+let networkRecoveryActive = false;
+
+const DISCONNECT_RECOVERY_GRACE_MS = 2_500;
+const RECOVERY_WATCHDOG_MS = 7_000;
+const QUALITY_SAMPLE_MS = 2_000;
+const JITTER_BUFFER_DEGRADED_MS = 180;
+const JITTER_BUFFER_SEVERE_MS = 300;
+const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 
 export function setupCalls() {
   elements.callStartButton.addEventListener("click", () => void startCall());
@@ -44,6 +61,19 @@ export function setupCalls() {
   });
   window.addEventListener("bulbam:audio-profile-changed", () => {
     void applyAudioProfileDuringCall();
+  });
+  window.addEventListener("offline", () => {
+    if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
+    networkRecoveryActive = true;
+    raiseJitterBufferForNetworkStress(peerConnection, "severe");
+    setCallStatus("Сеть недоступна. Сохраняю звонок и жду восстановления подключения…");
+  });
+  window.addEventListener("online", () => {
+    if (!currentCall || currentCall.status !== "accepted" || recoveryPending || !networkRecoveryActive) return;
+    void recoverCallConnection({
+      hard: recoveryAttempt > 0,
+      reason: "browser-online"
+    });
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -168,7 +198,7 @@ async function resumeRecoveredCall() {
   if (!account || !currentCall || !recoveryPending) return;
   elements.callResumeButton.disabled = true;
   try {
-    localStream = await requestMicrophone();
+    if (!localStream) localStream = await requestMicrophone();
     await prepareRecoveryCursor();
     cleanupPeerConnection();
     remoteCandidates = [];
@@ -178,8 +208,16 @@ async function resumeRecoveredCall() {
     if (currentCall.status === "accepted") {
       showConnectedControls("Восстанавливаю аудиосоединение…");
       startCallPolling();
-      if (currentCall.direction === "outgoing") await restartOffer();
-      else await sendSignal("resume", { reason: "client-reconnect" });
+      clearAutomaticRecoveryTimers();
+      recoveryAttempt = 2;
+      networkRecoveryActive = true;
+      if (currentCall.direction === "outgoing") {
+        const restored = await restartOffer({ rebuild: true, refreshIce: true });
+        if (!restored) throw new Error("не удалось перестроить аудиосоединение");
+      } else {
+        await sendSignal("resume", { reason: "client-reconnect", mode: "rebuild" });
+      }
+      armRecoveryWatchdog();
     } else if (currentCall.status === "ringing" && currentCall.direction === "outgoing") {
       showOutgoing(currentCall);
       startCallPolling();
@@ -376,31 +414,53 @@ async function beginOfferIfNeeded() {
   }
 }
 
-async function restartOffer() {
-  if (!currentCall || currentCall.direction !== "outgoing" || currentCall.status !== "accepted") return;
-  if (restartInFlight) return;
+async function restartOffer({ rebuild = false, refreshIce = true, automatic = false } = {}) {
+  if (!currentCall || currentCall.direction !== "outgoing" || currentCall.status !== "accepted") return false;
+  if (restartInFlight) return false;
   restartInFlight = true;
   try {
-    cleanupPeerConnection();
-    remoteCandidates = [];
-    const pc = await ensurePeerConnection();
+    const freshIceServers = refreshIce ? await getIceServers({ refresh: true }) : await getIceServers();
+    let pc = peerConnection;
+
+    if (rebuild || !pc || pc.signalingState === "closed") {
+      cleanupPeerConnection();
+      remoteCandidates = [];
+      pc = await ensurePeerConnection({ iceServers: freshIceServers });
+    } else {
+      try {
+        const currentConfiguration = typeof pc.getConfiguration === "function" ? pc.getConfiguration() : {};
+        pc.setConfiguration?.({ ...currentConfiguration, iceServers: freshIceServers });
+      } catch {
+        // Some browsers reject live ICE-server replacement. The existing routes can still be restarted.
+      }
+      try { pc.restartIce?.(); } catch {}
+    }
+
     const offer = await pc.createOffer({ iceRestart: true });
     await pc.setLocalDescription(offer);
     offerStarted = true;
-    await sendSignal("offer", { type: offer.type, sdp: offer.sdp });
-    setCallStatus("Восстанавливаю аудиосоединение…");
+    await sendSignal("offer", {
+      type: offer.type,
+      sdp: offer.sdp,
+      recoveryMode: rebuild ? "rebuild" : "ice-restart"
+    });
+    setCallStatus(rebuild
+      ? "Перестраиваю аудиосоединение через свежий сетевой маршрут…"
+      : "Восстанавливаю аудио без разрыва медиасессии…");
+    return true;
   } catch (error) {
     offerStarted = false;
-    setCallStatus(`Не удалось восстановить аудиосоединение: ${error.message}`);
+    if (!automatic) setCallStatus(`Не удалось восстановить аудиосоединение: ${error.message}`);
+    return false;
   } finally {
     restartInFlight = false;
   }
 }
 
-async function ensurePeerConnection() {
+async function ensurePeerConnection({ iceServers: providedIceServers = null, refreshIce = false } = {}) {
   if (peerConnection) return peerConnection;
   if (!localStream) localStream = await requestMicrophone();
-  const iceServers = await getIceServers();
+  const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   const pc = new RTCPeerConnection({ iceServers });
   peerConnection = pc;
 
@@ -426,22 +486,224 @@ async function ensurePeerConnection() {
   pc.addEventListener("track", (event) => {
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     elements.callRemoteAudio.srcObject = stream;
+    applyJitterBufferTargetToReceiver(event.receiver, jitterBufferTargetMs);
     void elements.callRemoteAudio.play().catch(() => {
       setCallStatus("Звук подключён, но браузер заблокировал автоматическое воспроизведение.");
     });
   });
   pc.addEventListener("connectionstatechange", () => {
     if (peerConnection !== pc) return;
-    if (pc.connectionState === "connected") {
-      setCallStatus(`Разговор идёт. Режим: ${getSelectedAudioProfile().label}.`);
-      announce(`Аудиозвонок с ${currentCall?.peer?.displayName ?? "собеседником"} соединён.`);
-    } else if (pc.connectionState === "connecting") {
-      setCallStatus("Соединяю аудио…");
-    } else if (pc.connectionState === "failed") {
-      setCallStatus("Не удалось провести аудио через эту сеть. Проверяю доступные STUN/TURN маршруты.");
-    }
+    handlePeerConnectionState(pc);
+  });
+  pc.addEventListener("iceconnectionstatechange", () => {
+    if (peerConnection !== pc) return;
+    handleIceConnectionState(pc);
   });
   return pc;
+}
+
+function handlePeerConnectionState(pc) {
+  if (pc.connectionState === "connected") {
+    const recovered = networkRecoveryActive;
+    clearAutomaticRecoveryTimers();
+    recoveryAttempt = 0;
+    networkRecoveryActive = false;
+    healthyQualitySamples = 0;
+    startQualityMonitoring(pc);
+    setCallStatus(`Разговор идёт. Режим: ${getSelectedAudioProfile().label}.`);
+    if (!audioConnectedOnce) {
+      audioConnectedOnce = true;
+      announce(`Аудиозвонок с ${currentCall?.peer?.displayName ?? "собеседником"} соединён.`);
+    } else if (recovered) {
+      announce("Связь восстановлена. Разговор продолжается.");
+    }
+    return;
+  }
+
+  if (pc.connectionState === "connecting") {
+    setCallStatus(networkRecoveryActive ? "Восстанавливаю аудио…" : "Соединяю аудио…");
+    return;
+  }
+
+  if (pc.connectionState === "disconnected") {
+    raiseJitterBufferForNetworkStress(pc, "degraded");
+    setCallStatus("Связь нестабильна. Ненадолго увеличиваю аудиобуфер и удерживаю разговор…");
+    scheduleAutomaticRecovery(pc, "connection-disconnected");
+    return;
+  }
+
+  if (pc.connectionState === "failed") {
+    raiseJitterBufferForNetworkStress(pc, "severe");
+    setCallStatus("Связь пропала. Автоматически восстанавливаю аудио через новый сетевой маршрут…");
+    void recoverCallConnection({ hard: false, reason: "connection-failed" });
+  }
+}
+
+function handleIceConnectionState(pc) {
+  if (pc.iceConnectionState === "disconnected") {
+    raiseJitterBufferForNetworkStress(pc, "degraded");
+    scheduleAutomaticRecovery(pc, "ice-disconnected");
+  } else if (pc.iceConnectionState === "failed") {
+    raiseJitterBufferForNetworkStress(pc, "severe");
+    void recoverCallConnection({ hard: false, reason: "ice-failed" });
+  }
+}
+
+function scheduleAutomaticRecovery(pc, reason) {
+  if (disconnectRecoveryTimer || restartInFlight || recoveryPending) return;
+  if (!currentCall || currentCall.status !== "accepted") return;
+  disconnectRecoveryTimer = setTimeout(() => {
+    disconnectRecoveryTimer = null;
+    if (peerConnection !== pc || !currentCall || currentCall.status !== "accepted") return;
+    const stillDisconnected = pc.connectionState === "disconnected" ||
+      pc.connectionState === "failed" ||
+      pc.iceConnectionState === "disconnected" ||
+      pc.iceConnectionState === "failed";
+    if (stillDisconnected) void recoverCallConnection({ hard: false, reason });
+  }, DISCONNECT_RECOVERY_GRACE_MS);
+}
+
+async function recoverCallConnection({ hard, reason }) {
+  if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
+  if (restartInFlight) return;
+
+  clearTimeout(disconnectRecoveryTimer);
+  disconnectRecoveryTimer = null;
+  networkRecoveryActive = true;
+  recoveryAttempt = hard ? Math.max(recoveryAttempt, 2) : Math.max(recoveryAttempt, 1);
+  raiseJitterBufferForNetworkStress(peerConnection, hard ? "severe" : "degraded");
+  setCallStatus(hard
+    ? "Первый маршрут не восстановился. Перестраиваю соединение и обновляю STUN/TURN…"
+    : "Сеть прервалась. Обновляю STUN/TURN и восстанавливаю звонок автоматически…");
+
+  try {
+    if (currentCall.direction === "outgoing") {
+      await restartOffer({ rebuild: hard, refreshIce: true, automatic: true });
+    } else {
+      await sendSignal("resume", {
+        reason,
+        mode: hard ? "rebuild" : "ice-restart"
+      });
+    }
+  } catch {
+    // The network may still be completely offline. The watchdog retries with a fresh route.
+  } finally {
+    armRecoveryWatchdog();
+  }
+}
+
+function armRecoveryWatchdog() {
+  clearTimeout(recoveryWatchdogTimer);
+  recoveryWatchdogTimer = setTimeout(() => {
+    recoveryWatchdogTimer = null;
+    if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
+    if (isPeerConnected()) {
+      clearAutomaticRecoveryTimers();
+      recoveryAttempt = 0;
+      networkRecoveryActive = false;
+      return;
+    }
+    if (recoveryAttempt < 2) {
+      void recoverCallConnection({ hard: true, reason: "automatic-recovery-timeout" });
+      return;
+    }
+
+    recoveryPending = true;
+    networkRecoveryActive = false;
+    showRecoveredCall("Автоматическое восстановление не помогло. Нажмите «Восстановить звук» для последней попытки.");
+    announce("Не удалось восстановить звук автоматически. Доступна кнопка «Восстановить звук».");
+  }, RECOVERY_WATCHDOG_MS);
+}
+
+function isPeerConnected() {
+  return peerConnection?.connectionState === "connected" || peerConnection?.iceConnectionState === "connected" ||
+    peerConnection?.iceConnectionState === "completed";
+}
+
+function clearAutomaticRecoveryTimers() {
+  clearTimeout(disconnectRecoveryTimer);
+  clearTimeout(recoveryWatchdogTimer);
+  disconnectRecoveryTimer = null;
+  recoveryWatchdogTimer = null;
+}
+
+function startQualityMonitoring(pc) {
+  stopQualityMonitoring();
+  qualityMonitorTimer = setInterval(() => void sampleInboundAudioQuality(pc), QUALITY_SAMPLE_MS);
+  void sampleInboundAudioQuality(pc);
+}
+
+function stopQualityMonitoring() {
+  clearInterval(qualityMonitorTimer);
+  qualityMonitorTimer = null;
+  lastInboundAudioStats = null;
+  healthyQualitySamples = 0;
+}
+
+async function sampleInboundAudioQuality(pc) {
+  if (peerConnection !== pc || pc.connectionState !== "connected" || typeof pc.getStats !== "function") return;
+  try {
+    const stats = await pc.getStats();
+    let inbound = null;
+    stats.forEach((report) => {
+      const kind = report.kind ?? report.mediaType;
+      if (!inbound && report.type === "inbound-rtp" && kind === "audio" && !report.isRemote) inbound = report;
+    });
+    if (!inbound) return;
+
+    const current = {
+      id: inbound.id,
+      packetsReceived: Number(inbound.packetsReceived) || 0,
+      packetsLost: Number(inbound.packetsLost) || 0,
+      jitterMs: Math.max(0, (Number(inbound.jitter) || 0) * 1000)
+    };
+    const previous = lastInboundAudioStats;
+    lastInboundAudioStats = current;
+    if (!previous || previous.id !== current.id) return;
+
+    const receivedDelta = Math.max(0, current.packetsReceived - previous.packetsReceived);
+    const lostDelta = Math.max(0, current.packetsLost - previous.packetsLost);
+    const packetDelta = receivedDelta + lostDelta;
+    const lossRate = packetDelta > 0 ? lostDelta / packetDelta : 0;
+
+    if (lossRate >= 0.08 || current.jitterMs >= 80) {
+      healthyQualitySamples = 0;
+      setJitterBufferTarget(pc, JITTER_BUFFER_SEVERE_MS);
+    } else if (lossRate >= 0.025 || current.jitterMs >= 35) {
+      healthyQualitySamples = 0;
+      setJitterBufferTarget(pc, Math.max(jitterBufferTargetMs ?? 0, JITTER_BUFFER_DEGRADED_MS));
+    } else if (jitterBufferTargetMs !== null) {
+      healthyQualitySamples += 1;
+      if (healthyQualitySamples >= 4) {
+        healthyQualitySamples = 0;
+        if (jitterBufferTargetMs > JITTER_BUFFER_DEGRADED_MS) {
+          setJitterBufferTarget(pc, JITTER_BUFFER_DEGRADED_MS);
+        } else {
+          setJitterBufferTarget(pc, null);
+        }
+      }
+    }
+  } catch {
+    // getStats and jitterBufferTarget are optional enhancements; WebRTC keeps its own jitter buffer without them.
+  }
+}
+
+function raiseJitterBufferForNetworkStress(pc, severity) {
+  if (!pc) return;
+  const target = severity === "severe" ? JITTER_BUFFER_SEVERE_MS : JITTER_BUFFER_DEGRADED_MS;
+  if (jitterBufferTargetMs === null || target > jitterBufferTargetMs) setJitterBufferTarget(pc, target);
+}
+
+function setJitterBufferTarget(pc, targetMs) {
+  jitterBufferTargetMs = targetMs;
+  for (const receiver of pc?.getReceivers?.() ?? []) {
+    if (receiver.track?.kind === "audio") applyJitterBufferTargetToReceiver(receiver, targetMs);
+  }
+}
+
+function applyJitterBufferTargetToReceiver(receiver, targetMs) {
+  if (!receiver || !("jitterBufferTarget" in receiver)) return;
+  try { receiver.jitterBufferTarget = targetMs; } catch {}
 }
 
 async function applyAudioProfileDuringCall() {
@@ -495,17 +757,31 @@ async function processSignal(signal) {
 
   try {
     if (signal.kind === "resume") {
-      if (currentCall.direction === "outgoing" && !recoveryPending) await restartOffer();
+      if (currentCall.direction === "outgoing" && !recoveryPending) {
+        const hard = signal.payload?.mode === "rebuild";
+        await recoverCallConnection({
+          hard,
+          reason: typeof signal.payload?.reason === "string" ? signal.payload.reason : "peer-reconnect"
+        });
+      }
       return;
     }
 
+    const recoveryMode = signal.payload?.recoveryMode;
     let pc = await ensurePeerConnection();
     if (signal.kind === "offer") {
-      if (pc.signalingState !== "stable") {
+      if (recoveryMode === "rebuild") {
+        const pendingCandidates = remoteCandidates;
         cleanupPeerConnection();
+        remoteCandidates = pendingCandidates;
+        pc = await ensurePeerConnection({ refreshIce: true });
+      } else if (pc.signalingState !== "stable") {
+        const pendingCandidates = remoteCandidates;
+        cleanupPeerConnection();
+        remoteCandidates = pendingCandidates;
         pc = await ensurePeerConnection();
       }
-      await pc.setRemoteDescription(signal.payload);
+      await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
       await flushRemoteCandidates();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -514,7 +790,7 @@ async function processSignal(signal) {
       return;
     }
     if (signal.kind === "answer") {
-      await pc.setRemoteDescription(signal.payload);
+      await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
       await flushRemoteCandidates();
       return;
     }
@@ -638,10 +914,15 @@ async function restoreCallFromUrl() {
   }
 }
 
-async function getIceServers() {
+async function getIceServers({ refresh = false } = {}) {
+  if (refresh) iceServersPromise = null;
   iceServersPromise = iceServersPromise ?? api("/api/v1/calls/ice")
-    .then((result) => result.iceServers ?? [])
-    .catch(() => [{ urls: ["stun:stun.cloudflare.com:3478"] }]);
+    .then((result) => {
+      const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
+      if (servers.length) lastIceServers = servers;
+      return lastIceServers ?? FALLBACK_ICE_SERVERS;
+    })
+    .catch(() => lastIceServers ?? FALLBACK_ICE_SERVERS);
   return iceServersPromise;
 }
 
@@ -764,22 +1045,34 @@ function cleanupMedia() {
   stopCallPolling();
   cleanupPeerConnection();
   stopLocalStream();
+  clearNetworkRecoveryState();
   processedSignalSequences = new Set();
   signalPollCursor = 0;
   remoteCandidates = [];
   muted = false;
   restartInFlight = false;
   iceServersPromise = null;
+  lastIceServers = null;
   elements.callMuteButton.textContent = "Выключить микрофон";
   elements.callRemoteAudio.srcObject = null;
 }
 
 function cleanupPeerConnection() {
+  stopQualityMonitoring();
   if (peerConnection) {
     try { peerConnection.close(); } catch {}
   }
   peerConnection = null;
   remoteCandidates = [];
+}
+
+function clearNetworkRecoveryState() {
+  clearAutomaticRecoveryTimers();
+  stopQualityMonitoring();
+  recoveryAttempt = 0;
+  jitterBufferTargetMs = null;
+  audioConnectedOnce = false;
+  networkRecoveryActive = false;
 }
 
 function stopLocalStream() {
@@ -803,6 +1096,8 @@ function resetCallRuntime() {
   recoveryPending = false;
   muted = false;
   iceServersPromise = null;
+  lastIceServers = null;
+  clearNetworkRecoveryState();
 }
 
 function friendlyMediaError(error) {
