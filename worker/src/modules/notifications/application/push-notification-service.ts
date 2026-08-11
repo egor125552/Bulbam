@@ -14,11 +14,23 @@ export interface MessageNotificationInput {
   text: string;
 }
 
+export interface IncomingCallNotificationInput {
+  recipientUserId: string;
+  callerDisplayName: string;
+  callId: string;
+  conversationId: string;
+}
+
 export interface MessageNotificationPublisher {
   notifyNewMessage(input: MessageNotificationInput): Promise<void>;
 }
 
-export class PushNotificationService implements MessageNotificationPublisher {
+export interface IncomingCallNotificationPublisher {
+  notifyIncomingCall(input: IncomingCallNotificationInput): Promise<void>;
+}
+
+export class PushNotificationService
+implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   constructor(
     private readonly repository: D1PushRepository,
     private readonly env: Env
@@ -63,16 +75,7 @@ export class PushNotificationService implements MessageNotificationPublisher {
   }
 
   async notifyNewMessage(input: MessageNotificationInput): Promise<void> {
-    if (!this.configured()) return;
-
-    // A short foreground lease is stronger than merely having a WebSocket:
-    // browsers may keep sockets alive briefly after a PWA goes into background.
-    if (await this.repository.isForeground(input.recipientUserId, Date.now())) return;
-
-    const subscriptions = await this.repository.listForUser(input.recipientUserId);
-    if (!subscriptions.length) return;
-
-    const payload = JSON.stringify({
+    await this.notifyWhenBackground(input.recipientUserId, {
       kind: "message",
       title: input.senderDisplayName,
       body: notificationPreview(input.text),
@@ -84,8 +87,47 @@ export class PushNotificationService implements MessageNotificationPublisher {
         messageId: input.messageId
       }
     });
+  }
 
-    await Promise.all(subscriptions.map((subscription) => this.send(subscription, payload)));
+  async notifyIncomingCall(input: IncomingCallNotificationInput): Promise<void> {
+    // Calls are latency-sensitive. Always send the push to subscribed devices;
+    // the Service Worker suppresses the system notification when a Bulbam
+    // window is actually visible. This avoids a stale server foreground lease
+    // swallowing a call when a mobile browser is frozen immediately on hide.
+    await this.notifyAll(input.recipientUserId, {
+      kind: "call",
+      title: `Входящий звонок — ${input.callerDisplayName}`,
+      body: "Нажмите, чтобы открыть Бульбам и ответить.",
+      tag: `call-${input.callId}`,
+      icon: "/icon.svg",
+      data: {
+        url: `/?chat=${encodeURIComponent(input.conversationId)}&call=${encodeURIComponent(input.callId)}`,
+        callId: input.callId,
+        conversationId: input.conversationId
+      }
+    }, 120);
+  }
+
+  private async notifyWhenBackground(
+    recipientUserId: string,
+    payload: Record<string, unknown>,
+    ttl = 60 * 60
+  ): Promise<void> {
+    if (!this.configured()) return;
+    if (await this.repository.isForeground(recipientUserId, Date.now())) return;
+    await this.notifyAll(recipientUserId, payload, ttl);
+  }
+
+  private async notifyAll(
+    recipientUserId: string,
+    payload: Record<string, unknown>,
+    ttl: number
+  ): Promise<void> {
+    if (!this.configured()) return;
+    const subscriptions = await this.repository.listForUser(recipientUserId);
+    if (!subscriptions.length) return;
+    const encoded = JSON.stringify(payload);
+    await Promise.all(subscriptions.map((subscription) => this.send(subscription, encoded, ttl)));
   }
 
   private configured(): boolean {
@@ -96,7 +138,7 @@ export class PushNotificationService implements MessageNotificationPublisher {
     );
   }
 
-  private async send(subscription: PushSubscriptionRecord, payload: string): Promise<void> {
+  private async send(subscription: PushSubscriptionRecord, payload: string, ttl: number): Promise<void> {
     try {
       await webpush.sendNotification(
         {
@@ -110,7 +152,7 @@ export class PushNotificationService implements MessageNotificationPublisher {
             publicKey: this.env.VAPID_PUBLIC_KEY!,
             privateKey: this.env.VAPID_PRIVATE_KEY!
           },
-          TTL: 60 * 60,
+          TTL: ttl,
           urgency: "high"
         }
       );

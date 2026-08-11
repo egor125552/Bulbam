@@ -15,7 +15,7 @@
 
   <header class="site-header">
     <div>
-      <p class="eyebrow">Bulbam 0.4 · PWA + Push</p>
+      <p class="eyebrow">Bulbam 0.5 · PWA + Push + Calls</p>
       <h1>Бульбам</h1>
       <p>Личные чаты, которые не пропадают после перезагрузки.</p>
     </div>
@@ -95,8 +95,11 @@
 
         <section class="conversation-pane" aria-labelledby="conversation-title">
           <header class="conversation-header">
-            <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
-            <p id="conversation-peer" class="conversation-peer">Найди человека или открой существующий диалог.</p>
+            <div>
+              <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
+              <p id="conversation-peer" class="conversation-peer">Найди человека или открой существующий диалог.</p>
+            </div>
+            <button id="call-start" type="button" hidden>Позвонить</button>
           </header>
 
           <div id="conversation-empty" class="conversation-empty">
@@ -112,6 +115,20 @@
           </form>
         </section>
       </div>
+
+      <section id="call-panel" class="card" aria-labelledby="call-title" hidden>
+        <h2 id="call-title" tabindex="-1">Звонок</h2>
+        <p id="call-peer"></p>
+        <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+        <div class="call-actions">
+          <button id="call-answer" type="button" hidden>Ответить</button>
+          <button id="call-decline" type="button" hidden>Отклонить</button>
+          <button id="call-resume" type="button" hidden>Восстановить звук</button>
+          <button id="call-mute" type="button" hidden>Выключить микрофон</button>
+          <button id="call-end" type="button" hidden>Завершить звонок</button>
+        </div>
+        <audio id="call-remote-audio" autoplay></audio>
+      </section>
 
       <details class="settings-card">
         <summary>Аккаунт и настройки</summary>
@@ -132,6 +149,21 @@
             <p id="push-status">Проверяю поддержку уведомлений.</p>
             <button id="push-enable" type="button">Включить уведомления</button>
             <button id="push-disable" type="button" hidden>Отключить уведомления</button>
+          </section>
+
+          <section class="card" aria-labelledby="call-audio-title">
+            <h2 id="call-audio-title">Звук звонков</h2>
+            <label for="audio-profile">Режим микрофона</label>
+            <select id="audio-profile" aria-describedby="audio-profile-description audio-profile-status">
+              <option value="normal">Обычный</option>
+              <option value="clean">Чистый голос</option>
+              <option value="studio">Студийный</option>
+              <option value="music">Музыка</option>
+            </select>
+            <p id="audio-profile-description" class="hint"></p>
+            <p id="audio-profile-status">Выберите режим и проверьте микрофон.</p>
+            <button id="audio-profile-test" type="button">Проверить микрофон</button>
+            <p class="hint">В «Студийном» и «Музыке» лучше использовать наушники: без эхоподавления динамики могут снова попасть в микрофон. Стерео и 48 кГц включаются только если их реально даёт устройство и браузер.</p>
           </section>
 
           <section class="card" aria-labelledby="sessions-title">

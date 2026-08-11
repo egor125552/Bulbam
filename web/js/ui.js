@@ -11,6 +11,10 @@ export const elements = {
   pushStatus: document.querySelector("#push-status"),
   pushEnableButton: document.querySelector("#push-enable"),
   pushDisableButton: document.querySelector("#push-disable"),
+  audioProfileSelect: document.querySelector("#audio-profile"),
+  audioProfileDescription: document.querySelector("#audio-profile-description"),
+  audioProfileStatus: document.querySelector("#audio-profile-status"),
+  audioProfileTestButton: document.querySelector("#audio-profile-test"),
   sessionsRoot: document.querySelector("#sessions"),
   refreshSessionsButton: document.querySelector("#refresh-sessions"),
   inviteCard: document.querySelector("#invite-card"),
@@ -28,7 +32,18 @@ export const elements = {
   messageList: document.querySelector("#message-list"),
   messageForm: document.querySelector("#message-form"),
   messageInput: document.querySelector("#message-input"),
-  sendMessageButton: document.querySelector("#send-message")
+  sendMessageButton: document.querySelector("#send-message"),
+  callStartButton: document.querySelector("#call-start"),
+  callPanel: document.querySelector("#call-panel"),
+  callTitle: document.querySelector("#call-title"),
+  callPeer: document.querySelector("#call-peer"),
+  callStatus: document.querySelector("#call-status"),
+  callAnswerButton: document.querySelector("#call-answer"),
+  callDeclineButton: document.querySelector("#call-decline"),
+  callResumeButton: document.querySelector("#call-resume"),
+  callMuteButton: document.querySelector("#call-mute"),
+  callEndButton: document.querySelector("#call-end"),
+  callRemoteAudio: document.querySelector("#call-remote-audio")
 };
 
 let currentAccount = null;

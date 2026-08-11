@@ -1,0 +1,246 @@
+import { createHash } from "node:crypto";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { createTestHarness } from "wrangler";
+
+const PASSWORD = "Bulbam-Calls-Smoke-2026!";
+const server = createTestHarness({
+  workers: [{ configPath: "./wrangler.test.jsonc" }]
+});
+
+beforeAll(async () => { await server.listen(); });
+afterEach(async () => { await server.reset(); });
+afterAll(async () => { await server.close(); });
+
+async function json(response) {
+  const text = await response.text();
+  try { return JSON.parse(text); }
+  catch { throw new Error(`Expected JSON, got HTTP ${response.status}: ${text}`); }
+}
+async function expectStatus(response, expected) {
+  if (response.status !== expected) {
+    throw new Error(`Expected HTTP ${expected}, got ${response.status}: ${await response.clone().text()}`);
+  }
+}
+function sessionCookie(response) {
+  const setCookie = response.headers.get("set-cookie") ?? "";
+  const match = setCookie.match(/(?:^|,\s*)bulbam_session=([^;]+)/);
+  if (!match) throw new Error(`No bulbam_session cookie: ${setCookie}`);
+  return `bulbam_session=${match[1]}`;
+}
+async function testEnv() {
+  const worker = server.getWorker("bulbam-api-test");
+  return worker.getEnv();
+}
+async function seedInvite(code, inviteId) {
+  const ready = await server.fetch("/api/ready");
+  await expectStatus(ready, 200);
+  const env = await testEnv();
+  const hash = createHash("sha256").update(code).digest("hex");
+  await env.DB.prepare(`
+    INSERT INTO invites (
+      invite_id, code_hash, created_by_user_id, role_grant,
+      created_at, expires_at, used_at, used_by_user_id
+    ) VALUES (?, ?, NULL, 'member', ?, NULL, NULL, NULL)
+  `).bind(inviteId, hash, Date.now()).run();
+}
+async function activeCallFor(userId) {
+  const env = await testEnv();
+  const response = await env.REALTIME.getByName(userId).fetch(
+    "https://realtime.internal/active-call"
+  );
+  await expectStatus(response, 200);
+  return (await json(response)).active ?? null;
+}
+async function register({ username, displayName, inviteCode }) {
+  const response = await server.fetch("/api/v1/auth/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, displayName, password: PASSWORD, inviteCode, deviceName: "Calls smoke" })
+  });
+  await expectStatus(response, 201);
+  const payload = await json(response.clone());
+  return { account: payload.account, cookie: sessionCookie(response) };
+}
+async function api(path, cookie, options = {}) {
+  return server.fetch(path, {
+    ...options,
+    headers: {
+      ...(options.body ? { "content-type": "application/json" } : {}),
+      cookie,
+      ...(options.headers ?? {})
+    }
+  });
+}
+async function openChat(owner, peer) {
+  const response = await api("/api/v1/chats/direct", owner.cookie, {
+    method: "POST",
+    body: JSON.stringify({ userId: peer.account.userId })
+  });
+  await expectStatus(response, 200);
+  return (await json(response)).chat;
+}
+
+describe("one-to-one audio call signaling", () => {
+  test("keeps call state, recovery and user-wide busy slots in Durable Objects", async () => {
+    const inviteA = "BULBAM-CALL-SMOKE-ALPHA-2026";
+    const inviteB = "BULBAM-CALL-SMOKE-BETA-2026";
+    const inviteC = "BULBAM-CALL-SMOKE-GAMMA-2026";
+    await seedInvite(inviteA, "call-smoke-alpha-invite");
+    await seedInvite(inviteB, "call-smoke-beta-invite");
+    await seedInvite(inviteC, "call-smoke-gamma-invite");
+
+    const alpha = await register({ username: "call_alpha", displayName: "Егор Звонок", inviteCode: inviteA });
+    const beta = await register({ username: "call_beta", displayName: "Настя Звонок", inviteCode: inviteB });
+    const gamma = await register({ username: "call_gamma", displayName: "Третий Звонок", inviteCode: inviteC });
+
+    const chat = await openChat(alpha, beta);
+    const betaGammaChat = await openChat(gamma, beta);
+    const root = `/api/v1/chats/${chat.conversationId}/calls`;
+    const betaGammaRoot = `/api/v1/chats/${betaGammaChat.conversationId}/calls`;
+
+    const ice = await api("/api/v1/calls/ice", alpha.cookie);
+    await expectStatus(ice, 200);
+    expect((await json(ice)).iceServers.some((server) => {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      return urls.includes("stun:stun.cloudflare.com:3478");
+    })).toBe(true);
+
+    const started = await api(root, alpha.cookie, { method: "POST" });
+    await expectStatus(started, 201);
+    const call = (await json(started)).call;
+    const callRoot = `${root}/${call.callId}`;
+    expect(call.status).toBe("ringing");
+    expect(call.direction).toBe("outgoing");
+    expect(call.peer.userId).toBe(beta.account.userId);
+
+    expect(await activeCallFor(alpha.account.userId)).toMatchObject({
+      callId: call.callId,
+      direction: "outgoing",
+      status: "ringing"
+    });
+    expect(await activeCallFor(beta.account.userId)).toMatchObject({
+      callId: call.callId,
+      direction: "incoming",
+      status: "ringing"
+    });
+
+    const betaView = await api(callRoot, beta.cookie);
+    await expectStatus(betaView, 200);
+    expect((await json(betaView)).call).toMatchObject({
+      status: "ringing",
+      direction: "incoming",
+      peer: expect.objectContaining({ userId: alpha.account.userId })
+    });
+
+    const callerCannotAnswer = await api(`${callRoot}/answer`, alpha.cookie, { method: "POST" });
+    await expectStatus(callerCannotAnswer, 403);
+
+    const sameRoomBusy = await api(root, beta.cookie, { method: "POST" });
+    await expectStatus(sameRoomBusy, 409);
+
+    const differentRoomBusy = await api(betaGammaRoot, gamma.cookie, { method: "POST" });
+    await expectStatus(differentRoomBusy, 409);
+    expect(await activeCallFor(gamma.account.userId)).toBeNull();
+
+    const answered = await api(`${callRoot}/answer`, beta.cookie, { method: "POST" });
+    await expectStatus(answered, 200);
+    expect((await json(answered)).call.status).toBe("accepted");
+    expect(await activeCallFor(alpha.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
+    expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
+
+    const calleeCannotOffer = await api(`${callRoot}/signals`, beta.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "offer", payload: { type: "offer", sdp: "v=0\r\nmock-offer" } })
+    });
+    await expectStatus(calleeCannotOffer, 403);
+
+    const offerResponse = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "offer", payload: { type: "offer", sdp: "v=0\r\nmock-offer" } })
+    });
+    await expectStatus(offerResponse, 201);
+    const offer = (await json(offerResponse)).signal;
+    expect(offer.kind).toBe("offer");
+    expect(offer.sequence).toEqual(expect.any(Number));
+
+    const signalsForBeta = await api(`${callRoot}/signals?after=0`, beta.cookie);
+    await expectStatus(signalsForBeta, 200);
+    expect((await json(signalsForBeta)).signals).toEqual([
+      expect.objectContaining({ sequence: offer.sequence, senderUserId: alpha.account.userId, kind: "offer" })
+    ]);
+
+    const answerSignalResponse = await api(`${callRoot}/signals`, beta.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "answer", payload: { type: "answer", sdp: "v=0\r\nmock-answer" } })
+    });
+    await expectStatus(answerSignalResponse, 201);
+    const answerSignal = (await json(answerSignalResponse)).signal;
+
+    const iceSignal = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "ice",
+        payload: {
+          candidate: "candidate:1 1 UDP 2122260223 192.0.2.1 50000 typ host",
+          sdpMid: "0",
+          sdpMLineIndex: 0
+        }
+      })
+    });
+    await expectStatus(iceSignal, 201);
+
+    const callerCannotRequestResume = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "resume", payload: { reason: "wrong-side" } })
+    });
+    await expectStatus(callerCannotRequestResume, 403);
+
+    const resumeResponse = await api(`${callRoot}/signals`, beta.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "resume", payload: { reason: "client-reconnect" } })
+    });
+    await expectStatus(resumeResponse, 201);
+    const resume = (await json(resumeResponse)).signal;
+    expect(resume.kind).toBe("resume");
+    expect(resume.sequence).toBeGreaterThan(answerSignal.sequence);
+
+    const signalsForAlpha = await api(`${callRoot}/signals?after=${offer.sequence}`, alpha.cookie);
+    await expectStatus(signalsForAlpha, 200);
+    const alphaSignals = (await json(signalsForAlpha)).signals;
+    expect(alphaSignals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ senderUserId: beta.account.userId, kind: "answer" }),
+      expect.objectContaining({ senderUserId: beta.account.userId, kind: "resume" })
+    ]));
+    expect(alphaSignals.some((signal) => signal.senderUserId === alpha.account.userId)).toBe(false);
+
+    const recoveredView = await api(callRoot, alpha.cookie);
+    await expectStatus(recoveredView, 200);
+    expect((await json(recoveredView)).call).toMatchObject({
+      status: "accepted",
+      direction: "outgoing",
+      peer: expect.objectContaining({ userId: beta.account.userId })
+    });
+
+    const ended = await api(`${callRoot}/end`, beta.cookie, { method: "POST" });
+    await expectStatus(ended, 200);
+    expect((await json(ended)).call).toMatchObject({ status: "ended", endedByUserId: beta.account.userId });
+    expect(await activeCallFor(alpha.account.userId)).toBeNull();
+    expect(await activeCallFor(beta.account.userId)).toBeNull();
+
+    const signalAfterEnd = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({ kind: "ice", payload: { candidate: "candidate:2 1 UDP 1 192.0.2.2 50001 typ host" } })
+    });
+    await expectStatus(signalAfterEnd, 409);
+
+    const gammaAfterRelease = await api(betaGammaRoot, gamma.cookie, { method: "POST" });
+    await expectStatus(gammaAfterRelease, 201);
+    const gammaCall = (await json(gammaAfterRelease)).call;
+    expect(gammaCall).toMatchObject({
+      status: "ringing",
+      peer: expect.objectContaining({ userId: beta.account.userId })
+    });
+    expect(await activeCallFor(gamma.account.userId)).toMatchObject({ callId: gammaCall.callId });
+    expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: gammaCall.callId });
+  });
+});

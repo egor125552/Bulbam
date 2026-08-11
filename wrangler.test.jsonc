@@ -25,6 +25,10 @@
       {
         "name": "REALTIME",
         "class_name": "UserRealtime"
+      },
+      {
+        "name": "CALL_ROOM",
+        "class_name": "CallRoom"
       }
     ]
   },
@@ -32,6 +36,10 @@
     {
       "tag": "realtime-v1",
       "new_sqlite_classes": ["UserRealtime"]
+    },
+    {
+      "tag": "calls-v1",
+      "new_sqlite_classes": ["CallRoom"]
     }
   ]
 }
