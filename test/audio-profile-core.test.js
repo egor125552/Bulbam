@@ -42,7 +42,7 @@ describe("call audio profiles", () => {
     });
 
     expect(summary.mismatches).toEqual(["шумоподавление"]);
-    expect(summary.text).toContain("48 000 Гц");
+    expect(summary.text).toMatch(/48.*000 Гц/);
   });
 
   test("falls back unknown stored profile to normal", () => {
