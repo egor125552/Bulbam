@@ -152,7 +152,7 @@ function restoreGlobals() {
   originalGlobals.clear();
 }
 
-async function flushAsync(rounds = 10) {
+async function flushAsync(rounds = 50) {
   for (let index = 0; index < rounds; index += 1) await Promise.resolve();
 }
 
@@ -237,10 +237,11 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
       throw new Error(`Unexpected request: ${options.method ?? "GET"} ${path}`);
     }
 
-    return new Response(JSON.stringify(payload), {
+    return {
+      ok: status >= 200 && status < 300,
       status,
-      headers: { "content-type": "application/json" }
-    });
+      async json() { return payload; }
+    };
   });
 
   replaceGlobal("window", window);
