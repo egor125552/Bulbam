@@ -151,6 +151,21 @@
             <button id="push-disable" type="button" hidden>Отключить уведомления</button>
           </section>
 
+          <section class="card" aria-labelledby="call-audio-title">
+            <h2 id="call-audio-title">Звук звонков</h2>
+            <label for="audio-profile">Режим микрофона</label>
+            <select id="audio-profile" aria-describedby="audio-profile-description audio-profile-status">
+              <option value="normal">Обычный</option>
+              <option value="clean">Чистый голос</option>
+              <option value="studio">Студийный</option>
+              <option value="music">Музыка</option>
+            </select>
+            <p id="audio-profile-description" class="hint"></p>
+            <p id="audio-profile-status">Выберите режим и проверьте микрофон.</p>
+            <button id="audio-profile-test" type="button">Проверить микрофон</button>
+            <p class="hint">В «Студийном» и «Музыке» лучше использовать наушники: без эхоподавления динамики могут снова попасть в микрофон. Стерео и 48 кГц включаются только если их реально даёт устройство и браузер.</p>
+          </section>
+
           <section class="card" aria-labelledby="sessions-title">
             <h2 id="sessions-title">Устройства и сессии</h2>
             <p>Каждый вход получает отдельную сессию. Любую из них можно завершить.</p>
