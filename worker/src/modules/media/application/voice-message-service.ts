@@ -112,6 +112,7 @@ export class VoiceMessageService {
           sizeBytes: stored.size
         }
       });
+      await this.storage.markPublished(stored.key);
       return { ...result, sizeBytes: stored.size, chunkCount: stored.chunkCount };
     } catch (error) {
       if (error instanceof ApiError && error.code === "client_message_id_conflict") {
