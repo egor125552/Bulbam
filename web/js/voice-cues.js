@@ -21,6 +21,7 @@ export async function playVoiceCue(kind) {
     };
     const pattern = patterns[kind] ?? patterns.error;
     const now = context.currentTime;
+    let finishAt = 0;
     for (const [frequency, offset, duration] of pattern) {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
@@ -31,7 +32,9 @@ export async function playVoiceCue(kind) {
       oscillator.connect(gain).connect(context.destination);
       oscillator.start(now + offset);
       oscillator.stop(now + offset + duration + 0.01);
+      finishAt = Math.max(finishAt, offset + duration + 0.01);
     }
+    await new Promise((resolve) => setTimeout(resolve, Math.ceil(finishAt * 1000) + 20));
   } catch {
     // Sounds are useful feedback, but recording must never depend on Web Audio.
   }
