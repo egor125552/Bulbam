@@ -10,6 +10,7 @@ const controllers = new Map();
 let messageSequence = [];
 let playbackRate = readPlaybackRate();
 let previousAccountId = null;
+let cleanupGeneration = 0;
 
 export function setupVoicePlayer() {
   window.addEventListener("bulbam:account-changed", (event) => {
@@ -24,14 +25,27 @@ export function setVoiceMessageSequence(messages) {
 }
 
 export function renderVoiceMessage(message, mine) {
+  const existing = controllers.get(message.messageId);
+  if (existing) {
+    refreshController(existing, message, mine);
+    return existing.root;
+  }
+
   const voice = message.voice;
   const root = document.createElement("section");
   root.className = "voice-message";
   root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(voice.durationMs)}`);
 
+  // Keep the actual media engine outside the message subtree. Messenger rerenders can
+  // rebuild message cards without destroying a playing HTMLMediaElement on Safari.
   const audio = document.createElement("audio");
   audio.preload = "metadata";
   audio.src = voice.localUrl || voiceUrl(message);
+  audio.hidden = true;
+  audio.setAttribute("aria-hidden", "true");
+  audio.tabIndex = -1;
+  audio.dataset.voiceMessageId = message.messageId;
+  document.body.append(audio);
 
   const actions = document.createElement("div");
   actions.className = "voice-actions";
@@ -61,7 +75,7 @@ export function renderVoiceMessage(message, mine) {
   updateListenStatus(listenStatus, voice.progress, false, mine);
 
   actions.append(play, back, forward, speed);
-  root.append(audio, actions, progress, time, listenStatus);
+  root.append(actions, progress, time, listenStatus);
 
   const controller = {
     message,
@@ -78,9 +92,12 @@ export function renderVoiceMessage(message, mine) {
     lastProgressSentAt: 0,
     heartbeatTimer: null,
     remoteStaleTimer: null,
+    remoteActiveUntil: 0,
     buffering: false,
     objectUrl: null,
-    preparedSource: false
+    preparedSource: false,
+    pendingCleanupGeneration: 0,
+    disposing: false
   };
   controllers.set(message.messageId, controller);
 
@@ -111,16 +128,18 @@ export function renderVoiceMessage(message, mine) {
 
   audio.playbackRate = playbackRate;
   audio.addEventListener("play", () => {
+    if (controller.disposing) return;
     play.textContent = "Пауза";
     startHeartbeat(controller);
-    void prefetchNextVoice(message.messageId);
+    void prefetchNextVoice(controller.message.messageId);
   });
   audio.addEventListener("pause", () => {
     play.textContent = "Воспроизвести";
     stopHeartbeat(controller);
-    void sendProgress(controller, false, false);
+    if (!controller.disposing) void sendProgress(controller, false, false);
   });
   audio.addEventListener("timeupdate", () => {
+    if (controller.disposing) return;
     trackHeardRange(controller);
     updateTime(controller);
   });
@@ -128,15 +147,20 @@ export function renderVoiceMessage(message, mine) {
     controller.lastMediaTimeMs = audio.currentTime * 1000;
   });
   audio.addEventListener("waiting", () => {
+    if (controller.disposing) return;
     controller.buffering = true;
     announce("Буферизация голосового сообщения.");
   });
   audio.addEventListener("playing", () => {
+    if (controller.disposing) return;
     if (controller.buffering) announce("Воспроизведение голосового продолжено.");
     controller.buffering = false;
   });
-  audio.addEventListener("ended", () => void handleEnded(controller));
+  audio.addEventListener("ended", () => {
+    if (!controller.disposing) void handleEnded(controller);
+  });
   audio.addEventListener("error", () => {
+    if (controller.disposing) return;
     stopHeartbeat(controller);
     announce("Не удалось воспроизвести голосовое сообщение.");
   });
@@ -144,15 +168,34 @@ export function renderVoiceMessage(message, mine) {
   return root;
 }
 
+function refreshController(controller, message, mine) {
+  controller.pendingCleanupGeneration = 0;
+  controller.message = message;
+  controller.mine = mine;
+  controller.root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(message.voice.durationMs)}`);
+  controller.progress.max = String(Math.max(0.1, message.voice.durationMs / 1000));
+  controller.speed.textContent = `${formatSpeed(playbackRate)} скорость`;
+  controller.play.textContent = controller.audio.paused ? "Воспроизвести" : "Пауза";
+  controller.heardRanges = mergeRanges([
+    ...controller.heardRanges,
+    ...(message.voice.progress?.heardRanges ?? [])
+  ]);
+  const active = controller.remoteActiveUntil > Date.now();
+  updateListenStatus(controller.listenStatus, message.voice.progress, active, mine);
+  updateTime(controller);
+}
+
 export function applyRemoteVoiceProgress(messageId, progress, active, staleAt) {
   const controller = controllers.get(messageId);
   if (!controller) return;
   controller.message.voice.progress = progress;
+  controller.remoteActiveUntil = active && staleAt ? Number(staleAt) : 0;
   updateListenStatus(controller.listenStatus, progress, active, controller.mine);
   clearTimeout(controller.remoteStaleTimer);
   controller.remoteStaleTimer = null;
   if (active && staleAt) {
     controller.remoteStaleTimer = setTimeout(() => {
+      controller.remoteActiveUntil = 0;
       updateListenStatus(controller.listenStatus, progress, false, controller.mine);
     }, Math.max(0, staleAt - Date.now()));
   }
@@ -176,20 +219,39 @@ export async function restoreVoicePlaybackState(states) {
   for (const state of states) {
     const controller = controllers.get(state.messageId);
     if (!controller) continue;
-    controller.audio.currentTime = state.currentTime;
+    if (Math.abs(controller.audio.currentTime - state.currentTime) > 0.25) {
+      controller.audio.currentTime = state.currentTime;
+    }
     controller.audio.playbackRate = state.playbackRate;
-    if (state.playing) await controller.audio.play().catch(() => undefined);
+    if (state.playing && controller.audio.paused) {
+      await controller.audio.play().catch(() => undefined);
+    }
   }
 }
 
 export function resetVoicePlayers() {
+  const generation = ++cleanupGeneration;
   for (const controller of controllers.values()) {
-    stopHeartbeat(controller);
-    clearTimeout(controller.remoteStaleTimer);
-    controller.remoteStaleTimer = null;
-    if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
+    controller.pendingCleanupGeneration = generation;
   }
-  controllers.clear();
+
+  queueMicrotask(() => {
+    for (const [messageId, controller] of controllers) {
+      if (controller.pendingCleanupGeneration !== generation) continue;
+      disposeController(controller);
+      controllers.delete(messageId);
+    }
+  });
+}
+
+function disposeController(controller) {
+  controller.disposing = true;
+  stopHeartbeat(controller);
+  clearTimeout(controller.remoteStaleTimer);
+  controller.remoteStaleTimer = null;
+  try { controller.audio.pause(); } catch {}
+  controller.audio.remove();
+  if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
 }
 
 async function togglePlayback(controller) {
