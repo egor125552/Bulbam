@@ -136,34 +136,63 @@ async function openVoiceUploadSocket(sender, chat, upload) {
   return { socket, ready: await ready };
 }
 
+function frame(partNumber, bytes) {
+  const value = new Uint8Array(bytes.byteLength + 4);
+  new DataView(value.buffer).setUint32(0, partNumber, false);
+  value.set(bytes, 4);
+  return value.buffer;
+}
+
 async function sendVoicePart(socket, partNumber, bytes) {
-  const frame = new Uint8Array(bytes.byteLength + 4);
-  new DataView(frame.buffer).setUint32(0, partNumber, false);
-  frame.set(bytes, 4);
   const ack = nextJsonMessage(socket, "voice.upload.ack");
-  socket.send(frame.buffer);
+  socket.send(frame(partNumber, bytes));
   const payload = await ack;
   expect(payload.partNumber).toBe(partNumber);
   expect(payload.sizeBytes).toBe(bytes.byteLength);
   return payload;
 }
 
-async function uploadVoice(sender, chat, bytes, durationMs = 42_000) {
-  const start = await api(`/api/v1/chats/${chat.conversationId}/voice/uploads`, sender.cookie, {
+async function expectVoicePartError(socket, partNumber, bytes, code) {
+  const error = nextJsonMessage(socket, "voice.upload.error");
+  socket.send(frame(partNumber, bytes));
+  const payload = await error;
+  expect(payload.partNumber).toBe(partNumber);
+  expect(payload.code).toBe(code);
+  return payload;
+}
+
+async function startVoice(sender, chat) {
+  const response = await api(`/api/v1/chats/${chat.conversationId}/voice/uploads`, sender.cookie, {
     method: "POST",
     body: JSON.stringify({ mimeType: "audio/webm;codecs=opus", bitrateBps: 64_000 })
   });
-  await expectStatus(start, 201);
-  const upload = (await json(start)).upload;
+  await expectStatus(response, 201);
+  const upload = (await json(response)).upload;
   expect(upload.transport).toBe("websocket");
   expect(upload.chunkSizeBytes).toBe(CHUNK_SIZE);
+  expect(upload.state).toBe("uploading");
+  return upload;
+}
 
+async function uploadVoice(sender, chat, bytes, durationMs = 42_000) {
+  const upload = await startVoice(sender, chat);
   const firstBytes = bytes.slice(0, CHUNK_SIZE);
   const secondBytes = bytes.slice(CHUNK_SIZE);
 
   const firstConnection = await openVoiceUploadSocket(sender, chat, upload);
   expect(firstConnection.ready.receivedParts).toEqual([]);
   await sendVoicePart(firstConnection.socket, 1, firstBytes);
+
+  const statusAfterFirst = await api(
+    `/api/v1/chats/${chat.conversationId}/voice/uploads/${upload.sessionId}`,
+    sender.cookie
+  );
+  await expectStatus(statusAfterFirst, 200);
+  expect((await json(statusAfterFirst)).upload).toMatchObject({
+    state: "uploading",
+    receivedParts: [1],
+    sizeBytes: CHUNK_SIZE
+  });
   firstConnection.socket.close(1000, "test reconnect");
 
   const secondConnection = await openVoiceUploadSocket(sender, chat, upload);
@@ -187,7 +216,7 @@ async function uploadVoice(sender, chat, bytes, durationMs = 42_000) {
 }
 
 describe("voice messages foundation", () => {
-  test("persists resumable WebSocket chunks in D1, streams ranges, and respects listening privacy", async () => {
+  test("persists resumable WebSocket chunks in Durable Objects, streams ranges, and respects listening privacy", async () => {
     const inviteA = "BULBAM-VOICE-SMOKE-ALPHA-2026";
     const inviteB = "BULBAM-VOICE-SMOKE-BETA-2026";
     await seedInvite(inviteA, "voice-smoke-alpha-invite");
@@ -200,18 +229,33 @@ describe("voice messages foundation", () => {
     const bytes = new Uint8Array(CHUNK_SIZE + 32);
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
 
-    const startOnly = await api(`/api/v1/chats/${chat.conversationId}/voice/uploads`, alpha.cookie, {
-      method: "POST",
-      body: JSON.stringify({ mimeType: "audio/webm;codecs=opus", bitrateBps: 64_000 })
-    });
-    await expectStatus(startOnly, 201);
-    const foreignUpload = (await json(startOnly)).upload;
+    const foreignUpload = await startVoice(alpha, chat);
     const betaCannotOwnSocket = await api(
       `/api/v1/chats/${chat.conversationId}/voice/uploads/${foreignUpload.sessionId}/socket`,
       beta.cookie
     );
     await expectStatus(betaCannotOwnSocket, 404);
     await api(`/api/v1/chats/${chat.conversationId}/voice/uploads/${foreignUpload.sessionId}`, alpha.cookie, { method: "DELETE" });
+    const deletedStatus = await api(`/api/v1/chats/${chat.conversationId}/voice/uploads/${foreignUpload.sessionId}`, alpha.cookie);
+    await expectStatus(deletedStatus, 404);
+
+    const conflictUpload = await startVoice(alpha, chat);
+    const conflictConnection = await openVoiceUploadSocket(alpha, chat, conflictUpload);
+    const original = new Uint8Array(CHUNK_SIZE);
+    original.fill(7);
+    await sendVoicePart(conflictConnection.socket, 1, original);
+    const changed = original.slice();
+    changed[changed.length - 1] = 8;
+    await expectVoicePartError(conflictConnection.socket, 1, changed, "voice_part_conflict");
+    conflictConnection.socket.close(1000, "conflict test complete");
+    await api(`/api/v1/chats/${chat.conversationId}/voice/uploads/${conflictUpload.sessionId}`, alpha.cookie, { method: "DELETE" });
+
+    const tailUpload = await startVoice(alpha, chat);
+    const tailConnection = await openVoiceUploadSocket(alpha, chat, tailUpload);
+    await sendVoicePart(tailConnection.socket, 1, new Uint8Array([1, 2, 3, 4]));
+    await expectVoicePartError(tailConnection.socket, 2, new Uint8Array(CHUNK_SIZE), "voice_part_after_tail");
+    tailConnection.socket.close(1000, "tail test complete");
+    await api(`/api/v1/chats/${chat.conversationId}/voice/uploads/${tailUpload.sessionId}`, alpha.cookie, { method: "DELETE" });
 
     const uploaded = await uploadVoice(alpha, chat, bytes);
     expect(uploaded.payload.message).toMatchObject({
@@ -227,15 +271,23 @@ describe("voice messages foundation", () => {
       }
     });
 
+    const statusReady = await api(
+      `/api/v1/chats/${chat.conversationId}/voice/uploads/${uploaded.upload.sessionId}`,
+      alpha.cookie
+    );
+    await expectStatus(statusReady, 200);
+    expect((await json(statusReady)).upload).toMatchObject({
+      state: "ready",
+      receivedParts: [1, 2],
+      chunkCount: 2,
+      sizeBytes: bytes.byteLength
+    });
+
     const env = await testEnv();
-    const storedChunks = await env.DB
-      .prepare("SELECT part_number, size_bytes FROM voice_media_chunks WHERE session_id = ? ORDER BY part_number")
-      .bind(uploaded.upload.sessionId)
+    const oldMediaTables = await env.DB
+      .prepare("SELECT name FROM sqlite_master WHERE name IN ('voice_media_objects', 'voice_media_chunks') ORDER BY name")
       .all();
-    expect(storedChunks.results).toEqual([
-      expect.objectContaining({ part_number: 1, size_bytes: CHUNK_SIZE }),
-      expect.objectContaining({ part_number: 2, size_bytes: 32 })
-    ]);
+    expect(oldMediaTables.results).toEqual([]);
 
     const completeAgain = await api(
       `/api/v1/chats/${chat.conversationId}/voice/uploads/${uploaded.upload.sessionId}/complete`,
@@ -264,6 +316,13 @@ describe("voice messages foundation", () => {
     await expectStatus(ranged, 206);
     expect(new Uint8Array(await ranged.arrayBuffer())).toEqual(bytes.slice(rangeStart, rangeEnd + 1));
     expect(ranged.headers.get("content-range")).toBe(`bytes ${rangeStart}-${rangeEnd}/${bytes.byteLength}`);
+
+    const invalidRange = await api(
+      `/api/v1/chats/${chat.conversationId}/messages/${uploaded.payload.message.messageId}/voice/audio`,
+      beta.cookie,
+      { headers: { range: `bytes=${bytes.byteLength + 1}-` } }
+    );
+    await expectStatus(invalidRange, 416);
 
     const firstProgress = await api(
       `/api/v1/chats/${chat.conversationId}/messages/${uploaded.payload.message.messageId}/voice/progress`,
