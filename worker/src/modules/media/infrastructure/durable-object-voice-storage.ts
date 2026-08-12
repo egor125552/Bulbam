@@ -67,6 +67,11 @@ export class DurableObjectVoiceStorage implements VoiceStorage {
     });
   }
 
+  async markPublished(objectKey: string): Promise<void> {
+    const response = await this.request(objectKey, "/internal/published", { method: "POST" });
+    if (!response.ok) await throwResponse(response);
+  }
+
   async abort(sessionId: string, conversationId: string, senderUserId: string): Promise<void> {
     const response = await this.request(sessionId, "/internal/upload", {
       method: "DELETE",
