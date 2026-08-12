@@ -101,7 +101,7 @@ async function storeAndPrepare(upload, sender, chat, bytes) {
 }
 
 describe("voice media publication lifecycle", () => {
-  test("keeps ready media safe across delete races and preserves published media", async () => {
+  test("keeps ready and published media safe across delete and conflicting-complete races", async () => {
     const inviteA = "BULBAM-VOICE-LIFECYCLE-A-2026";
     const inviteB = "BULBAM-VOICE-LIFECYCLE-B-2026";
     await seedInvite(inviteA, "voice-lifecycle-a-invite");
@@ -158,6 +158,23 @@ describe("voice media publication lifecycle", () => {
     await expectStatus(publishResponse, 201);
     const message = (await json(publishResponse)).message;
     expect(message.messageId).toBe(published.sessionId);
+
+    // A competing finalization with a different client id must fail without deleting
+    // the object already referenced by the successfully published D1 message.
+    const conflictingComplete = await api(
+      `/api/v1/chats/${chat.conversationId}/voice/uploads/${published.sessionId}/complete`,
+      alpha.cookie,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          clientMessageId: `voice_conflict_${crypto.randomUUID().replaceAll("-", "")}`,
+          durationMs: 2_000,
+          chunkCount: 1,
+          sizeBytes: bytes.byteLength
+        })
+      }
+    );
+    await expectStatus(conflictingComplete, 409);
 
     await expectStatus(await api(
       `/api/v1/chats/${chat.conversationId}/voice/uploads/${published.sessionId}`,
