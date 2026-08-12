@@ -281,10 +281,66 @@ main {
 
 .composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.65rem;
   padding: 0.85rem;
   border-top: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
+}
+
+.voice-draft-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.7rem;
+  border: 1px dashed color-mix(in srgb, CanvasText 45%, transparent);
+  border-radius: 0.7rem;
+}
+
+.voice-draft-actions,
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+#voice-record-button[aria-pressed="true"] {
+  border-style: dashed;
+  border-width: 3px;
+}
+
+.voice-message {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.voice-message audio {
+  display: none;
+}
+
+.voice-progress {
+  width: 100%;
+}
+
+.voice-time,
+.voice-listen-status {
+  display: block;
+  font-size: 0.82rem;
+}
+
+.voice-listen-status:empty {
+  display: none;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.switch-row input[type="checkbox"] {
+  width: auto;
+  min-height: 1.5rem;
 }
 
 textarea {
@@ -356,7 +412,8 @@ label {
   font-weight: 700;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 2.75rem;
   padding: 0.65rem 0.75rem;
@@ -382,6 +439,7 @@ button {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 h2:focus-visible {
@@ -473,6 +531,10 @@ button:disabled {
 
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .voice-draft-panel {
+    grid-column: 1;
   }
 
   .message,

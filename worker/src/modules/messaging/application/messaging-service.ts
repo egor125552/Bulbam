@@ -1,6 +1,6 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
-import type { DirectConversation, MessagingActor, StoredMessage } from "../domain/models";
+import type { DirectConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
 import {
   validateConversationId,
   validateDeliveryReceiptInput,
@@ -10,6 +10,12 @@ import {
 import type { MessagingRepository } from "../ports/messaging-repository";
 import type { RealtimePublisher } from "../ports/realtime-publisher";
 import type { DirectoryUser, UserDirectory } from "../ports/user-directory";
+
+export interface PreparedVoiceMessage {
+  messageId: string;
+  clientMessageId: string;
+  voice: Omit<VoiceAttachment, "progress">;
+}
 
 export class MessagingService {
   constructor(
@@ -49,7 +55,7 @@ export class MessagingService {
   async listMessages(actor: MessagingActor, rawConversationId: string) {
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
-    return this.repository.listMessages(conversationId, 200);
+    return this.repository.listMessages(conversationId, 200, actor.userId);
   }
 
   async sendMessage(
@@ -65,48 +71,34 @@ export class MessagingService {
       conversationId,
       senderUserId: actor.userId,
       clientMessageId: input.clientMessageId,
+      kind: "text",
       text: input.text,
+      voice: null,
       createdAt: Date.now(),
       deliveredAt: null
     };
+    return this.persistAndPublish(actor, conversation, message);
+  }
 
-    const result = await this.repository.insertMessage(message);
-    if (result.status === "conflict") {
-      conflict(
-        "client_message_id_conflict",
-        "Этот clientMessageId уже использован для другого сообщения."
-      );
-    }
-
-    if (result.status === "created") {
-      await this.realtime.publishToUsers(participants(conversation), {
-        type: "message.created",
-        conversationId,
-        message: result.message
-      });
-
-      if (this.notifications) {
-        const recipientUserId = peerUserId(conversation, actor.userId);
-        const sender = await this.users.findUser(actor.userId);
-        const pushTask = this.notifications.notifyNewMessage({
-          recipientUserId,
-          senderDisplayName: sender?.displayName ?? "Бульбам",
-          conversationId,
-          messageId: result.message.messageId,
-          text: result.message.text
-        }).catch((error) => {
-          console.warn("[Push] notification task failed", error);
-        });
-        if (this.defer) this.defer(pushTask);
-        else await pushTask;
-      }
-    }
-
-    return {
-      message: result.message,
-      status: "sent" as const,
-      duplicate: result.status === "duplicate"
+  async sendVoiceMessage(
+    actor: MessagingActor,
+    rawConversationId: string,
+    prepared: PreparedVoiceMessage
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const message: StoredMessage = {
+      messageId: prepared.messageId,
+      conversationId,
+      senderUserId: actor.userId,
+      clientMessageId: prepared.clientMessageId,
+      kind: "voice",
+      text: "Голосовое сообщение",
+      voice: { ...prepared.voice, progress: null },
+      createdAt: Date.now(),
+      deliveredAt: null
     };
+    return this.persistAndPublish(actor, conversation, message);
   }
 
   async markDelivered(
@@ -161,6 +153,50 @@ export class MessagingService {
 
   async cleanupUsers(userIds: string[]): Promise<void> {
     await this.repository.deleteDataForUsers(userIds);
+  }
+
+  private async persistAndPublish(
+    actor: MessagingActor,
+    conversation: DirectConversation,
+    message: StoredMessage
+  ) {
+    const result = await this.repository.insertMessage(message);
+    if (result.status === "conflict") {
+      conflict(
+        "client_message_id_conflict",
+        "Этот clientMessageId уже использован для другого сообщения."
+      );
+    }
+
+    if (result.status === "created") {
+      await this.realtime.publishToUsers(participants(conversation), {
+        type: "message.created",
+        conversationId: conversation.conversationId,
+        message: result.message
+      });
+
+      if (this.notifications) {
+        const recipientUserId = peerUserId(conversation, actor.userId);
+        const sender = await this.users.findUser(actor.userId);
+        const pushTask = this.notifications.notifyNewMessage({
+          recipientUserId,
+          senderDisplayName: sender?.displayName ?? "Бульбам",
+          conversationId: conversation.conversationId,
+          messageId: result.message.messageId,
+          text: result.message.text
+        }).catch((error) => {
+          console.warn("[Push] notification task failed", error);
+        });
+        if (this.defer) this.defer(pushTask);
+        else await pushTask;
+      }
+    }
+
+    return {
+      message: result.message,
+      status: "sent" as const,
+      duplicate: result.status === "duplicate"
+    };
   }
 
   private async requireConversation(conversationId: string, userId: string): Promise<DirectConversation> {

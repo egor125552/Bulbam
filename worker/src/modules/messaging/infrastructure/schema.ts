@@ -42,6 +42,39 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_message_receipts_recipient ON message_receipts(recipient_user_id, delivered_at)",
       "CREATE INDEX IF NOT EXISTS idx_message_receipts_message ON message_receipts(message_id)"
     ]
+  },
+  {
+    version: 3,
+    statements: [
+      "ALTER TABLE messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text' CHECK (message_type IN ('text', 'voice'))",
+      `CREATE TABLE IF NOT EXISTS voice_message_attachments (
+        message_id TEXT PRIMARY KEY,
+        object_key TEXT NOT NULL UNIQUE,
+        duration_ms INTEGER NOT NULL,
+        mime_type TEXT NOT NULL,
+        bitrate_bps INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS voice_listen_receipts (
+        message_id TEXT NOT NULL,
+        listener_user_id TEXT NOT NULL,
+        listened_ms INTEGER NOT NULL DEFAULT 0,
+        resume_ms INTEGER NOT NULL DEFAULT 0,
+        heard_ranges TEXT NOT NULL DEFAULT '[]',
+        completed_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (message_id, listener_user_id),
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS voice_privacy_settings (
+        user_id TEXT PRIMARY KEY,
+        share_progress INTEGER NOT NULL DEFAULT 1 CHECK (share_progress IN (0, 1)),
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_voice_listen_listener ON voice_listen_receipts(listener_user_id, updated_at)",
+      "CREATE INDEX IF NOT EXISTS idx_voice_attachments_object ON voice_message_attachments(object_key)"
+    ]
   }
 ] as const;
 

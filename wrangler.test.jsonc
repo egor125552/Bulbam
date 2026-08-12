@@ -20,6 +20,12 @@
       "preview_database_id": "bulbam-test"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "VOICE_MEDIA",
+      "bucket_name": "bulbam-voice-media-test"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
