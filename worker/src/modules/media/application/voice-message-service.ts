@@ -42,15 +42,16 @@ export class VoiceMessageService {
       input.mimeType,
       input.bitrateBps
     );
-    return {
-      sessionId,
-      messageId: sessionId,
-      transport: "websocket" as const,
-      chunkSizeBytes: VOICE_CHUNK_SIZE_BYTES,
-      receivedParts: session.receivedParts,
-      mimeType: session.mimeType,
-      bitrateBps: session.bitrateBps
-    };
+    return uploadView(session);
+  }
+
+  async getUploadStatus(actor: MessagingActor, rawConversationId: string, rawSessionId: string) {
+    const conversationId = validateConversationId(rawConversationId);
+    await this.requireConversation(conversationId, actor.userId);
+    const sessionId = validateUploadSessionId(rawSessionId);
+    const session = await this.storage.inspect(sessionId, conversationId, actor.userId);
+    if (!session) notFound("voice_upload_not_found", "Сессия голосового сообщения не найдена.");
+    return uploadView(session);
   }
 
   async openUploadSocket(
@@ -197,4 +198,27 @@ export class VoiceMessageService {
     const conversation = await this.repository.findConversationForUser(conversationId, userId);
     if (!conversation) notFound("chat_not_found", "Диалог не найден.");
   }
+}
+
+function uploadView(session: {
+  sessionId: string;
+  state: "uploading" | "ready";
+  receivedParts: number[];
+  mimeType: string;
+  bitrateBps: number;
+  sizeBytes: number;
+  chunkCount: number;
+}) {
+  return {
+    sessionId: session.sessionId,
+    messageId: session.sessionId,
+    transport: "websocket" as const,
+    chunkSizeBytes: VOICE_CHUNK_SIZE_BYTES,
+    receivedParts: session.receivedParts,
+    mimeType: session.mimeType,
+    bitrateBps: session.bitrateBps,
+    state: session.state,
+    sizeBytes: session.sizeBytes,
+    chunkCount: session.chunkCount
+  };
 }
