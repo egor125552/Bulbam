@@ -7,7 +7,6 @@ export function setupMessageScroll() {
   let lastScrollTop = list.scrollTop;
   let stickToBottom = isNearBottom(list);
   let mutationPending = false;
-  let frameId = 0;
   let seenPendingIds = new Set();
 
   const rememberPosition = () => {
@@ -19,8 +18,6 @@ export function setupMessageScroll() {
   list.addEventListener("scroll", rememberPosition, { passive: true });
 
   window.addEventListener("bulbam:chat-changed", () => {
-    cancelAnimationFrame(frameId);
-    frameId = 0;
     mutationPending = false;
     lastScrollTop = 0;
     stickToBottom = true;
@@ -37,20 +34,16 @@ export function setupMessageScroll() {
     const hasNewOwnPendingMessage = [...currentPendingIds].some((messageId) => !seenPendingIds.has(messageId));
     seenPendingIds = currentPendingIds;
 
-    cancelAnimationFrame(frameId);
-    frameId = requestAnimationFrame(() => {
-      const target = chooseScrollTop({
-        previousScrollTop: lastScrollTop,
-        clientHeight: list.clientHeight,
-        scrollHeight: list.scrollHeight,
-        stickToBottom: stickToBottom || hasNewOwnPendingMessage
-      });
-      list.scrollTop = target;
-      lastScrollTop = list.scrollTop;
-      stickToBottom = isNearBottom(list);
-      mutationPending = false;
-      frameId = 0;
+    const target = chooseScrollTop({
+      previousScrollTop: lastScrollTop,
+      clientHeight: list.clientHeight,
+      scrollHeight: list.scrollHeight,
+      stickToBottom: stickToBottom || hasNewOwnPendingMessage
     });
+    list.scrollTop = target;
+    lastScrollTop = list.scrollTop;
+    stickToBottom = isNearBottom(list);
+    mutationPending = false;
   });
 
   observer.observe(list, { childList: true });
