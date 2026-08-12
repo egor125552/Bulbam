@@ -5,14 +5,14 @@ import {
   getSelectedChat,
   refreshChatsAfterExternalMessage
 } from "./messenger.js";
-import { playVoiceCue } from "./voice-cues.js";
+import { playVoiceCue, prepareVoiceCues } from "./voice-cues.js";
 import {
   appendVoiceChunk,
   createVoiceDraft,
   deleteVoiceDraft,
   findRecoverableVoiceDraft,
-  getVoiceChunks,
   getVoiceDraft,
+  getVoicePartBlob,
   updateVoiceDraft
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
@@ -26,10 +26,13 @@ let draftPanel = null;
 let draftStatus = null;
 let draftSendButton = null;
 let draftDeleteButton = null;
+let recordingStatus = null;
+let recordingTimer = null;
 let current = null;
 let recoverableDraft = null;
 let optionTimer = null;
 let optionBlocked = false;
+let optionHeld = false;
 
 export function setupVoiceRecorder() {
   recordButton = document.querySelector("#voice-record-button");
@@ -37,7 +40,11 @@ export function setupVoiceRecorder() {
   draftStatus = document.querySelector("#voice-draft-status");
   draftSendButton = document.querySelector("#voice-draft-send");
   draftDeleteButton = document.querySelector("#voice-draft-delete");
-  recordButton?.addEventListener("click", () => void toggleButtonRecording());
+  recordingStatus = document.querySelector("#voice-recording-status");
+  recordButton?.addEventListener("click", () => {
+    void prepareVoiceCues();
+    void toggleButtonRecording();
+  });
   draftSendButton?.addEventListener("click", () => void sendRecoverableDraft());
   draftDeleteButton?.addEventListener("click", () => void deleteRecoverableDraft());
 
@@ -48,6 +55,7 @@ export function setupVoiceRecorder() {
   document.addEventListener("keydown", handleOptionKeyDown, true);
   document.addEventListener("keyup", handleOptionKeyUp, true);
   window.addEventListener("blur", () => {
+    optionHeld = false;
     clearOptionTimer();
     if (current?.trigger === "option") void interruptRecording("Окно потеряло фокус во время записи.");
   });
@@ -95,6 +103,10 @@ async function startRecording(trigger) {
       }
     });
     await enforceRawCapture(stream);
+    if (trigger === "option" && (!optionHeld || optionBlocked)) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
   } catch (error) {
     announce(`Не удалось включить микрофон без обработки: ${error.message}`);
     await playVoiceCue("error");
@@ -166,7 +178,7 @@ async function startRecording(trigger) {
 
   recorder.start(1000);
   void ensureUploadSession(state);
-  setRecordingUi(true);
+  setRecordingUi(true, draft.startedAt);
   await playVoiceCue("start");
   announce(trigger === "option"
     ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
@@ -261,18 +273,24 @@ async function sendDraftById(id) {
   const draft = await getVoiceDraft(id);
   if (!draft) return;
   try {
-    const chunks = await getVoiceChunks(id);
-    const audio = new Blob(chunks, { type: draft.mimeType });
-    if (!audio.size) throw new Error("запись пустая");
+    const totalBytes = Number(draft.totalBytes ?? 0);
+    if (!totalBytes) throw new Error("запись пустая");
 
     const upload = await ensureDraftUpload(draft);
     const parts = [...(upload.parts ?? [])];
     const partSize = upload.partSizeBytes || LOCAL_PART_SIZE;
-    const partCount = Math.ceil(audio.size / partSize);
+    const partCount = Math.ceil(totalBytes / partSize);
     for (let index = 0; index < partCount; index += 1) {
       const partNumber = index + 1;
       if (parts.some((part) => part.partNumber === partNumber)) continue;
-      const body = audio.slice(index * partSize, Math.min(audio.size, (index + 1) * partSize));
+      const startByte = index * partSize;
+      const body = await getVoicePartBlob(
+        id,
+        startByte,
+        Math.min(partSize, totalBytes - startByte),
+        draft.mimeType
+      );
+      if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
       const part = await uploadPart(draft.conversationId, upload, partNumber, body);
       parts.push(part);
       parts.sort((left, right) => left.partNumber - right.partNumber);
@@ -342,13 +360,17 @@ async function uploadReadyFullParts(state) {
   } catch {
     return;
   }
-  const chunks = await getVoiceChunks(state.draft.id);
-  const audio = new Blob(chunks, { type: state.draft.mimeType });
-  const fullPartCount = Math.floor(audio.size / upload.partSizeBytes);
+  const fullPartCount = Math.floor(state.draft.totalBytes / upload.partSizeBytes);
   for (let partNumber = 1; partNumber <= fullPartCount; partNumber += 1) {
     if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
     const start = (partNumber - 1) * upload.partSizeBytes;
-    const body = audio.slice(start, start + upload.partSizeBytes);
+    const body = await getVoicePartBlob(
+      state.draft.id,
+      start,
+      upload.partSizeBytes,
+      state.draft.mimeType
+    );
+    if (body.size !== upload.partSizeBytes) return;
     const part = await uploadPart(state.draft.conversationId, upload, partNumber, body);
     upload.parts.push(part);
     upload.parts.sort((left, right) => left.partNumber - right.partNumber);
@@ -433,11 +455,24 @@ function hideDraftPanel() {
   if (draftPanel) draftPanel.hidden = true;
 }
 
-function setRecordingUi(recording) {
+function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date.now()) {
   if (!recordButton) return;
   recordButton.textContent = recording ? "Отправить голосовое" : "Записать голосовое";
   recordButton.setAttribute("aria-pressed", String(recording));
+  recordButton.setAttribute("aria-label", recording
+    ? "Остановить и отправить голосовое. Запись идёт."
+    : "Записать голосовое");
   document.body.classList.toggle("voice-recording", recording);
+  clearInterval(recordingTimer);
+  recordingTimer = null;
+  if (!recordingStatus) return;
+  recordingStatus.hidden = !recording;
+  if (!recording) return;
+  const update = () => {
+    recordingStatus.textContent = `Запись ${formatClock(Date.now() - startedAt)}`;
+  };
+  update();
+  recordingTimer = setInterval(update, 1000);
 }
 
 function handleOptionKeyDown(event) {
@@ -447,24 +482,31 @@ function handleOptionKeyDown(event) {
     return;
   }
   if (!isMacLike()) return;
-  if (event.key === "Control" || event.key === "Meta" || event.key === "Shift") {
-    optionBlocked = true;
-    clearOptionTimer();
-    if (current?.trigger === "option") void cancelRecording();
+
+  if (event.key !== "Alt") {
+    if (event.altKey || optionTimer || current?.trigger === "option") {
+      optionBlocked = true;
+      clearOptionTimer();
+      if (current?.trigger === "option") void cancelRecording();
+    }
     return;
   }
-  if (event.key !== "Alt" || event.repeat || current || isEditable(event.target)) return;
+
+  optionHeld = true;
+  void prepareVoiceCues();
+  if (event.repeat || current || isEditable(event.target)) return;
   optionBlocked = event.ctrlKey || event.metaKey || event.shiftKey;
   if (optionBlocked || !getSelectedChat()) return;
   clearOptionTimer();
   optionTimer = setTimeout(() => {
     optionTimer = null;
-    if (!optionBlocked && !current) void startRecording("option");
+    if (!optionBlocked && optionHeld && !current) void startRecording("option");
   }, OPTION_HOLD_DELAY_MS);
 }
 
 function handleOptionKeyUp(event) {
   if (!isMacLike() || event.key !== "Alt") return;
+  optionHeld = false;
   clearOptionTimer();
   const wasBlocked = optionBlocked;
   optionBlocked = false;
@@ -510,6 +552,13 @@ function formatDuration(ms) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes ? `${minutes} мин ${seconds} с` : `${seconds} с`;
+}
+
+function formatClock(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 async function safeJson(response) {
