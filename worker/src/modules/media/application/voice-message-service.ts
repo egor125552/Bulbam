@@ -20,7 +20,7 @@ export class VoiceMessageService {
     private readonly messaging: MessagingService,
     private readonly storage: VoiceStorage,
     private readonly realtime: RealtimePublisher,
-    private readonly uploadRooms: DurableObjectNamespace
+    private readonly uploadRooms?: DurableObjectNamespace
   ) {}
 
   initialize(): Promise<void> {
@@ -28,6 +28,9 @@ export class VoiceMessageService {
   }
 
   async startUpload(actor: MessagingActor, rawConversationId: string, body: Record<string, unknown>) {
+    if (!this.uploadRooms) {
+      throw new ApiError(503, "voice_upload_transport_missing", "WebSocket-канал голосовых сообщений не подключён.");
+    }
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
     const input = validateVoiceStart(body);
@@ -56,6 +59,9 @@ export class VoiceMessageService {
     rawSessionId: string,
     request: Request
   ): Promise<Response> {
+    if (!this.uploadRooms) {
+      throw new ApiError(503, "voice_upload_transport_missing", "WebSocket-канал голосовых сообщений не подключён.");
+    }
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
     const sessionId = validateUploadSessionId(rawSessionId);
