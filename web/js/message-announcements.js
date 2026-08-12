@@ -1,4 +1,5 @@
 import { observeApiResponses } from "./api.js";
+import { findNewIncomingMessages } from "./message-announcement-core.js";
 import { announce, getCurrentAccount } from "./ui.js";
 
 const MESSAGES_PATH = /^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages$/i;
@@ -66,16 +67,4 @@ function rememberVisibleMessageIds() {
     const messageId = item.getAttribute("data-message-id");
     if (messageId && !messageId.startsWith("pending_")) known.add(messageId);
   }
-}
-
-export function findNewIncomingMessages(knownIds, serverMessages, accountId) {
-  const known = knownIds instanceof Set ? knownIds : new Set(knownIds ?? []);
-  return (serverMessages ?? []).filter((message) =>
-    Boolean(
-      message?.messageId &&
-      !known.has(message.messageId) &&
-      message.senderUserId &&
-      message.senderUserId !== accountId
-    )
-  );
 }
