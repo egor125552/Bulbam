@@ -1,78 +1,76 @@
 import { ApiError, notFound } from "../../../core/errors";
+import type { DurableObjectNamespace } from "../../../platform/cloudflare";
 import type { MessagingService } from "../../messaging/application/messaging-service";
 import type { MessagingActor } from "../../messaging/domain/models";
 import { validateConversationId } from "../../messaging/domain/validation";
 import type { MessagingRepository } from "../../messaging/ports/messaging-repository";
 import type { RealtimePublisher } from "../../messaging/ports/realtime-publisher";
 import {
-  validatePartNumber,
-  validateUploadId,
   validateUploadSessionId,
   validateVoiceComplete,
   validateVoiceProgress,
   validateVoiceShareSetting,
   validateVoiceStart
 } from "../domain/validation";
-import type { VoiceStorage } from "../ports/voice-storage";
-
-export const VOICE_PART_SIZE_BYTES = 5 * 1024 * 1024;
-const MAX_PART_REQUEST_BYTES = VOICE_PART_SIZE_BYTES;
+import { VOICE_CHUNK_SIZE_BYTES, type VoiceStorage } from "../ports/voice-storage";
 
 export class VoiceMessageService {
   constructor(
     private readonly repository: MessagingRepository,
     private readonly messaging: MessagingService,
     private readonly storage: VoiceStorage,
-    private readonly realtime: RealtimePublisher
+    private readonly realtime: RealtimePublisher,
+    private readonly uploadRooms: DurableObjectNamespace
   ) {}
+
+  initialize(): Promise<void> {
+    return this.storage.initialize();
+  }
 
   async startUpload(actor: MessagingActor, rawConversationId: string, body: Record<string, unknown>) {
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
     const input = validateVoiceStart(body);
     const sessionId = crypto.randomUUID();
-    const objectKey = objectKeyFor(actor.userId, conversationId, sessionId);
-    const upload = await this.storage.create(objectKey, input.mimeType, input.bitrateBps);
+    const session = await this.storage.create(
+      sessionId,
+      conversationId,
+      actor.userId,
+      input.mimeType,
+      input.bitrateBps
+    );
     return {
       sessionId,
       messageId: sessionId,
-      uploadId: upload.uploadId,
-      partSizeBytes: VOICE_PART_SIZE_BYTES,
-      mimeType: input.mimeType,
-      bitrateBps: input.bitrateBps
+      transport: "websocket" as const,
+      chunkSizeBytes: VOICE_CHUNK_SIZE_BYTES,
+      receivedParts: session.receivedParts,
+      mimeType: session.mimeType,
+      bitrateBps: session.bitrateBps
     };
   }
 
-  async uploadPart(
+  async openUploadSocket(
     actor: MessagingActor,
     rawConversationId: string,
     rawSessionId: string,
-    rawPartNumber: string,
-    rawUploadId: unknown,
     request: Request
-  ) {
+  ): Promise<Response> {
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
     const sessionId = validateUploadSessionId(rawSessionId);
-    const partNumber = validatePartNumber(rawPartNumber);
-    const uploadId = validateUploadId(rawUploadId);
-    if (!request.body) throw new ApiError(400, "empty_voice_part", "Часть голосового сообщения пустая.");
-
-    const contentLength = Number(request.headers.get("content-length") ?? "0");
-    if (Number.isFinite(contentLength) && contentLength > MAX_PART_REQUEST_BYTES) {
-      throw new ApiError(413, "voice_part_too_large", "Часть голосового сообщения слишком большая.");
+    const session = await this.storage.inspect(sessionId, conversationId, actor.userId);
+    if (!session) notFound("voice_upload_not_found", "Сессия голосового сообщения не найдена.");
+    if (session.state !== "uploading") {
+      throw new ApiError(409, "voice_upload_completed", "Голосовое сообщение уже завершено.");
     }
 
-    // R2 multipart requires a body whose length is known. Keep only one bounded
-    // part in Worker memory; the complete recording is never buffered here.
-    const body = await request.arrayBuffer();
-    if (!body.byteLength) throw new ApiError(400, "empty_voice_part", "Часть голосового сообщения пустая.");
-    if (body.byteLength > MAX_PART_REQUEST_BYTES) {
-      throw new ApiError(413, "voice_part_too_large", "Часть голосового сообщения слишком большая.");
-    }
-
-    const objectKey = objectKeyFor(actor.userId, conversationId, sessionId);
-    return this.storage.uploadPart(objectKey, uploadId, partNumber, body);
+    const headers = new Headers(request.headers);
+    headers.set("x-bulbam-user-id", actor.userId);
+    headers.set("x-bulbam-conversation-id", conversationId);
+    headers.set("x-bulbam-voice-session-id", sessionId);
+    const trustedRequest = new Request(request, { headers });
+    return this.uploadRooms.getByName(sessionId).fetch(trustedRequest);
   }
 
   async completeUpload(
@@ -85,31 +83,30 @@ export class VoiceMessageService {
     await this.requireConversation(conversationId, actor.userId);
     const sessionId = validateUploadSessionId(rawSessionId);
     const input = validateVoiceComplete(body);
-    const objectKey = objectKeyFor(actor.userId, conversationId, sessionId);
-    const stored = await this.storage.complete(objectKey, input.uploadId, input.parts);
-    const storedMimeType = stored.customMetadata.bulbamVoiceMimeType;
-    const storedBitrateBps = Number(stored.customMetadata.bulbamVoiceBitrateBps);
-    if (storedMimeType !== input.mimeType || storedBitrateBps !== input.bitrateBps) {
-      await this.storage.delete(objectKey).catch(() => undefined);
-      throw new ApiError(409, "voice_upload_metadata_mismatch", "Параметры завершённой записи не совпадают с началом загрузки.");
-    }
+    const stored = await this.storage.complete(
+      sessionId,
+      conversationId,
+      actor.userId,
+      input.chunkCount,
+      input.sizeBytes
+    );
 
     try {
       const result = await this.messaging.sendVoiceMessage(actor, conversationId, {
         messageId: sessionId,
         clientMessageId: input.clientMessageId,
         voice: {
-          objectKey,
+          objectKey: stored.key,
           durationMs: input.durationMs,
-          mimeType: storedMimeType,
-          bitrateBps: storedBitrateBps,
+          mimeType: stored.mimeType,
+          bitrateBps: stored.bitrateBps,
           sizeBytes: stored.size
         }
       });
-      return { ...result, sizeBytes: stored.size };
+      return { ...result, sizeBytes: stored.size, chunkCount: stored.chunkCount };
     } catch (error) {
       if (error instanceof ApiError && error.code === "client_message_id_conflict") {
-        await this.storage.delete(objectKey).catch(() => undefined);
+        await this.storage.delete(stored.key).catch(() => undefined);
       }
       throw error;
     }
@@ -118,14 +115,12 @@ export class VoiceMessageService {
   async abortUpload(
     actor: MessagingActor,
     rawConversationId: string,
-    rawSessionId: string,
-    rawUploadId: unknown
+    rawSessionId: string
   ): Promise<void> {
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
     const sessionId = validateUploadSessionId(rawSessionId);
-    const uploadId = validateUploadId(rawUploadId);
-    await this.storage.abort(objectKeyFor(actor.userId, conversationId, sessionId), uploadId);
+    await this.storage.abort(sessionId, conversationId, actor.userId);
   }
 
   async streamVoice(
@@ -142,10 +137,8 @@ export class VoiceMessageService {
     }
 
     const object = await this.storage.read(message.voice.objectKey, requestHeaders);
-    if (!object) notFound("voice_media_not_found", "Аудиофайл голосового сообщения не найден.");
-    const partial = requestHeaders.has("range") && object.headers.has("content-range");
-    object.headers.delete("x-bulbam-range-status");
-    return new Response(object.body, { status: partial ? 206 : 200, headers: object.headers });
+    if (!object) notFound("voice_media_not_found", "Аудиоданные голосового сообщения не найдены.");
+    return new Response(object.body, { status: object.status, headers: object.headers });
   }
 
   async updateListening(
@@ -198,8 +191,4 @@ export class VoiceMessageService {
     const conversation = await this.repository.findConversationForUser(conversationId, userId);
     if (!conversation) notFound("chat_not_found", "Диалог не найден.");
   }
-}
-
-function objectKeyFor(userId: string, conversationId: string, sessionId: string): string {
-  return `voice/${userId}/${conversationId}/${sessionId}`;
 }
