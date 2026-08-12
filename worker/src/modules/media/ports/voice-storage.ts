@@ -1,3 +1,5 @@
+export const VOICE_CHUNK_SIZE_BYTES = 256 * 1024;
+
 export interface VoiceUploadSession {
   sessionId: string;
   conversationId: string;
