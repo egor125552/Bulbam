@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@types/web-push": "^3.6.4",
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0",
     "wrangler": "^4.0.0"
