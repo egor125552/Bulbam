@@ -36,6 +36,7 @@ export function renderVoiceMessage(message, mine) {
   const actions = document.createElement("div");
   actions.className = "voice-actions";
   const play = button("Воспроизвести");
+  play.setAttribute("aria-label", "Воспроизвести или поставить голосовое на паузу");
   const back = button("Назад на 15 секунд");
   const forward = button("Вперёд на 15 секунд");
   const speed = button(`${formatSpeed(playbackRate)} скорость`);
@@ -352,7 +353,7 @@ async function cacheVoice(message) {
       if (oldest) await cache.delete(oldest);
     }
   } catch {
-    // Device cache is an optimization; R2 remains the source of truth.
+    // Device cache is an optimization; server-side voice media remains the source of truth.
   }
 }
 
