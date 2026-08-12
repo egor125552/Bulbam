@@ -267,6 +267,7 @@ function renderConversation() {
 
 function renderMessages({ preserveVoicePlayback = false } = {}) {
   const playbackState = preserveVoicePlayback ? captureVoicePlaybackState() : [];
+  const focusState = preserveVoicePlayback ? captureMessageFocus() : null;
   resetVoicePlayers();
   elements.messageList.replaceChildren();
   if (!selectedChat) return;
@@ -328,6 +329,7 @@ function renderMessages({ preserveVoicePlayback = false } = {}) {
   setVoiceMessageSequence(messages);
   elements.messageList.lastElementChild?.scrollIntoView({ block: "nearest" });
   if (playbackState.length) void restoreVoicePlaybackState(playbackState);
+  if (focusState) restoreMessageFocus(focusState);
 }
 
 async function sendCurrentMessage(event) {
@@ -540,6 +542,36 @@ function stopPolling() {
 async function refreshVisibleState() {
   await loadChats({ quiet: true });
   await loadMessages({ quiet: true });
+}
+
+function captureMessageFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const item = active.closest(".message[data-message-id]");
+  if (!item) return null;
+  return {
+    messageId: item.dataset.messageId,
+    tagName: active.tagName,
+    ariaLabel: active.getAttribute("aria-label"),
+    text: active instanceof HTMLButtonElement ? active.textContent : null
+  };
+}
+
+function restoreMessageFocus(state) {
+  if (!state?.messageId) return;
+  const item = [...elements.messageList.querySelectorAll(".message[data-message-id]")]
+    .find((candidate) => candidate.dataset.messageId === state.messageId);
+  if (!item) return;
+  const candidates = item.querySelectorAll("button, input, select, textarea, [tabindex]");
+  for (const candidate of candidates) {
+    if (!(candidate instanceof HTMLElement) || candidate.tagName !== state.tagName) continue;
+    const labelMatches = state.ariaLabel && candidate.getAttribute("aria-label") === state.ariaLabel;
+    const textMatches = state.text && candidate instanceof HTMLButtonElement && candidate.textContent === state.text;
+    if (labelMatches || textMatches) {
+      candidate.focus({ preventScroll: true });
+      return;
+    }
+  }
 }
 
 function oneLine(value) {
