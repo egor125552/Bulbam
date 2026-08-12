@@ -1,6 +1,7 @@
 import { ApiError } from "../../../core/errors";
 import type { DurableObjectState, Env } from "../../../platform/cloudflare";
-import { D1VoiceStorage, VOICE_CHUNK_SIZE_BYTES } from "./d1-voice-storage";
+import { VOICE_CHUNK_SIZE_BYTES } from "../ports/voice-storage";
+import { D1VoiceStorage } from "./d1-voice-storage";
 
 interface WebSocketPairValue {
   0: WebSocket;
