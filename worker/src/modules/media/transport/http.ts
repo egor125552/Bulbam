@@ -51,14 +51,19 @@ export async function handleVoiceHttp(
     return json({ ok: true, ...result }, { status: result.duplicate ? 200 : 201 });
   }
 
-  const abortMatch = url.pathname.match(
+  const uploadMatch = url.pathname.match(
     /^\/api\/v1\/chats\/([0-9a-f-]{36})\/voice\/uploads\/([0-9a-f-]{36})$/i
   );
-  if (abortMatch) {
-    if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);
+  if (uploadMatch) {
     const actor = await authenticate(request);
-    await service.abortUpload(actor, abortMatch[1], abortMatch[2]);
-    return new Response(null, { status: 204 });
+    if (request.method === "GET") {
+      return json({ ok: true, upload: await service.getUploadStatus(actor, uploadMatch[1], uploadMatch[2]) });
+    }
+    if (request.method === "DELETE") {
+      await service.abortUpload(actor, uploadMatch[1], uploadMatch[2]);
+      return new Response(null, { status: 204 });
+    }
+    return methodNotAllowed(["GET", "DELETE"]);
   }
 
   const audioMatch = url.pathname.match(
