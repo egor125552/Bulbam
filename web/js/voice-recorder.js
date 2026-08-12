@@ -294,33 +294,36 @@ async function sendDraftById(id, existingTransport = null) {
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     const partCount = Math.ceil(totalBytes / partSize);
     const parts = [...(upload.parts ?? [])];
-    if (!transport || transport.sessionId !== upload.sessionId) {
-      transport?.close();
-      transport = new VoiceUploadSocket(draft.conversationId, upload.sessionId);
-    }
-    await transport.connect();
-    for (const partNumber of transport.receivedParts) {
-      if (!parts.some((part) => part.partNumber === partNumber)) parts.push({ partNumber });
-    }
-    parts.sort((left, right) => left.partNumber - right.partNumber);
 
-    for (let index = 0; index < partCount; index += 1) {
-      const partNumber = index + 1;
-      if (parts.some((part) => part.partNumber === partNumber)) continue;
-      const startByte = index * partSize;
-      const body = await getVoicePartBlob(
-        id,
-        startByte,
-        Math.min(partSize, totalBytes - startByte),
-        draft.mimeType
-      );
-      if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
-      const ack = await transport.sendPart(partNumber, body);
-      parts.push({ partNumber, sizeBytes: ack.sizeBytes });
+    if (upload.state !== "ready") {
+      if (!transport || transport.sessionId !== upload.sessionId) {
+        transport?.close();
+        transport = new VoiceUploadSocket(draft.conversationId, upload.sessionId);
+      }
+      await transport.connect();
+      for (const partNumber of transport.receivedParts) {
+        if (!parts.some((part) => part.partNumber === partNumber)) parts.push({ partNumber });
+      }
       parts.sort((left, right) => left.partNumber - right.partNumber);
-      upload.parts = parts;
-      draft.upload = upload;
-      await updateVoiceDraft(id, { upload });
+
+      for (let index = 0; index < partCount; index += 1) {
+        const partNumber = index + 1;
+        if (parts.some((part) => part.partNumber === partNumber)) continue;
+        const startByte = index * partSize;
+        const body = await getVoicePartBlob(
+          id,
+          startByte,
+          Math.min(partSize, totalBytes - startByte),
+          draft.mimeType
+        );
+        if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+        const ack = await transport.sendPart(partNumber, body);
+        parts.push({ partNumber, sizeBytes: ack.sizeBytes });
+        parts.sort((left, right) => left.partNumber - right.partNumber);
+        upload.parts = parts;
+        draft.upload = upload;
+        await updateVoiceDraft(id, { upload });
+      }
     }
 
     const result = await api(
@@ -365,7 +368,30 @@ async function ensureUploadSession(state) {
 }
 
 async function ensureDraftUpload(draft) {
-  if (draft.upload?.transport === "websocket") return draft.upload;
+  if (draft.upload?.transport === "websocket") {
+    if (draft.state === "recording") return draft.upload;
+    try {
+      const status = await api(
+        `/api/v1/chats/${draft.conversationId}/voice/uploads/${draft.upload.sessionId}`
+      );
+      const serverUpload = status.upload;
+      const oldParts = new Map((draft.upload.parts ?? []).map((part) => [part.partNumber, part]));
+      const upload = {
+        ...draft.upload,
+        ...serverUpload,
+        transport: "websocket",
+        parts: (serverUpload.receivedParts ?? []).map((partNumber) => oldParts.get(partNumber) ?? { partNumber })
+      };
+      await updateVoiceDraft(draft.id, { upload });
+      draft.upload = upload;
+      return upload;
+    } catch (error) {
+      if (error?.status !== 404 && error?.code !== "voice_upload_not_found") throw error;
+      draft.upload = null;
+      await updateVoiceDraft(draft.id, { upload: null });
+    }
+  }
+
   const result = await api(`/api/v1/chats/${draft.conversationId}/voice/uploads`, {
     method: "POST",
     body: JSON.stringify({ mimeType: draft.mimeType, bitrateBps: draft.bitrateBps })
@@ -425,7 +451,7 @@ async function abortRemoteUpload(draft) {
       { method: "DELETE", credentials: "same-origin" }
     );
   } catch {
-    // Local draft remains the source of truth; a later cleanup pass can remove an abandoned server session.
+    // Local draft remains the source of truth; server cleanup removes abandoned unfinished uploads.
   }
 }
 
