@@ -44,10 +44,12 @@ export class DurableObjectVoiceStorage implements VoiceStorage {
     partNumber: number,
     bytes: Uint8Array
   ): Promise<{ duplicate: boolean; sizeBytes: number }> {
+    const body = new Uint8Array(bytes.byteLength);
+    body.set(bytes);
     return this.json(sessionId, `/internal/chunk?partNumber=${partNumber}`, {
       method: "POST",
       headers: contextHeaders(conversationId, senderUserId, { "content-type": "application/octet-stream" }),
-      body: bytes
+      body: body.buffer
     });
   }
 
