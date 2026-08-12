@@ -12,6 +12,7 @@ import {
   validateVoiceShareSetting,
   validateVoiceStart
 } from "../domain/validation";
+import type { VoiceMediaReferences } from "../ports/voice-media-references";
 import { VOICE_CHUNK_SIZE_BYTES, type VoiceStorage } from "../ports/voice-storage";
 
 export class VoiceMessageService {
@@ -20,7 +21,8 @@ export class VoiceMessageService {
     private readonly messaging: MessagingService,
     private readonly storage: VoiceStorage,
     private readonly realtime: RealtimePublisher,
-    private readonly uploadRooms?: DurableObjectNamespace
+    private readonly uploadRooms?: DurableObjectNamespace,
+    private readonly mediaReferences?: VoiceMediaReferences
   ) {}
 
   initialize(): Promise<void> {
@@ -192,6 +194,14 @@ export class VoiceMessageService {
     const shareListening = validateVoiceShareSetting(body);
     await this.repository.setVoiceListeningShare(actor.userId, shareListening, Date.now());
     return { shareListening };
+  }
+
+  async cleanupUsers(userIds: string[]): Promise<void> {
+    if (this.mediaReferences) {
+      const objectKeys = await this.mediaReferences.listObjectKeysForUsers(userIds);
+      for (const objectKey of objectKeys) await this.storage.delete(objectKey);
+    }
+    await this.messaging.cleanupUsers(userIds);
   }
 
   private async requireConversation(conversationId: string, userId: string): Promise<void> {
