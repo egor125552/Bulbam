@@ -34,11 +34,38 @@ export async function getVoiceDraft(id) {
   return requestDone(db.transaction(DRAFTS).objectStore(DRAFTS).get(id));
 }
 
-export async function getVoiceChunks(recordingId) {
+export async function getVoicePartBlob(recordingId, startByte, length, mimeType) {
   const db = await openDb();
-  const index = db.transaction(CHUNKS).objectStore(CHUNKS).index("recordingId");
-  const chunks = await requestDone(index.getAll(IDBKeyRange.only(recordingId)));
-  return chunks.sort((left, right) => left.sequence - right.sequence).map((entry) => entry.blob);
+  const transaction = db.transaction(CHUNKS, "readonly");
+  const index = transaction.objectStore(CHUNKS).index("recordingId");
+  const request = index.openCursor(IDBKeyRange.only(recordingId));
+  const slices = [];
+  let offset = 0;
+  const endByte = startByte + length;
+
+  await new Promise((resolve, reject) => {
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor || offset >= endByte) {
+        resolve();
+        return;
+      }
+      const entry = cursor.value;
+      const size = Number(entry.size ?? entry.blob?.size ?? 0);
+      const chunkStart = offset;
+      const chunkEnd = offset + size;
+      if (chunkEnd > startByte && chunkStart < endByte && entry.blob) {
+        const sliceStart = Math.max(0, startByte - chunkStart);
+        const sliceEnd = Math.min(size, endByte - chunkStart);
+        if (sliceEnd > sliceStart) slices.push(entry.blob.slice(sliceStart, sliceEnd));
+      }
+      offset = chunkEnd;
+      cursor.continue();
+    };
+  });
+  await transactionDone(transaction);
+  return new Blob(slices, { type: mimeType });
 }
 
 export async function findRecoverableVoiceDraft(accountId, conversationId) {
@@ -51,6 +78,7 @@ export async function findRecoverableVoiceDraft(accountId, conversationId) {
   if (draft?.state === "recording") {
     return updateVoiceDraft(draft.id, {
       state: "interrupted",
+      upload: null,
       interruptionReason: "Запись была прервана системой или закрытием приложения."
     });
   }
