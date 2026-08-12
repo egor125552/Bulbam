@@ -101,7 +101,7 @@ async function storeAndPrepare(upload, sender, chat, bytes) {
 }
 
 describe("voice media publication lifecycle", () => {
-  test("cleans prepared-but-unpublished media while preserving published media", async () => {
+  test("keeps ready media safe across delete races and preserves published media", async () => {
     const inviteA = "BULBAM-VOICE-LIFECYCLE-A-2026";
     const inviteB = "BULBAM-VOICE-LIFECYCLE-B-2026";
     await seedInvite(inviteA, "voice-lifecycle-a-invite");
@@ -117,24 +117,28 @@ describe("voice media publication lifecycle", () => {
     const chat = (await json(chatResponse)).chat;
     const bytes = new Uint8Array([26, 69, 223, 163, 66, 134, 129, 1, 4, 8, 15, 16, 23, 42]);
 
-    const abandoned = await startVoice(alpha, chat);
-    await storeAndPrepare(abandoned, alpha, chat, bytes);
+    const prepared = await startVoice(alpha, chat);
+    await storeAndPrepare(prepared, alpha, chat, bytes);
     const preparedStatus = await api(
-      `/api/v1/chats/${chat.conversationId}/voice/uploads/${abandoned.sessionId}`,
+      `/api/v1/chats/${chat.conversationId}/voice/uploads/${prepared.sessionId}`,
       alpha.cookie
     );
     await expectStatus(preparedStatus, 200);
     expect((await json(preparedStatus)).upload.state).toBe("ready");
 
+    // A ready upload may already have a D1 message while the final published ACK was
+    // lost, so user-side draft deletion must not erase its server bytes immediately.
     await expectStatus(await api(
-      `/api/v1/chats/${chat.conversationId}/voice/uploads/${abandoned.sessionId}`,
+      `/api/v1/chats/${chat.conversationId}/voice/uploads/${prepared.sessionId}`,
       alpha.cookie,
       { method: "DELETE" }
     ), 204);
-    await expectStatus(await api(
-      `/api/v1/chats/${chat.conversationId}/voice/uploads/${abandoned.sessionId}`,
+    const stillPrepared = await api(
+      `/api/v1/chats/${chat.conversationId}/voice/uploads/${prepared.sessionId}`,
       alpha.cookie
-    ), 404);
+    );
+    await expectStatus(stillPrepared, 200);
+    expect((await json(stillPrepared)).upload.state).toBe("ready");
 
     const published = await startVoice(alpha, chat);
     await storeAndPrepare(published, alpha, chat, bytes);
