@@ -116,14 +116,22 @@ export class VoiceMessageService {
       return { ...result, sizeBytes: stored.size, chunkCount: stored.chunkCount };
     } catch (error) {
       if (error instanceof ApiError && error.code === "client_message_id_conflict") {
-        const existing = await this.repository
-          .findMessageForUser(conversationId, sessionId, actor.userId)
-          .catch(() => null);
-        const alreadyReferenced = Boolean(
-          existing?.kind === "voice" && existing.voice?.objectKey === stored.key
-        );
-        if (!alreadyReferenced) {
-          await this.storage.delete(stored.key).catch(() => undefined);
+        try {
+          const existing = await this.repository.findMessageForUser(
+            conversationId,
+            sessionId,
+            actor.userId
+          );
+          const alreadyReferenced = Boolean(
+            existing?.kind === "voice" && existing.voice?.objectKey === stored.key
+          );
+          if (!alreadyReferenced) {
+            await this.storage.delete(stored.key).catch(() => undefined);
+          }
+        } catch (lookupError) {
+          // A failed D1 lookup is not proof that the object is orphaned. Keep the
+          // bytes; the normal ready-media alarm reconciliation can clean a true orphan.
+          console.warn("[Bulbam] voice conflict cleanup deferred", lookupError);
         }
       }
       throw error;
