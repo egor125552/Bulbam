@@ -86,13 +86,19 @@ describe("voice complete conflict cleanup", () => {
   });
 
   test("preserves media when D1 lookup itself fails", async () => {
-    const { service, storage } = serviceWith(async () => {
-      throw new Error("temporary D1 failure");
-    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { service, storage } = serviceWith(async () => {
+        throw new Error("temporary D1 failure");
+      });
 
-    await expect(service.completeUpload(ACTOR, CONVERSATION_ID, SESSION_ID, COMPLETE_BODY))
-      .rejects.toMatchObject({ code: "client_message_id_conflict" });
+      await expect(service.completeUpload(ACTOR, CONVERSATION_ID, SESSION_ID, COMPLETE_BODY))
+        .rejects.toMatchObject({ code: "client_message_id_conflict" });
 
-    expect(storage.delete).not.toHaveBeenCalled();
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
