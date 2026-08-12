@@ -25,6 +25,7 @@ interface HibernatingWebSocket extends WebSocket {
 interface VoiceObjectMeta extends VoiceUploadSession {
   createdAt: number;
   updatedAt: number;
+  publishedAt: number | null;
   tailPartNumber: number | null;
   tailSizeBytes: number | null;
 }
@@ -58,6 +59,10 @@ export class VoiceUploadRoom {
     if (url.pathname === "/internal/complete") {
       if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
       return this.completeUpload(request);
+    }
+    if (url.pathname === "/internal/published") {
+      if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+      return this.markPublished();
     }
     if (url.pathname === "/internal/upload") {
       if (request.method !== "DELETE") return new Response("method not allowed", { status: 405 });
@@ -149,7 +154,7 @@ export class VoiceUploadRoom {
       await this.state.storage.deleteAll();
       return;
     }
-    if (meta.state !== "uploading") {
+    if (meta.publishedAt != null) {
       await this.state.storage.deleteAlarm();
       return;
     }
@@ -189,7 +194,7 @@ export class VoiceUploadRoom {
       ) {
         return jsonError(409, "voice_upload_conflict", "Сессия голосового сообщения уже существует с другими параметрами.");
       }
-      if (existing.state === "uploading") await this.state.storage.setAlarm(existing.updatedAt + ABANDONED_UPLOAD_MS);
+      if (existing.publishedAt == null) await this.state.storage.setAlarm(existing.updatedAt + ABANDONED_UPLOAD_MS);
       return Response.json(publicSession(existing));
     }
 
@@ -206,6 +211,7 @@ export class VoiceUploadRoom {
       chunkCount: 0,
       createdAt: now,
       updatedAt: now,
+      publishedAt: null,
       tailPartNumber: null,
       tailSizeBytes: null
     };
@@ -265,6 +271,7 @@ export class VoiceUploadRoom {
       if (meta.chunkCount !== expectedChunkCount || meta.sizeBytes !== expectedSizeBytes) {
         return jsonError(409, "voice_upload_metadata_mismatch", "Завершённое голосовое имеет другие размеры.");
       }
+      if (meta.publishedAt == null) await this.state.storage.setAlarm(meta.updatedAt + ABANDONED_UPLOAD_MS);
       return Response.json(storedObject(meta));
     }
 
@@ -286,15 +293,34 @@ export class VoiceUploadRoom {
       return jsonError(409, "voice_upload_metadata_mismatch", "Размер голосового сообщения не совпадает с сохранёнными частями.");
     }
 
+    const now = Date.now();
     const ready: VoiceObjectMeta = {
       ...meta,
       state: "ready",
       chunkCount: expectedChunkCount,
-      updatedAt: Date.now()
+      updatedAt: now,
+      publishedAt: null
     };
     await this.state.storage.put(META_KEY, ready);
-    await this.state.storage.deleteAlarm();
+    await this.state.storage.setAlarm(now + ABANDONED_UPLOAD_MS);
     return Response.json(storedObject(ready));
+  }
+
+  private async markPublished(): Promise<Response> {
+    const meta = await this.meta();
+    if (!meta) return jsonError(404, "voice_media_not_found", "Аудиоданные голосового сообщения не найдены.");
+    if (meta.state !== "ready") {
+      return jsonError(409, "voice_media_not_ready", "Голосовое сообщение ещё не готово к публикации.");
+    }
+    if (meta.publishedAt != null) return new Response(null, { status: 204 });
+
+    const published: VoiceObjectMeta = {
+      ...meta,
+      publishedAt: Date.now()
+    };
+    await this.state.storage.put(META_KEY, published);
+    await this.state.storage.deleteAlarm();
+    return new Response(null, { status: 204 });
   }
 
   private async abortUpload(request: Request): Promise<Response> {
@@ -304,7 +330,7 @@ export class VoiceUploadRoom {
     if (!sameContext(meta, context.userId, context.conversationId)) {
       return jsonError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
     }
-    if (meta.state === "ready") return new Response(null, { status: 204 });
+    if (meta.state === "ready" && meta.publishedAt != null) return new Response(null, { status: 204 });
     await this.state.storage.deleteAll();
     return new Response(null, { status: 204 });
   }
@@ -387,6 +413,7 @@ export class VoiceUploadRoom {
       tailSizeBytes
     };
     await this.state.storage.put({ [key]: bytes, [META_KEY]: next });
+    await this.state.storage.setAlarm(next.updatedAt + ABANDONED_UPLOAD_MS);
     return { duplicate: false, sizeBytes: bytes.byteLength };
   }
 
