@@ -8,6 +8,11 @@ export class D1VoiceMediaReferences implements VoiceMediaReferences {
     const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
     if (!uniqueUserIds.length) return [];
 
+    const attachmentTable = await this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'voice_message_attachments' LIMIT 1")
+      .first<{ name: string }>();
+    if (!attachmentTable) return [];
+
     const placeholders = uniqueUserIds.map(() => "?").join(", ");
     const result = await this.db
       .prepare(`
