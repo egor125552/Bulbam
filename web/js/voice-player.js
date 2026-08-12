@@ -68,6 +68,7 @@ export function renderVoiceMessage(message, mine) {
     root,
     audio,
     play,
+    speed,
     progress,
     time,
     listenStatus,
@@ -89,7 +90,9 @@ export function renderVoiceMessage(message, mine) {
     playbackRate = nextSpeed(playbackRate);
     localStorage.setItem(SPEED_KEY, String(playbackRate));
     for (const candidate of controllers.values()) candidate.audio.playbackRate = playbackRate;
-    speed.textContent = `${formatSpeed(playbackRate)} скорость`;
+    for (const candidate of controllers.values()) {
+      candidate.speed.textContent = `${formatSpeed(playbackRate)} скорость`;
+    }
     announce(`Скорость голосовых ${formatSpeed(playbackRate)}.`);
   });
   progress.addEventListener("input", () => {
