@@ -50,6 +50,7 @@ export interface VoiceStorage {
     expectedChunkCount: number,
     expectedSizeBytes: number
   ): Promise<VoiceStoredObject>;
+  markPublished(objectKey: string): Promise<void>;
   abort(sessionId: string, conversationId: string, senderUserId: string): Promise<void>;
   delete(objectKey: string): Promise<void>;
   read(objectKey: string, requestHeaders: Headers): Promise<VoiceReadResult | null>;
