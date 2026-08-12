@@ -26,13 +26,14 @@ export async function updateVoiceDraft(id, patch) {
   return next;
 }
 
-export async function appendVoiceChunk(recordingId, sequence, blob, draftPatch = null) {
+export async function appendVoiceChunk(recordingId, sequence, blob) {
   const db = await openDb();
-  const stores = draftPatch ? [CHUNKS, DRAFTS] : [CHUNKS];
-  const transaction = db.transaction(stores, "readwrite");
+  const transaction = db.transaction([CHUNKS, DRAFTS], "readwrite");
   const chunkStore = transaction.objectStore(CHUNKS);
+  const draftStore = transaction.objectStore(DRAFTS);
 
   try {
+    const existing = await requestDone(chunkStore.get([recordingId, sequence]));
     let startByte = sequence === 0 ? 0 : undefined;
     if (sequence > 0) {
       const previous = await requestDone(chunkStore.get([recordingId, sequence - 1]));
@@ -47,18 +48,27 @@ export async function appendVoiceChunk(recordingId, sequence, blob, draftPatch =
     if (Number.isFinite(startByte)) entry.startByte = startByte;
     await requestDone(chunkStore.put(entry));
 
-    if (draftPatch) {
-      const draftStore = transaction.objectStore(DRAFTS);
-      const current = await requestDone(draftStore.get(recordingId));
-      if (!current) throw new Error("Локальный черновик голосового сообщения не найден.");
-      await requestDone(draftStore.put({ ...current, ...draftPatch, id: recordingId }));
+    const draft = await requestDone(draftStore.get(recordingId));
+    if (draft) {
+      const currentTotal = Number(draft.totalBytes ?? 0);
+      const indexedEnd = Number.isFinite(startByte) ? startByte + blob.size : NaN;
+      const totalBytes = existing
+        ? Math.max(currentTotal, Number.isFinite(indexedEnd) ? indexedEnd : currentTotal)
+        : Number.isFinite(indexedEnd)
+          ? Math.max(currentTotal, indexedEnd)
+          : currentTotal + blob.size;
+      await requestDone(draftStore.put({
+        ...draft,
+        id: recordingId,
+        sequence: Math.max(Number(draft.sequence ?? 0), sequence + 1),
+        totalBytes,
+        lastChunkAt: Date.now()
+      }));
     }
 
     await transactionDone(transaction);
   } catch (error) {
-    if (transaction.readyState !== "done") {
-      try { transaction.abort(); } catch {}
-    }
+    try { transaction.abort(); } catch {}
     throw error;
   }
 }
