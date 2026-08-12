@@ -5,7 +5,7 @@ import { IdentityService } from "./modules/identity/application/identity-service
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
 import { VoiceMessageService } from "./modules/media/application/voice-message-service";
-import { R2VoiceStorage } from "./modules/media/infrastructure/r2-voice-storage";
+import { D1VoiceStorage } from "./modules/media/infrastructure/d1-voice-storage";
 import { handleVoiceHttp } from "./modules/media/transport/http";
 import { MessagingService } from "./modules/messaging/application/messaging-service";
 import { D1MessagingRepository } from "./modules/messaging/infrastructure/d1-messaging-repository";
@@ -17,16 +17,13 @@ import { DurableObjectRealtime } from "./modules/realtime/public";
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
-const VERSION = "0.6.0-voice-foundation";
+const VERSION = "0.6.0-voice-websocket";
 
 function storageBindingMissing(): Response {
   return json({ ok: false, error: { code: "storage_binding_missing", message: "Хранилище D1 не подключено к Worker." } }, { status: 503 });
 }
 function callsBindingMissing(): Response {
   return json({ ok: false, error: { code: "calls_binding_missing", message: "CallRoom Durable Object не подключён к Worker." } }, { status: 503 });
-}
-function voiceMediaBindingMissing(): Response {
-  return json({ ok: false, error: { code: "voice_media_binding_missing", message: "Хранилище R2 для голосовых сообщений не подключено." } }, { status: 503 });
 }
 function turnConfigured(env: Env): boolean {
   return Boolean(
@@ -49,7 +46,10 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
         service: "bulbam-api",
         version: VERSION,
         storage: { binding: env.DB ? "configured" : "missing" },
-        media: { voiceR2: env.VOICE_MEDIA ? "configured" : "missing" },
+        media: {
+          voiceStorage: env.DB ? "d1" : "missing",
+          voiceTransport: env.VOICE_UPLOAD ? "websocket" : "missing"
+        },
         realtime: { binding: env.REALTIME ? "configured" : "missing" },
         push: { configured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT) },
         calls: {
@@ -80,12 +80,14 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
           ctx ? (promise) => ctx.waitUntil(promise) : undefined
         )
       : null;
-    const voice = env.VOICE_MEDIA && messagingRepository && messaging
+    const voiceStorage = env.DB ? new D1VoiceStorage(env.DB) : null;
+    const voice = voiceStorage && messagingRepository && messaging
       ? new VoiceMessageService(
           messagingRepository,
           messaging,
-          new R2VoiceStorage(env.VOICE_MEDIA),
-          realtime
+          voiceStorage,
+          realtime,
+          env.VOICE_UPLOAD
         )
       : null;
     const calls = env.CALL_ROOM && messagingRepository && directory
@@ -101,12 +103,13 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
 
     if (url.pathname === "/api/ready") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
-      if (!identityRepository || !messagingRepository || !pushRepository) return storageBindingMissing();
+      if (!identityRepository || !messagingRepository || !pushRepository || !voiceStorage) return storageBindingMissing();
       if (!env.CALL_ROOM) return callsBindingMissing();
       try {
         await identityRepository.initialize();
         await messagingRepository.initialize();
         await pushRepository.initialize();
+        await voiceStorage.initialize();
       } catch (error) {
         console.error("[Bulbam] D1 initialization failed", error);
         return json({ ok: false, error: { code: "storage_initialization_failed", message: "Хранилище D1 подключено, но не смогло инициализироваться." } }, { status: 503 });
@@ -114,7 +117,7 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
       return json({
         ok: true,
         storage: "ready",
-        media: env.VOICE_MEDIA ? "voice_r2_ready" : "voice_r2_missing",
+        media: env.VOICE_UPLOAD ? "voice_d1_websocket_ready" : "voice_upload_websocket_missing",
         realtime: realtime.available() ? "ready" : "polling_fallback",
         push: push?.publicConfig().configured ? "ready" : "needs_vapid_keys",
         calls: { status: "ready", state: "durable_object", ice: turnConfigured(env) ? "turn+stun" : "stun" },
@@ -153,9 +156,6 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
       const voiceResponse = await handleVoiceHttp(request, url, voice, authenticate);
       if (voiceResponse) return voiceResponse;
     }
-    if (url.pathname.startsWith("/api/v1/") && url.pathname.includes("/voice") && !env.VOICE_MEDIA) {
-      return voiceMediaBindingMissing();
-    }
     if (identity && messaging && authenticate) {
       const messagingResponse = await handleMessagingHttp(request, url, messaging, authenticate);
       if (messagingResponse) return messagingResponse;
@@ -174,7 +174,10 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
         service: "bulbam-api",
         version: VERSION,
         storage: { binding: env.DB ? "configured" : "missing" },
-        media: { voiceR2: env.VOICE_MEDIA ? "configured" : "missing" },
+        media: {
+          voiceStorage: env.DB ? "d1" : "missing",
+          voiceTransport: env.VOICE_UPLOAD ? "websocket" : "missing"
+        },
         realtime: { binding: env.REALTIME ? "configured" : "missing" },
         push: { configured: push?.publicConfig().configured ?? false },
         calls: {
@@ -189,7 +192,7 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
           "GET /api/v1/chats", "POST /api/v1/chats/direct", "GET /api/v1/chats/:conversationId/messages", "POST /api/v1/chats/:conversationId/messages",
           "POST /api/v1/chats/:conversationId/receipts/delivered",
           "POST /api/v1/chats/:conversationId/voice/uploads",
-          "PUT /api/v1/chats/:conversationId/voice/uploads/:sessionId/parts/:partNumber",
+          "GET /api/v1/chats/:conversationId/voice/uploads/:sessionId/socket (WebSocket binary chunks)",
           "POST /api/v1/chats/:conversationId/voice/uploads/:sessionId/complete",
           "DELETE /api/v1/chats/:conversationId/voice/uploads/:sessionId",
           "GET /api/v1/chats/:conversationId/messages/:messageId/voice/audio",
