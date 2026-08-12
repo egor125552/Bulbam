@@ -49,9 +49,10 @@ export function setupVoiceRecorder() {
   draftSendButton?.addEventListener("click", () => void sendRecoverableDraft());
   draftDeleteButton?.addEventListener("click", () => void deleteRecoverableDraft());
 
-  window.addEventListener("bulbam:chat-changed", () => void refreshRecoverableDraft());
-  window.addEventListener("bulbam:account-changed", () => void refreshRecoverableDraft());
+  window.addEventListener("bulbam:chat-changed", handleChatChanged);
+  window.addEventListener("bulbam:account-changed", handleAccountChanged);
   window.addEventListener("online", () => void refreshRecoverableDraft());
+  observeCallPanel();
 
   document.addEventListener("keydown", handleOptionKeyDown, true);
   document.addEventListener("keyup", handleOptionKeyUp, true);
@@ -60,6 +61,36 @@ export function setupVoiceRecorder() {
     clearOptionTimer();
     if (current?.trigger === "option") void interruptRecording("Окно потеряло фокус во время записи.");
   });
+}
+
+function handleChatChanged(event) {
+  const nextConversationId = event.detail?.chat?.conversationId ?? null;
+  if (current && nextConversationId !== current.draft.conversationId) {
+    void interruptRecording("Чат был изменён во время записи.");
+  }
+  void refreshRecoverableDraft();
+}
+
+function handleAccountChanged(event) {
+  const nextAccountId = event.detail?.account?.userId ?? null;
+  clearOptionTimer();
+  optionHeld = false;
+  optionBlocked = false;
+  if (current && nextAccountId !== current.draft.accountId) {
+    void interruptRecording("Аккаунт был изменён во время записи.");
+  }
+  void refreshRecoverableDraft();
+}
+
+function observeCallPanel() {
+  const callPanel = document.querySelector("#call-panel");
+  if (!callPanel || !window.MutationObserver) return;
+  const observer = new MutationObserver(() => {
+    if (current && !callPanel.hidden) {
+      void interruptRecording("Звонок начался во время записи.");
+    }
+  });
+  observer.observe(callPanel, { attributes: true, attributeFilter: ["hidden"] });
 }
 
 async function toggleButtonRecording() {
@@ -245,6 +276,7 @@ async function interruptRecording(reason) {
   setRecordingUi(false);
   announce(`${reason} Записанная часть будет сохранена и не отправится автоматически.`);
   if (state.recorder.state !== "inactive") state.recorder.stop();
+  state.stream.getTracks().forEach((track) => track.stop());
 }
 
 async function finishStoppedRecorder(state) {
