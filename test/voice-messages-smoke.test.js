@@ -118,14 +118,15 @@ function nextJsonMessage(socket, type) {
 async function openVoiceUploadSocket(sender, chat, upload) {
   const env = await testEnv();
   const response = await env.VOICE_UPLOAD.getByName(upload.sessionId).fetch(
-    new Request("https://voice-upload.internal/socket", {
+    "https://voice-upload.internal/socket",
+    {
       headers: {
         Upgrade: "websocket",
         "x-bulbam-user-id": sender.account.userId,
         "x-bulbam-conversation-id": chat.conversationId,
         "x-bulbam-voice-session-id": upload.sessionId
       }
-    })
+    }
   );
   await expectStatus(response, 101);
   const socket = response.webSocket;
