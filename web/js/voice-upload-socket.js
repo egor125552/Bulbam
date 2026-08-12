@@ -1,5 +1,17 @@
 const CONNECT_TIMEOUT_MS = 10_000;
 const ACK_TIMEOUT_MS = 15_000;
+const MAX_SEND_ATTEMPTS = 3;
+const NON_RETRYABLE_CODES = new Set([
+  "voice_storage_full",
+  "voice_part_conflict",
+  "voice_part_after_tail",
+  "voice_tail_conflict",
+  "voice_tail_not_last",
+  "invalid_voice_part",
+  "voice_part_too_large",
+  "voice_upload_completed",
+  "voice_upload_not_found"
+]);
 
 export class VoiceUploadSocket {
   constructor(conversationId, sessionId) {
@@ -22,18 +34,32 @@ export class VoiceUploadSocket {
   }
 
   async sendPart(partNumber, blob) {
-    await this.connect();
-    if (this.receivedParts.has(partNumber)) {
-      return { partNumber, duplicate: true, sizeBytes: blob.size };
-    }
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket голосового сообщения не подключён");
-    }
-
     const payload = new Uint8Array(await blob.arrayBuffer());
     if (!payload.byteLength) throw new Error("часть голосового сообщения пустая");
-    if (this.chunkSizeBytes && payload.byteLength > this.chunkSizeBytes) {
-      throw new Error("часть голосового сообщения больше разрешённого размера");
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt += 1) {
+      try {
+        await this.connect();
+        if (this.receivedParts.has(partNumber)) {
+          return { partNumber, duplicate: true, sizeBytes: payload.byteLength };
+        }
+        if (this.chunkSizeBytes && payload.byteLength > this.chunkSizeBytes) {
+          throw codedError("voice_part_too_large", "часть голосового сообщения больше разрешённого размера");
+        }
+        return await this.sendPayload(partNumber, payload);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (NON_RETRYABLE_CODES.has(lastError.code) || attempt >= MAX_SEND_ATTEMPTS) throw lastError;
+        this.dropConnection();
+      }
+    }
+    throw lastError ?? new Error("Не удалось отправить часть голосового сообщения");
+  }
+
+  async sendPayload(partNumber, payload) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket голосового сообщения не подключён");
     }
 
     const frame = new Uint8Array(payload.byteLength + 4);
@@ -64,6 +90,15 @@ export class VoiceUploadSocket {
     this.rejectAll(new Error("WebSocket голосового сообщения закрыт"));
   }
 
+  dropConnection() {
+    const socket = this.socket;
+    this.socket = null;
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      try { socket.close(); } catch {}
+    }
+    this.rejectAll(new Error("WebSocket голосового сообщения переподключается"));
+  }
+
   async open() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const path = `/api/v1/chats/${encodeURIComponent(this.conversationId)}/voice/uploads/${encodeURIComponent(this.sessionId)}/socket`;
@@ -75,6 +110,7 @@ export class VoiceUploadSocket {
       let ready = false;
       const timeout = setTimeout(() => {
         if (ready) return;
+        if (this.socket === socket) this.socket = null;
         reject(new Error("сервер не открыл WebSocket голосового сообщения"));
         try { socket.close(); } catch {}
       }, CONNECT_TIMEOUT_MS);
@@ -114,7 +150,12 @@ export class VoiceUploadSocket {
         }
 
         if (message.type === "voice.upload.error") {
-          const error = new Error(message.message || "Ошибка WebSocket-загрузки голосового");
+          const code = typeof message.code === "string" ? message.code : "voice_upload_failed";
+          const rawMessage = typeof message.message === "string" ? message.message : "Ошибка WebSocket-загрузки голосового";
+          const text = rawMessage.includes("SQLITE_FULL")
+            ? "Бесплатное серверное хранилище голосовых заполнено. Запись сохранена на устройстве и не потеряна."
+            : rawMessage;
+          const error = codedError(rawMessage.includes("SQLITE_FULL") ? "voice_storage_full" : code, text);
           const partNumber = Number(message.partNumber);
           if (Number.isInteger(partNumber) && this.waiters.has(partNumber)) this.rejectWaiter(partNumber, error);
           else this.rejectAll(error);
@@ -123,8 +164,11 @@ export class VoiceUploadSocket {
 
       socket.addEventListener("close", () => {
         clearTimeout(timeout);
-        if (this.socket === socket) this.socket = null;
-        this.rejectAll(new Error("WebSocket голосового сообщения отключился"));
+        const wasCurrent = this.socket === socket;
+        if (wasCurrent) {
+          this.socket = null;
+          this.rejectAll(new Error("WebSocket голосового сообщения отключился"));
+        }
         if (!ready) reject(new Error("WebSocket голосового сообщения не открылся"));
       });
       socket.addEventListener("error", () => {
@@ -144,4 +188,10 @@ export class VoiceUploadSocket {
   rejectAll(error) {
     for (const [partNumber] of this.waiters) this.rejectWaiter(partNumber, error);
   }
+}
+
+function codedError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
