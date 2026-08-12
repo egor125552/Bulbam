@@ -1,9 +1,18 @@
 let context = null;
 
-export async function playVoiceCue(kind) {
+export async function prepareVoiceCues() {
   try {
     context ??= new AudioContext();
     if (context.state === "suspended") await context.resume();
+  } catch {
+    // Recording still works when Web Audio cannot be armed.
+  }
+}
+
+export async function playVoiceCue(kind) {
+  try {
+    await prepareVoiceCues();
+    if (!context) return;
     const patterns = {
       start: [[660, 0, 0.055], [880, 0.07, 0.06]],
       stop: [[880, 0, 0.055], [660, 0.07, 0.06]],
