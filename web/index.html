@@ -120,6 +120,7 @@
             <label class="visually-hidden" for="message-input">Сообщение</label>
             <textarea id="message-input" name="text" rows="2" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
             <button id="voice-record-button" type="button" aria-pressed="false" aria-describedby="voice-record-hint">Записать голосовое</button>
+            <span id="voice-recording-status" class="voice-recording-status" aria-live="off" hidden>Запись 0:00</span>
             <button id="send-message" type="submit">Отправить</button>
             <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы отправить, или Escape, чтобы отменить. На Mac можно удерживать Option.</p>
           </form>
