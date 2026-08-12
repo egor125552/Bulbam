@@ -34,11 +34,12 @@ const META_KEY = "voice:meta";
 const CHUNK_PREFIX = "voice:chunk:";
 const MAX_PART_NUMBER = 100_000;
 const ABANDONED_UPLOAD_MS = 7 * 24 * 60 * 60 * 1000;
+const PUBLICATION_RECHECK_MS = 60 * 60 * 1000;
 
 export class VoiceUploadRoom {
   constructor(
     private readonly state: DurableObjectState,
-    private readonly _env: Env
+    private readonly env: Env
   ) {}
 
   async fetch(request: Request): Promise<Response> {
@@ -158,6 +159,20 @@ export class VoiceUploadRoom {
       await this.state.storage.deleteAlarm();
       return;
     }
+
+    if (meta.state === "ready") {
+      try {
+        if (await this.isReferencedByPublishedMessage(meta.sessionId)) {
+          await this.persistPublished(meta);
+          return;
+        }
+      } catch (error) {
+        console.error("[Bulbam] voice publication reconciliation failed", error);
+        await this.state.storage.setAlarm(Date.now() + PUBLICATION_RECHECK_MS);
+        return;
+      }
+    }
+
     const expiresAt = meta.updatedAt + ABANDONED_UPLOAD_MS;
     if (expiresAt <= Date.now()) {
       await this.state.storage.deleteAll();
@@ -314,12 +329,7 @@ export class VoiceUploadRoom {
     }
     if (meta.publishedAt != null) return new Response(null, { status: 204 });
 
-    const published: VoiceObjectMeta = {
-      ...meta,
-      publishedAt: Date.now()
-    };
-    await this.state.storage.put(META_KEY, published);
-    await this.state.storage.deleteAlarm();
+    await this.persistPublished(meta);
     return new Response(null, { status: 204 });
   }
 
@@ -330,7 +340,12 @@ export class VoiceUploadRoom {
     if (!sameContext(meta, context.userId, context.conversationId)) {
       return jsonError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
     }
-    if (meta.state === "ready" && meta.publishedAt != null) return new Response(null, { status: 204 });
+
+    // Once bytes reached the ready state, deleting them immediately is unsafe: the
+    // D1 message may already exist while the final published acknowledgement was lost.
+    // The alarm reconciles ready media with D1 and removes true orphans after 7 days.
+    if (meta.state === "ready") return new Response(null, { status: 204 });
+
     await this.state.storage.deleteAll();
     return new Response(null, { status: 204 });
   }
@@ -415,6 +430,31 @@ export class VoiceUploadRoom {
     await this.state.storage.put({ [key]: bytes, [META_KEY]: next });
     await this.state.storage.setAlarm(next.updatedAt + ABANDONED_UPLOAD_MS);
     return { duplicate: false, sizeBytes: bytes.byteLength };
+  }
+
+  private async persistPublished(meta: VoiceObjectMeta): Promise<void> {
+    const published: VoiceObjectMeta = {
+      ...meta,
+      publishedAt: meta.publishedAt ?? Date.now()
+    };
+    await this.state.storage.put(META_KEY, published);
+    await this.state.storage.deleteAlarm();
+  }
+
+  private async isReferencedByPublishedMessage(objectKey: string): Promise<boolean> {
+    const db = this.env.DB;
+    if (!db) throw new Error("D1 binding is unavailable while reconciling voice publication");
+
+    const table = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'voice_message_attachments' LIMIT 1")
+      .first<{ name: string }>();
+    if (!table) return false;
+
+    const reference = await db
+      .prepare("SELECT object_key FROM voice_message_attachments WHERE object_key = ? LIMIT 1")
+      .bind(objectKey)
+      .first<{ object_key: string }>();
+    return Boolean(reference?.object_key);
   }
 
   private async requireContext(userId: string, conversationId: string, sessionId: string): Promise<VoiceObjectMeta> {
