@@ -20,12 +20,6 @@
       "preview_database_id": "bulbam-test"
     }
   ],
-  "r2_buckets": [
-    {
-      "binding": "VOICE_MEDIA",
-      "bucket_name": "bulbam-voice-media-test"
-    }
-  ],
   "durable_objects": {
     "bindings": [
       {
@@ -35,6 +29,10 @@
       {
         "name": "CALL_ROOM",
         "class_name": "CallRoom"
+      },
+      {
+        "name": "VOICE_UPLOAD",
+        "class_name": "VoiceUploadRoom"
       }
     ]
   },
@@ -46,6 +44,10 @@
     {
       "tag": "calls-v1",
       "new_sqlite_classes": ["CallRoom"]
+    },
+    {
+      "tag": "voice-upload-v1",
+      "new_sqlite_classes": ["VoiceUploadRoom"]
     }
   ]
 }
