@@ -95,6 +95,7 @@ export interface Env {
   DB?: D1Database;
   REALTIME?: DurableObjectNamespace;
   CALL_ROOM?: DurableObjectNamespace;
+  VOICE_UPLOAD?: DurableObjectNamespace;
   VOICE_MEDIA?: R2BucketLike;
   DEBUG_ERRORS?: string;
   SMOKE_SECRET?: string;
