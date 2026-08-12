@@ -1,5 +1,6 @@
 import { json, methodNotAllowed, readJsonObject } from "./core/http";
 import type { IdentityService } from "./modules/identity/application/identity-service";
+import type { VoiceMessageService } from "./modules/media/application/voice-message-service";
 import type { MessagingService } from "./modules/messaging/application/messaging-service";
 import type { Env } from "./platform/cloudflare";
 
@@ -8,7 +9,8 @@ export async function handleSmokeHttp(
   url: URL,
   env: Env,
   identity: IdentityService,
-  messaging: MessagingService
+  messaging: MessagingService,
+  voice?: VoiceMessageService
 ): Promise<Response | null> {
   if (!url.pathname.startsWith("/api/v1/smoke/")) return null;
 
@@ -32,7 +34,8 @@ export async function handleSmokeHttp(
     const body = await readJsonObject(request);
     const prefix = typeof body.prefix === "string" ? body.prefix : "";
     const userIds = await identity.findSmokeUserIds(prefix);
-    await messaging.cleanupUsers(userIds);
+    if (voice) await voice.cleanupUsers(userIds);
+    else await messaging.cleanupUsers(userIds);
     await identity.deleteUsersByIds(userIds);
     return json({ ok: true, deletedAccounts: userIds.length });
   }
