@@ -116,7 +116,15 @@ export class VoiceMessageService {
       return { ...result, sizeBytes: stored.size, chunkCount: stored.chunkCount };
     } catch (error) {
       if (error instanceof ApiError && error.code === "client_message_id_conflict") {
-        await this.storage.delete(stored.key).catch(() => undefined);
+        const existing = await this.repository
+          .findMessageForUser(conversationId, sessionId, actor.userId)
+          .catch(() => null);
+        const alreadyReferenced = Boolean(
+          existing?.kind === "voice" && existing.voice?.objectKey === stored.key
+        );
+        if (!alreadyReferenced) {
+          await this.storage.delete(stored.key).catch(() => undefined);
+        }
       }
       throw error;
     }
