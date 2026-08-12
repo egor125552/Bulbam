@@ -1,22 +1,54 @@
-import type { R2UploadedPart } from "../../../platform/cloudflare";
+export interface VoiceUploadSession {
+  sessionId: string;
+  conversationId: string;
+  senderUserId: string;
+  mimeType: string;
+  bitrateBps: number;
+  state: "uploading" | "ready";
+  receivedParts: number[];
+  sizeBytes: number;
+  chunkCount: number;
+}
 
 export interface VoiceStoredObject {
   key: string;
   size: number;
-  etag: string;
-  customMetadata: Record<string, string>;
+  mimeType: string;
+  bitrateBps: number;
+  chunkCount: number;
 }
 
 export interface VoiceReadResult {
-  body: ReadableStream;
+  body: ReadableStream<Uint8Array>;
   headers: Headers;
+  status: number;
 }
 
 export interface VoiceStorage {
-  create(objectKey: string, mimeType: string, bitrateBps: number): Promise<{ uploadId: string }>;
-  uploadPart(objectKey: string, uploadId: string, partNumber: number, body: ArrayBuffer): Promise<R2UploadedPart>;
-  complete(objectKey: string, uploadId: string, parts: R2UploadedPart[]): Promise<VoiceStoredObject>;
-  abort(objectKey: string, uploadId: string): Promise<void>;
+  initialize(): Promise<void>;
+  create(
+    sessionId: string,
+    conversationId: string,
+    senderUserId: string,
+    mimeType: string,
+    bitrateBps: number
+  ): Promise<VoiceUploadSession>;
+  inspect(sessionId: string, conversationId: string, senderUserId: string): Promise<VoiceUploadSession | null>;
+  writeChunk(
+    sessionId: string,
+    conversationId: string,
+    senderUserId: string,
+    partNumber: number,
+    bytes: Uint8Array
+  ): Promise<{ duplicate: boolean; sizeBytes: number }>;
+  complete(
+    sessionId: string,
+    conversationId: string,
+    senderUserId: string,
+    expectedChunkCount: number,
+    expectedSizeBytes: number
+  ): Promise<VoiceStoredObject>;
+  abort(sessionId: string, conversationId: string, senderUserId: string): Promise<void>;
   delete(objectKey: string): Promise<void>;
   read(objectKey: string, requestHeaders: Headers): Promise<VoiceReadResult | null>;
 }
