@@ -5,6 +5,7 @@ import { IdentityService } from "./modules/identity/application/identity-service
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
 import { VoiceMessageService } from "./modules/media/application/voice-message-service";
+import { D1VoiceMediaReferences } from "./modules/media/infrastructure/d1-voice-media-references";
 import { DurableObjectVoiceStorage } from "./modules/media/infrastructure/durable-object-voice-storage";
 import { handleVoiceHttp } from "./modules/media/transport/http";
 import { MessagingService } from "./modules/messaging/application/messaging-service";
@@ -31,7 +32,7 @@ function voiceBindingMissing(): Response {
 function turnConfigured(env: Env): boolean {
   return Boolean(
     (env.WEBRTC_CLOUDFLARE_TURN_KEY_ID || env.TURN_KEY_ID) &&
-    (env.WEBRTC_CLOUDFLARE_TURN_API_TOKEN || env.TURN_KEY_API_TOKEN)
+    (env.WEBRTC_CLOUDFLARE_TURN_KEY_API_TOKEN || env.TURN_KEY_API_TOKEN)
   ) || Boolean(env.WEBRTC_TURN_SECRET && env.WEBRTC_TURN_URLS) || Boolean(
     env.WEBRTC_STATIC_TURN_URLS &&
     env.WEBRTC_STATIC_TURN_USERNAME &&
@@ -84,13 +85,15 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
         )
       : null;
     const voiceStorage = env.VOICE_UPLOAD ? new DurableObjectVoiceStorage(env.VOICE_UPLOAD) : null;
+    const voiceReferences = env.DB ? new D1VoiceMediaReferences(env.DB) : null;
     const voice = voiceStorage && messagingRepository && messaging
       ? new VoiceMessageService(
           messagingRepository,
           messaging,
           voiceStorage,
           realtime,
-          env.VOICE_UPLOAD
+          env.VOICE_UPLOAD,
+          voiceReferences ?? undefined
         )
       : null;
     const calls = env.CALL_ROOM && messagingRepository && directory
@@ -130,7 +133,7 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
     }
 
     if (identity && messaging) {
-      const smokeResponse = await handleSmokeHttp(request, url, env, identity, messaging);
+      const smokeResponse = await handleSmokeHttp(request, url, env, identity, messaging, voice ?? undefined);
       if (smokeResponse) return smokeResponse;
     }
     if (identity) {
