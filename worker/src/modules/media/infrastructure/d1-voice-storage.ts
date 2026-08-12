@@ -1,14 +1,14 @@
 import { ApiError } from "../../../core/errors";
 import type { D1Database } from "../../../platform/cloudflare";
-import type {
-  VoiceReadResult,
-  VoiceStorage,
-  VoiceStoredObject,
-  VoiceUploadSession
+import {
+  VOICE_CHUNK_SIZE_BYTES,
+  type VoiceReadResult,
+  type VoiceStorage,
+  type VoiceStoredObject,
+  type VoiceUploadSession
 } from "../ports/voice-storage";
 import { ensureVoiceMediaSchema } from "./schema";
 
-export const VOICE_CHUNK_SIZE_BYTES = 256 * 1024;
 const MAX_PART_NUMBER = 100_000;
 
 type SessionRow = {
@@ -23,7 +23,7 @@ type SessionRow = {
 };
 
 type ChunkRow = {
-  data: number[];
+  data: unknown;
   size_bytes: number;
 };
 
@@ -299,7 +299,7 @@ export class D1VoiceStorage implements VoiceStorage {
           controller.error(new Error(`Missing voice chunk ${partNumber}`));
           return;
         }
-        const bytes = Uint8Array.from(row.data ?? []);
+        const bytes = blobBytes(row.data);
         const partStart = (partNumber - 1) * VOICE_CHUNK_SIZE_BYTES;
         const sliceStart = partNumber === firstPart ? Math.max(0, start - partStart) : 0;
         const sliceEnd = partNumber === lastPart ? Math.min(bytes.byteLength, end - partStart + 1) : bytes.byteLength;
@@ -319,6 +319,14 @@ function storedObject(row: SessionRow): VoiceStoredObject {
     bitrateBps: Number(row.bitrate_bps),
     chunkCount: Number(row.chunk_count)
   };
+}
+
+function blobBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (Array.isArray(value)) return Uint8Array.from(value.map((entry) => Number(entry) & 0xff));
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  throw new Error("Invalid D1 voice BLOB");
 }
 
 function resolveRange(value: string | null, size: number): { start: number; end: number } | null | "invalid" {
