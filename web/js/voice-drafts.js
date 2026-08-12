@@ -26,23 +26,41 @@ export async function updateVoiceDraft(id, patch) {
   return next;
 }
 
-export async function appendVoiceChunk(recordingId, sequence, blob) {
+export async function appendVoiceChunk(recordingId, sequence, blob, draftPatch = null) {
   const db = await openDb();
-  const transaction = db.transaction(CHUNKS, "readwrite");
-  const store = transaction.objectStore(CHUNKS);
-  let startByte = sequence === 0 ? 0 : undefined;
-  if (sequence > 0) {
-    const previous = await requestDone(store.get([recordingId, sequence - 1]));
-    const previousStart = typeof previous?.startByte === "number" ? previous.startByte : NaN;
-    const previousSize = Number(previous?.size ?? previous?.blob?.size ?? NaN);
-    if (Number.isFinite(previousStart) && previousStart >= 0 && Number.isFinite(previousSize) && previousSize >= 0) {
-      startByte = previousStart + previousSize;
+  const stores = draftPatch ? [CHUNKS, DRAFTS] : [CHUNKS];
+  const transaction = db.transaction(stores, "readwrite");
+  const chunkStore = transaction.objectStore(CHUNKS);
+
+  try {
+    let startByte = sequence === 0 ? 0 : undefined;
+    if (sequence > 0) {
+      const previous = await requestDone(chunkStore.get([recordingId, sequence - 1]));
+      const previousStart = typeof previous?.startByte === "number" ? previous.startByte : NaN;
+      const previousSize = Number(previous?.size ?? previous?.blob?.size ?? NaN);
+      if (Number.isFinite(previousStart) && previousStart >= 0 && Number.isFinite(previousSize) && previousSize >= 0) {
+        startByte = previousStart + previousSize;
+      }
     }
+
+    const entry = { recordingId, sequence, blob, size: blob.size };
+    if (Number.isFinite(startByte)) entry.startByte = startByte;
+    await requestDone(chunkStore.put(entry));
+
+    if (draftPatch) {
+      const draftStore = transaction.objectStore(DRAFTS);
+      const current = await requestDone(draftStore.get(recordingId));
+      if (!current) throw new Error("Локальный черновик голосового сообщения не найден.");
+      await requestDone(draftStore.put({ ...current, ...draftPatch, id: recordingId }));
+    }
+
+    await transactionDone(transaction);
+  } catch (error) {
+    if (transaction.readyState !== "done") {
+      try { transaction.abort(); } catch {}
+    }
+    throw error;
   }
-  const entry = { recordingId, sequence, blob, size: blob.size };
-  if (Number.isFinite(startByte)) entry.startByte = startByte;
-  await requestDone(store.put(entry));
-  await transactionDone(transaction);
 }
 
 export async function getVoiceDraft(id) {
