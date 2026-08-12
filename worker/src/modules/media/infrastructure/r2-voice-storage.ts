@@ -22,7 +22,7 @@ export class R2VoiceStorage implements VoiceStorage {
     objectKey: string,
     uploadId: string,
     partNumber: number,
-    body: ReadableStream
+    body: ArrayBuffer
   ): Promise<R2UploadedPart> {
     return this.bucket.resumeMultipartUpload(objectKey, uploadId).uploadPart(partNumber, body);
   }
@@ -33,8 +33,6 @@ export class R2VoiceStorage implements VoiceStorage {
       const object = await upload.complete(parts);
       return { key: object.key, size: object.size, etag: object.httpEtag, customMetadata: object.customMetadata ?? {} };
     } catch (error) {
-      // Completion may have succeeded before the client lost the response. In that case
-      // the object is already strongly visible in R2 and finalization must remain idempotent.
       const object = await this.bucket.head(objectKey);
       if (object) return { key: object.key, size: object.size, etag: object.httpEtag, customMetadata: object.customMetadata ?? {} };
       throw error;
