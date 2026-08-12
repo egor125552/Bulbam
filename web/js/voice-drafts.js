@@ -5,6 +5,8 @@ const CHUNKS = "chunks";
 const RECORDING_INDEX = "recordingId";
 const START_INDEX = "recordingIdStart";
 
+let databasePromise = null;
+
 export async function createVoiceDraft(draft) {
   const db = await openDb();
   const transaction = db.transaction(DRAFTS, "readwrite");
@@ -28,16 +30,18 @@ export async function appendVoiceChunk(recordingId, sequence, blob) {
   const db = await openDb();
   const transaction = db.transaction(CHUNKS, "readwrite");
   const store = transaction.objectStore(CHUNKS);
-  let startByte = 0;
+  let startByte = sequence === 0 ? 0 : undefined;
   if (sequence > 0) {
     const previous = await requestDone(store.get([recordingId, sequence - 1]));
-    const previousStart = Number(previous?.startByte);
-    const previousSize = Number(previous?.size ?? previous?.blob?.size ?? 0);
-    startByte = Number.isFinite(previousStart) && previousStart >= 0 && previousSize >= 0
-      ? previousStart + previousSize
-      : null;
+    const previousStart = typeof previous?.startByte === "number" ? previous.startByte : NaN;
+    const previousSize = Number(previous?.size ?? previous?.blob?.size ?? NaN);
+    if (Number.isFinite(previousStart) && previousStart >= 0 && Number.isFinite(previousSize) && previousSize >= 0) {
+      startByte = previousStart + previousSize;
+    }
   }
-  await requestDone(store.put({ recordingId, sequence, blob, size: blob.size, startByte }));
+  const entry = { recordingId, sequence, blob, size: blob.size };
+  if (Number.isFinite(startByte)) entry.startByte = startByte;
+  await requestDone(store.put(entry));
   await transactionDone(transaction);
 }
 
@@ -69,7 +73,9 @@ async function findIndexedStartSequence(db, recordingId, startByte) {
   const cursor = await requestDone(request);
   await transactionDone(transaction);
   const entry = cursor?.value;
-  if (!entry || entry.recordingId !== recordingId || !Number.isFinite(Number(entry.startByte))) return null;
+  if (!entry || entry.recordingId !== recordingId || typeof entry.startByte !== "number" || !Number.isFinite(entry.startByte)) {
+    return null;
+  }
   return Number(entry.sequence);
 }
 
@@ -94,7 +100,7 @@ async function readIndexedRange(db, recordingId, startSequence, startByte, endBy
         return;
       }
       const entry = cursor.value;
-      const chunkStart = Number(entry.startByte);
+      const chunkStart = typeof entry.startByte === "number" ? entry.startByte : NaN;
       const size = Number(entry.size ?? entry.blob?.size ?? 0);
       if (!Number.isFinite(chunkStart) || chunkStart < 0 || !entry.blob) {
         validIndex = false;
@@ -188,9 +194,17 @@ export async function deleteVoiceDraft(recordingId) {
 }
 
 function openDb() {
-  return new Promise((resolve, reject) => {
+  if (databasePromise) return databasePromise;
+  databasePromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      databasePromise = null;
+      reject(request.error);
+    };
+    request.onblocked = () => {
+      databasePromise = null;
+      reject(new Error("Обновление локального хранилища голосовых заблокировано другой вкладкой."));
+    };
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(DRAFTS)) {
@@ -210,8 +224,20 @@ function openDb() {
         chunks.createIndex(START_INDEX, ["recordingId", "startByte"], { unique: false });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      const reset = () => {
+        if (databasePromise) databasePromise = null;
+      };
+      db.onversionchange = () => {
+        db.close();
+        reset();
+      };
+      db.onclose = reset;
+      resolve(db);
+    };
   });
+  return databasePromise;
 }
 
 function requestDone(request) {
