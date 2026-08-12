@@ -63,8 +63,16 @@ export class VoiceMessageService {
       throw new ApiError(413, "voice_part_too_large", "Часть голосового сообщения слишком большая.");
     }
 
+    // R2 multipart requires a body whose length is known. Keep only one bounded
+    // part in Worker memory; the complete recording is never buffered here.
+    const body = await request.arrayBuffer();
+    if (!body.byteLength) throw new ApiError(400, "empty_voice_part", "Часть голосового сообщения пустая.");
+    if (body.byteLength > MAX_PART_REQUEST_BYTES) {
+      throw new ApiError(413, "voice_part_too_large", "Часть голосового сообщения слишком большая.");
+    }
+
     const objectKey = objectKeyFor(actor.userId, conversationId, sessionId);
-    return this.storage.uploadPart(objectKey, uploadId, partNumber, request.body);
+    return this.storage.uploadPart(objectKey, uploadId, partNumber, body);
   }
 
   async completeUpload(
