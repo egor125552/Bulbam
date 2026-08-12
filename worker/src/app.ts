@@ -32,7 +32,7 @@ function voiceBindingMissing(): Response {
 function turnConfigured(env: Env): boolean {
   return Boolean(
     (env.WEBRTC_CLOUDFLARE_TURN_KEY_ID || env.TURN_KEY_ID) &&
-    (env.WEBRTC_CLOUDFLARE_TURN_KEY_API_TOKEN || env.TURN_KEY_API_TOKEN)
+    (env.WEBRTC_CLOUDFLARE_TURN_API_TOKEN || env.TURN_KEY_API_TOKEN)
   ) || Boolean(env.WEBRTC_TURN_SECRET && env.WEBRTC_TURN_URLS) || Boolean(
     env.WEBRTC_STATIC_TURN_URLS &&
     env.WEBRTC_STATIC_TURN_USERNAME &&
