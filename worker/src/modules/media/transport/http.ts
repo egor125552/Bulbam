@@ -27,21 +27,13 @@ export async function handleVoiceHttp(
     return json({ ok: true, upload }, { status: 201 });
   }
 
-  const partMatch = url.pathname.match(
-    /^\/api\/v1\/chats\/([0-9a-f-]{36})\/voice\/uploads\/([0-9a-f-]{36})\/parts\/(\d+)$/i
+  const socketMatch = url.pathname.match(
+    /^\/api\/v1\/chats\/([0-9a-f-]{36})\/voice\/uploads\/([0-9a-f-]{36})\/socket$/i
   );
-  if (partMatch) {
-    if (request.method !== "PUT") return methodNotAllowed(["PUT"]);
+  if (socketMatch) {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const actor = await authenticate(request);
-    const part = await service.uploadPart(
-      actor,
-      partMatch[1],
-      partMatch[2],
-      partMatch[3],
-      url.searchParams.get("uploadId"),
-      request
-    );
-    return json({ ok: true, part });
+    return service.openUploadSocket(actor, socketMatch[1], socketMatch[2], request);
   }
 
   const completeMatch = url.pathname.match(
@@ -65,7 +57,7 @@ export async function handleVoiceHttp(
   if (abortMatch) {
     if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);
     const actor = await authenticate(request);
-    await service.abortUpload(actor, abortMatch[1], abortMatch[2], url.searchParams.get("uploadId"));
+    await service.abortUpload(actor, abortMatch[1], abortMatch[2]);
     return new Response(null, { status: 204 });
   }
 
