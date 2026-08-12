@@ -53,50 +53,12 @@ export interface ExecutionContextLike {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-export interface R2UploadedPart {
-  partNumber: number;
-  etag: string;
-}
-
-export interface R2ObjectLike {
-  key: string;
-  size: number;
-  httpEtag: string;
-  range?: { offset?: number; length?: number; suffix?: number };
-  customMetadata?: Record<string, string>;
-  body?: ReadableStream;
-  writeHttpMetadata(headers: Headers): void;
-}
-
-export interface R2MultipartUploadLike {
-  key: string;
-  uploadId: string;
-  uploadPart(
-    partNumber: number,
-    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob
-  ): Promise<R2UploadedPart>;
-  abort(): Promise<void>;
-  complete(parts: R2UploadedPart[]): Promise<R2ObjectLike>;
-}
-
-export interface R2BucketLike {
-  createMultipartUpload(
-    key: string,
-    options?: { httpMetadata?: { contentType?: string; cacheControl?: string }; customMetadata?: Record<string, string> }
-  ): Promise<R2MultipartUploadLike>;
-  resumeMultipartUpload(key: string, uploadId: string): R2MultipartUploadLike;
-  head(key: string): Promise<R2ObjectLike | null>;
-  get(key: string, options?: { range?: Headers }): Promise<R2ObjectLike | null>;
-  delete(key: string): Promise<void>;
-}
-
 export interface Env {
   ASSETS: AssetsBinding;
   DB?: D1Database;
   REALTIME?: DurableObjectNamespace;
   CALL_ROOM?: DurableObjectNamespace;
   VOICE_UPLOAD?: DurableObjectNamespace;
-  VOICE_MEDIA?: R2BucketLike;
   DEBUG_ERRORS?: string;
   SMOKE_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;
