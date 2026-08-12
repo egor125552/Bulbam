@@ -16,8 +16,9 @@ import {
   updateVoiceDraft
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
+import { VoiceUploadSocket } from "./voice-upload-socket.js";
 
-const LOCAL_PART_SIZE = 5 * 1024 * 1024;
+const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
 const MIME_CANDIDATES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
 
@@ -160,6 +161,7 @@ async function startRecording(trigger) {
     dataQueue: Promise.resolve(),
     uploadQueue: Promise.resolve(),
     uploadPromise: null,
+    transport: null,
     finishing: false
   };
   current = state;
@@ -176,10 +178,17 @@ async function startRecording(trigger) {
     });
   }
 
+  await playVoiceCue("start");
+  if (trigger === "option" && (!optionHeld || optionBlocked)) {
+    stream.getTracks().forEach((track) => track.stop());
+    await deleteVoiceDraft(localId).catch(() => undefined);
+    if (current === state) current = null;
+    return;
+  }
+
   recorder.start(1000);
   void ensureUploadSession(state);
   setRecordingUi(true, draft.startedAt);
-  await playVoiceCue("start");
   announce(trigger === "option"
     ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
     : "Запись голосового началась. Нажми кнопку ещё раз, чтобы отправить.");
@@ -213,8 +222,7 @@ async function stopAndSend() {
   state.stopMode = "send";
   state.finishing = true;
   setRecordingUi(false);
-  await playVoiceCue("stop");
-  announce("Запись остановлена. Отправляю голосовое.");
+  announce("Запись остановлена. Подготавливаю отправку голосового.");
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
 
@@ -224,8 +232,7 @@ async function cancelRecording() {
   state.stopMode = "cancel";
   state.finishing = true;
   setRecordingUi(false);
-  await playVoiceCue("cancel");
-  announce("Запись голосового отменена.");
+  announce("Останавливаю и отменяю запись голосового.");
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
 
@@ -236,8 +243,7 @@ async function interruptRecording(reason) {
   state.draft.interruptionReason = reason;
   state.finishing = true;
   setRecordingUi(false);
-  await playVoiceCue("error");
-  announce(`${reason} Записанная часть сохранена и не будет отправлена автоматически.`);
+  announce(`${reason} Записанная часть будет сохранена и не отправится автоматически.`);
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
 
@@ -251,9 +257,13 @@ async function finishStoppedRecorder(state) {
   if (current === state) current = null;
 
   if (mode === "cancel") {
+    state.transport?.close();
     await abortRemoteUpload(state.draft);
     await deleteVoiceDraft(state.draft.id).catch(() => undefined);
+    await playVoiceCue("cancel");
+    announce("Запись голосового отменена.");
   } else if (mode === "interrupted") {
+    state.transport?.close();
     await abortRemoteUpload(state.draft);
     await updateVoiceDraft(state.draft.id, {
       state: "interrupted",
@@ -261,25 +271,39 @@ async function finishStoppedRecorder(state) {
       upload: null,
       interruptionReason: state.draft.interruptionReason ?? "Запись была прервана системой."
     }).catch(() => undefined);
+    await playVoiceCue("error");
+    announce(`${state.draft.interruptionReason ?? "Запись была прервана."} Записанная часть сохранена и не отправлена.`);
   } else {
     await updateVoiceDraft(state.draft.id, { state: "stopped", durationMs }).catch(() => undefined);
-    await sendDraftById(state.draft.id);
+    await playVoiceCue("stop");
+    await sendDraftById(state.draft.id, state.transport);
   }
 
   await refreshRecoverableDraft();
 }
 
-async function sendDraftById(id) {
+async function sendDraftById(id, existingTransport = null) {
   const draft = await getVoiceDraft(id);
   if (!draft) return;
+  let transport = existingTransport;
   try {
     const totalBytes = Number(draft.totalBytes ?? 0);
     if (!totalBytes) throw new Error("запись пустая");
 
     const upload = await ensureDraftUpload(draft);
-    const parts = [...(upload.parts ?? [])];
-    const partSize = upload.partSizeBytes || LOCAL_PART_SIZE;
+    const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     const partCount = Math.ceil(totalBytes / partSize);
+    const parts = [...(upload.parts ?? [])];
+    if (!transport || transport.sessionId !== upload.sessionId) {
+      transport?.close();
+      transport = new VoiceUploadSocket(draft.conversationId, upload.sessionId);
+    }
+    await transport.connect();
+    for (const partNumber of transport.receivedParts) {
+      if (!parts.some((part) => part.partNumber === partNumber)) parts.push({ partNumber });
+    }
+    parts.sort((left, right) => left.partNumber - right.partNumber);
+
     for (let index = 0; index < partCount; index += 1) {
       const partNumber = index + 1;
       if (parts.some((part) => part.partNumber === partNumber)) continue;
@@ -291,8 +315,8 @@ async function sendDraftById(id) {
         draft.mimeType
       );
       if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
-      const part = await uploadPart(draft.conversationId, upload, partNumber, body);
-      parts.push(part);
+      const ack = await transport.sendPart(partNumber, body);
+      parts.push({ partNumber, sizeBytes: ack.sizeBytes });
       parts.sort((left, right) => left.partNumber - right.partNumber);
       upload.parts = parts;
       draft.upload = upload;
@@ -304,12 +328,10 @@ async function sendDraftById(id) {
       {
         method: "POST",
         body: JSON.stringify({
-          uploadId: upload.uploadId,
           clientMessageId: draft.clientMessageId,
           durationMs: draft.durationMs ?? Math.max(1, draft.lastChunkAt - draft.startedAt),
-          mimeType: draft.mimeType,
-          bitrateBps: draft.bitrateBps,
-          parts
+          chunkCount: partCount,
+          sizeBytes: totalBytes
         })
       }
     );
@@ -323,11 +345,13 @@ async function sendDraftById(id) {
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
     announce(`Голосовое не отправлено: ${error.message}. Запись сохранена, можно повторить.`);
     await playVoiceCue("error");
+  } finally {
+    transport?.close();
   }
 }
 
 async function ensureUploadSession(state) {
-  if (state.draft.upload) return state.draft.upload;
+  if (state.draft.upload?.transport === "websocket") return state.draft.upload;
   if (state.uploadPromise) return state.uploadPromise;
   state.uploadPromise = ensureDraftUpload(state.draft)
     .then((upload) => {
@@ -341,12 +365,16 @@ async function ensureUploadSession(state) {
 }
 
 async function ensureDraftUpload(draft) {
-  if (draft.upload) return draft.upload;
+  if (draft.upload?.transport === "websocket") return draft.upload;
   const result = await api(`/api/v1/chats/${draft.conversationId}/voice/uploads`, {
     method: "POST",
     body: JSON.stringify({ mimeType: draft.mimeType, bitrateBps: draft.bitrateBps })
   });
-  const upload = { ...result.upload, parts: [] };
+  const upload = {
+    ...result.upload,
+    transport: "websocket",
+    parts: (result.upload.receivedParts ?? []).map((partNumber) => ({ partNumber }))
+  };
   await updateVoiceDraft(draft.id, { upload });
   draft.upload = upload;
   return upload;
@@ -360,49 +388,44 @@ async function uploadReadyFullParts(state) {
   } catch {
     return;
   }
-  const fullPartCount = Math.floor(state.draft.totalBytes / upload.partSizeBytes);
-  for (let partNumber = 1; partNumber <= fullPartCount; partNumber += 1) {
-    if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
-    const start = (partNumber - 1) * upload.partSizeBytes;
-    const body = await getVoicePartBlob(
-      state.draft.id,
-      start,
-      upload.partSizeBytes,
-      state.draft.mimeType
-    );
-    if (body.size !== upload.partSizeBytes) return;
-    const part = await uploadPart(state.draft.conversationId, upload, partNumber, body);
-    upload.parts.push(part);
+  const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
+  const fullPartCount = Math.floor(state.draft.totalBytes / partSize);
+  if (!fullPartCount) return;
+
+  try {
+    state.transport ??= new VoiceUploadSocket(state.draft.conversationId, upload.sessionId);
+    await state.transport.connect();
+    for (const partNumber of state.transport.receivedParts) {
+      if (!upload.parts.some((part) => part.partNumber === partNumber)) upload.parts.push({ partNumber });
+    }
     upload.parts.sort((left, right) => left.partNumber - right.partNumber);
-    state.draft.upload = upload;
-    await updateVoiceDraft(state.draft.id, { upload });
+
+    for (let partNumber = 1; partNumber <= fullPartCount; partNumber += 1) {
+      if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
+      const start = (partNumber - 1) * partSize;
+      const body = await getVoicePartBlob(state.draft.id, start, partSize, state.draft.mimeType);
+      if (body.size !== partSize) return;
+      const ack = await state.transport.sendPart(partNumber, body);
+      upload.parts.push({ partNumber, sizeBytes: ack.sizeBytes });
+      upload.parts.sort((left, right) => left.partNumber - right.partNumber);
+      state.draft.upload = upload;
+      await updateVoiceDraft(state.draft.id, { upload });
+    }
+  } catch {
+    state.transport?.close();
+    state.transport = null;
   }
 }
 
-async function uploadPart(conversationId, upload, partNumber, body) {
-  const response = await fetch(
-    `/api/v1/chats/${conversationId}/voice/uploads/${upload.sessionId}/parts/${partNumber}?uploadId=${encodeURIComponent(upload.uploadId)}`,
-    {
-      method: "PUT",
-      credentials: "same-origin",
-      headers: { accept: "application/json", "content-type": "application/octet-stream" },
-      body
-    }
-  );
-  const payload = await safeJson(response);
-  if (!response.ok) throw new Error(payload?.error?.message ?? `Ошибка загрузки HTTP ${response.status}`);
-  return payload.part;
-}
-
 async function abortRemoteUpload(draft) {
-  if (!draft.upload) return;
+  if (!draft.upload?.sessionId) return;
   try {
     await fetch(
-      `/api/v1/chats/${draft.conversationId}/voice/uploads/${draft.upload.sessionId}?uploadId=${encodeURIComponent(draft.upload.uploadId)}`,
+      `/api/v1/chats/${draft.conversationId}/voice/uploads/${draft.upload.sessionId}`,
       { method: "DELETE", credentials: "same-origin" }
     );
   } catch {
-    // Incomplete R2 multipart uploads expire automatically; local draft remains the source of truth here.
+    // Local draft remains the source of truth; a later cleanup pass can remove an abandoned server session.
   }
 }
 
@@ -544,7 +567,10 @@ function isMacLike() {
 }
 
 function randomId() {
-  return crypto.randomUUID ? crypto.randomUUID() : `voice_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `voice_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function formatDuration(ms) {
@@ -559,12 +585,4 @@ function formatClock(ms) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-async function safeJson(response) {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
 }
