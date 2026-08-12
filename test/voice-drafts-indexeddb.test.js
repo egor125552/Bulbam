@@ -2,6 +2,8 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test } from "vitest";
 import {
   appendVoiceChunk,
+  createVoiceDraft,
+  getVoiceDraft,
   getVoicePartBlob
 } from "../web/js/voice-drafts.js";
 
@@ -31,6 +33,36 @@ describe("voice draft IndexedDB v2", () => {
       { sequence: 1, startByte: 4 },
       { sequence: 2, startByte: 7 }
     ]);
+  });
+
+  test("commits each audio chunk together with the draft byte counters", async () => {
+    await createVoiceDraft({
+      id: "recording-atomic",
+      accountId: "account-1",
+      conversationId: "conversation-1",
+      sequence: 0,
+      totalBytes: 0,
+      startedAt: 100,
+      lastChunkAt: 100,
+      state: "recording"
+    });
+
+    await appendVoiceChunk("recording-atomic", 0, blob([1, 2, 3]));
+    let draft = await getVoiceDraft("recording-atomic");
+    expect(draft.sequence).toBe(1);
+    expect(draft.totalBytes).toBe(3);
+    expect(draft.lastChunkAt).toBeGreaterThan(100);
+
+    await appendVoiceChunk("recording-atomic", 1, blob([4, 5]));
+    draft = await getVoiceDraft("recording-atomic");
+    expect(draft.sequence).toBe(2);
+    expect(draft.totalBytes).toBe(5);
+
+    // Rewriting the same indexed chunk must not double-count its bytes.
+    await appendVoiceChunk("recording-atomic", 1, blob([4, 5]));
+    draft = await getVoiceDraft("recording-atomic");
+    expect(draft.sequence).toBe(2);
+    expect(draft.totalBytes).toBe(5);
   });
 
   test("upgrades old chunks without startByte and keeps them readable through the legacy fallback", async () => {
