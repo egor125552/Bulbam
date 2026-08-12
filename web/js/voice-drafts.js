@@ -78,7 +78,6 @@ export async function findRecoverableVoiceDraft(accountId, conversationId) {
   if (draft?.state === "recording") {
     return updateVoiceDraft(draft.id, {
       state: "interrupted",
-      upload: null,
       interruptionReason: "Запись была прервана системой или закрытием приложения."
     });
   }
