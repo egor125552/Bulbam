@@ -266,6 +266,7 @@
   <script type="module">
     import { setupInterface } from "/js/ui.js";
     setupInterface();
+    document.querySelector("#logout")?.addEventListener("click", () => document.querySelector("#settings-dialog")?.close?.());
     await import("/app.js");
   </script>
 </body>
