@@ -145,7 +145,7 @@ async function startRecording(trigger) {
       });
       await enforceRawCapture(stream);
     } catch (error) {
-      announce(`Не удалось включить микрофон без обработки: ${error.message}`);
+      announce(`Не удалось включить микрофон: ${error.message}`);
       await playVoiceCue("error");
       stream?.getTracks().forEach((track) => track.stop());
       stream = null;
@@ -676,13 +676,14 @@ function chooseOpusMimeType() {
 async function enforceRawCapture(stream) {
   const track = stream.getAudioTracks()[0];
   if (!track) throw new Error("микрофон не дал аудиодорожку");
-  await track.applyConstraints({ echoCancellation: false, noiseSuppression: false, autoGainControl: false }).catch(() => undefined);
-  const settings = track.getSettings?.() ?? {};
-  for (const key of ["echoCancellation", "noiseSuppression", "autoGainControl"]) {
-    if (settings[key] === true) {
-      throw new Error("браузер не отключил обработку микрофона");
-    }
-  }
+  // Просим браузер отключить обработку дважды: и в getUserMedia, и на самой
+  // дорожке. Если ОС/браузер всё равно оставляет её включённой, запись разрешена:
+  // Bulbam не добавляет собственный DSP, но web-приложение не может обещать raw hardware capture.
+  await track.applyConstraints({
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false
+  }).catch(() => undefined);
 }
 
 function isEditable(target) {
