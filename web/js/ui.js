@@ -46,10 +46,35 @@ export const elements = {
   callRemoteAudio: document.querySelector("#call-remote-audio")
 };
 
+const VOICE_BUFFERING_MESSAGE = "Буферизация голосового сообщения.";
+const VOICE_RESUMED_MESSAGE = "Воспроизведение голосового продолжено.";
+const BUFFERING_ANNOUNCE_DELAY_MS = 350;
+
 let currentAccount = null;
 let currentSession = null;
+let bufferingAnnouncementTimer = null;
 
 export function announce(message) {
+  if (message === VOICE_BUFFERING_MESSAGE) {
+    clearTimeout(bufferingAnnouncementTimer);
+    bufferingAnnouncementTimer = setTimeout(() => {
+      bufferingAnnouncementTimer = null;
+      elements.liveStatus.textContent = message;
+    }, BUFFERING_ANNOUNCE_DELAY_MS);
+    return;
+  }
+
+  if (message === VOICE_RESUMED_MESSAGE) {
+    clearTimeout(bufferingAnnouncementTimer);
+    bufferingAnnouncementTimer = null;
+    if (elements.liveStatus.textContent === VOICE_BUFFERING_MESSAGE) {
+      elements.liveStatus.textContent = "";
+    }
+    return;
+  }
+
+  clearTimeout(bufferingAnnouncementTimer);
+  bufferingAnnouncementTimer = null;
   elements.liveStatus.textContent = message;
 }
 

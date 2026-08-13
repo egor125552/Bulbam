@@ -252,8 +252,9 @@ async function startRecording(trigger) {
 
     localId = null;
     stream = null;
-    // Не создаём server upload заранее. Для короткой или отменённой записи это
-    // лишняя сессия; длинная запись создаст её сама при первом полном 256-KiB куске.
+    // Готовим серверную сессию и WebSocket, пока пользователь ещё говорит.
+    // Поэтому после Stop короткому голосовому остаётся передать только сами байты.
+    void prewarmUpload(state);
     setRecordingUi(true, draft.startedAt);
     announce(trigger === "option"
       ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
@@ -342,6 +343,7 @@ async function finishStoppedRecorder(state) {
   state.stream.getTracks().forEach((track) => track.stop());
   await state.dataQueue.catch(() => undefined);
   await state.uploadQueue.catch(() => undefined);
+  if (state.uploadPromise) await state.uploadPromise.catch(() => undefined);
   const durationMs = Math.max(1, state.draft.lastChunkAt - state.draft.startedAt);
   const mode = state.stopMode ?? "interrupted";
   if (current === state) current = null;
@@ -365,8 +367,9 @@ async function finishStoppedRecorder(state) {
     announce(`${state.draft.interruptionReason ?? "Запись была прервана."} Записанная часть сохранена и не отправлена.`);
   } else {
     await updateVoiceDraft(state.draft.id, { state: "stopped", durationMs }).catch(() => undefined);
-    await playVoiceCue("stop");
+    const stopCue = playVoiceCue("stop").catch(() => undefined);
     await sendDraftById(state.draft.id, state.transport);
+    await stopCue;
   }
 
   await refreshRecoverableDraft();
@@ -494,6 +497,19 @@ async function ensureDraftUpload(draft) {
   await updateVoiceDraft(draft.id, { upload });
   draft.upload = upload;
   return upload;
+}
+
+async function prewarmUpload(state) {
+  if (state.stopMode === "cancel" || state.stopMode === "interrupted") return;
+  try {
+    const upload = await ensureUploadSession(state);
+    if (state.stopMode === "cancel" || state.stopMode === "interrupted") return;
+    state.transport ??= new VoiceUploadSocket(state.draft.conversationId, upload.sessionId);
+    await state.transport.connect();
+  } catch {
+    state.transport?.dropConnection();
+    state.transport = null;
+  }
 }
 
 async function uploadReadyFullParts(state) {
