@@ -164,7 +164,12 @@ export class VoiceMessageService {
 
     const object = await this.storage.read(message.voice.objectKey, requestHeaders);
     if (!object) notFound("voice_media_not_found", "Аудиоданные голосового сообщения не найдены.");
-    return new Response(object.body, { status: object.status, headers: object.headers });
+    const headers = new Headers(object.headers);
+    // Authentication belongs to the current Bulbam account, while the browser HTTP
+    // cache is origin-wide. Keep automatic HTTP caching off and let the explicit
+    // per-account Cache Storage layer decide what may remain locally.
+    headers.set("cache-control", "private, no-store");
+    return new Response(object.body, { status: object.status, headers });
   }
 
   async updateListening(
