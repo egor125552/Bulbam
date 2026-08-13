@@ -4,6 +4,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const CLIENT_MESSAGE_ID = /^[a-zA-Z0-9_-]{8,100}$/;
 const ALLOWED_BITRATES = new Set([24000, 32000, 48000, 64000, 96000]);
 const ALLOWED_MIME_TYPES = new Set([
+  "audio/mp4;codecs=opus",
   "audio/webm;codecs=opus",
   "audio/webm",
   "audio/ogg;codecs=opus",
@@ -14,7 +15,7 @@ export function validateVoiceStart(body: Record<string, unknown>) {
   const mimeType = typeof body.mimeType === "string" ? body.mimeType.toLowerCase() : "";
   const bitrateBps = Number(body.bitrateBps);
   if (!ALLOWED_MIME_TYPES.has(mimeType)) {
-    badRequest("unsupported_voice_format", "Нужна запись Opus в WebM или Ogg.");
+    badRequest("unsupported_voice_format", "Нужна запись Opus в MP4, WebM или Ogg.");
   }
   if (!ALLOWED_BITRATES.has(bitrateBps)) {
     badRequest("invalid_voice_bitrate", "Некорректный битрейт голосового сообщения.");
