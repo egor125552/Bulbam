@@ -6,12 +6,19 @@ const RECORDING_INDEX = "recordingId";
 const START_INDEX = "recordingIdStart";
 
 let databasePromise = null;
+const liveDraftReferences = new Map();
 
 export async function createVoiceDraft(draft) {
   const db = await openDb();
   const transaction = db.transaction(DRAFTS, "readwrite");
-  await requestDone(transaction.objectStore(DRAFTS).put(draft));
-  await transactionDone(transaction);
+  try {
+    await requestDone(transaction.objectStore(DRAFTS).put(draft));
+    await transactionDone(transaction);
+    liveDraftReferences.set(draft.id, draft);
+  } catch (error) {
+    liveDraftReferences.delete(draft.id);
+    throw error;
+  }
 }
 
 export async function updateVoiceDraft(id, patch) {
@@ -23,6 +30,8 @@ export async function updateVoiceDraft(id, patch) {
   const next = { ...current, ...patch, id };
   await requestDone(store.put(next));
   await transactionDone(transaction);
+  const live = liveDraftReferences.get(id);
+  if (live) Object.assign(live, next);
   return next;
 }
 
@@ -31,6 +40,7 @@ export async function appendVoiceChunk(recordingId, sequence, blob) {
   const transaction = db.transaction([CHUNKS, DRAFTS], "readwrite");
   const chunkStore = transaction.objectStore(CHUNKS);
   const draftStore = transaction.objectStore(DRAFTS);
+  let persistedDraft = null;
 
   try {
     const existing = await requestDone(chunkStore.get([recordingId, sequence]));
@@ -57,13 +67,14 @@ export async function appendVoiceChunk(recordingId, sequence, blob) {
         : Number.isFinite(indexedEnd)
           ? Math.max(currentTotal, indexedEnd)
           : currentTotal + blob.size;
-      await requestDone(draftStore.put({
+      persistedDraft = {
         ...draft,
         id: recordingId,
         sequence: Math.max(Number(draft.sequence ?? 0), sequence + 1),
         totalBytes,
         lastChunkAt: Date.now()
-      }));
+      };
+      await requestDone(draftStore.put(persistedDraft));
     }
 
     await transactionDone(transaction);
@@ -71,6 +82,12 @@ export async function appendVoiceChunk(recordingId, sequence, blob) {
     try { transaction.abort(); } catch {}
     throw error;
   }
+
+  if (persistedDraft) {
+    const live = liveDraftReferences.get(recordingId);
+    if (live) Object.assign(live, persistedDraft);
+  }
+  dispatchChunkPersisted(recordingId, sequence, blob.size);
 }
 
 export async function getVoiceDraft(id) {
@@ -219,6 +236,14 @@ export async function deleteVoiceDraft(recordingId) {
     };
   });
   await transactionDone(transaction);
+  liveDraftReferences.delete(recordingId);
+}
+
+function dispatchChunkPersisted(recordingId, sequence, sizeBytes) {
+  if (typeof window === "undefined" || typeof CustomEvent === "undefined") return;
+  window.dispatchEvent(new CustomEvent("bulbam:voice-chunk-persisted", {
+    detail: { recordingId, sequence, sizeBytes }
+  }));
 }
 
 function openDb() {
