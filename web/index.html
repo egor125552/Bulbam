@@ -263,6 +263,10 @@
     <p id="live-status" class="visually-hidden" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
   </main>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module">
+    import { setupInterface } from "/js/ui.js";
+    setupInterface();
+    await import("/app.js");
+  </script>
 </body>
 </html>
