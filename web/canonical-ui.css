@@ -391,3 +391,11 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
     text-align: left;
   }
 }
+
+/* Keep the conversation grid stable when optional rows are hidden. */
+.conversation-header { grid-row: 1; }
+.call-banner { grid-row: 2; }
+.conversation-empty,
+.message-list { grid-row: 3; }
+.composer { grid-row: 4; }
+
