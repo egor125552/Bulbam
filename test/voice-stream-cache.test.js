@@ -6,7 +6,7 @@ const MESSAGE_ID = "22222222-2222-4222-8222-222222222222";
 const ACTOR = { userId: "listener-a" };
 
 describe("voice stream cache isolation", () => {
-  test("disables automatic HTTP caching while preserving Range headers", async () => {
+  test("keeps private Range caching but separates responses by session cookie", async () => {
     const repository = {
       findMessageForUser: vi.fn(async () => ({
         messageId: MESSAGE_ID,
@@ -36,7 +36,8 @@ describe("voice stream cache isolation", () => {
           "cache-control": "private, max-age=604800, immutable",
           "content-range": "bytes 0-3/10",
           "content-type": "audio/webm;codecs=opus",
-          "accept-ranges": "bytes"
+          "accept-ranges": "bytes",
+          vary: "Accept-Encoding"
         })
       }))
     };
@@ -46,7 +47,8 @@ describe("voice stream cache isolation", () => {
     const response = await service.streamVoice(ACTOR, CONVERSATION_ID, MESSAGE_ID, requestHeaders);
 
     expect(response.status).toBe(206);
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("cache-control")).toBe("private, max-age=604800, immutable");
+    expect(response.headers.get("vary")).toBe("Accept-Encoding, Cookie");
     expect(response.headers.get("content-range")).toBe("bytes 0-3/10");
     expect(response.headers.get("accept-ranges")).toBe("bytes");
     expect(storage.read).toHaveBeenCalledWith("voice-object-key", requestHeaders);
