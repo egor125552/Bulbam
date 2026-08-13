@@ -37,8 +37,9 @@ jobs:
           async function shot(name, width, height, theme, view, mobile=false, settings=false) {
             const context = await browser.newContext({ viewport: { width, height } });
             const page = await context.newPage();
-            await page.route('**/*.js', r => r.abort());
+            await page.route('**/app.js', r => r.fulfill({ status: 200, contentType: 'text/javascript', body: 'export {};' }));
             await page.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(100);
             await page.evaluate(({theme,view,mobile,settings}) => {
               document.documentElement.dataset.theme=theme;
               document.documentElement.dataset.messageView=view;
@@ -54,9 +55,11 @@ jobs:
               document.querySelector('#call-start').hidden=false;
               document.querySelector('#chat-list').innerHTML='<button class="chat-item is-current"><strong>Разработчик2</strong><span class="chat-preview">Там есть кнопка, аккаунт и настройки</span></button><button class="chat-item"><strong>Тесты в аккаунт</strong><span class="chat-preview">Голосовое сообщение</span></button>';
               document.querySelector('#message-list').innerHTML='<li class="message message-theirs"><strong class="message-author">Разработчик2</strong><p>Привет</p><span class="message-meta">20:21</span></li><li class="message message-mine"><strong class="message-author">Вы</strong><p>Короче, штука хорошая</p><span class="message-meta">21:08 · доставлено</span></li><li class="message message-theirs"><strong class="message-author">Разработчик2</strong><p>Ого, реально звонок</p><span class="message-meta">20:33</span></li>';
+              const viewSelect=document.querySelector('#message-view'); if(viewSelect) viewSelect.value=view;
+              const themeSelect=document.querySelector('#interface-theme'); if(themeSelect) themeSelect.value=theme;
               if(settings) document.querySelector('#settings-dialog')?.showModal();
             },{theme,view,mobile,settings});
-            await page.waitForTimeout(100);
+            await page.waitForTimeout(120);
             const metrics=await page.evaluate(()=>({scrollWidth:document.documentElement.scrollWidth,viewport:innerWidth,overflow:document.documentElement.scrollWidth>innerWidth+1}));
             await page.screenshot({path:`visual-audit/${name}.png`,fullPage:true});
             report.push({name,...metrics});
