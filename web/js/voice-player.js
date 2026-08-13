@@ -1,4 +1,5 @@
 import { announce, getCurrentAccount } from "./ui.js";
+import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
 
 const SPEED_KEY = "bulbam.voice.playbackRate";
 const SPEEDS = [1, 1.5, 2];
@@ -114,8 +115,9 @@ export function renderVoiceMessage(message, mine) {
     announce(`Скорость голосовых ${formatSpeed(playbackRate)}.`);
   });
   progress.addEventListener("input", () => {
-    audio.currentTime = Number(progress.value);
-    controller.lastMediaTimeMs = audio.currentTime * 1000;
+    const nextMs = Math.max(0, Number(progress.value) * 1000 || 0);
+    try { audio.currentTime = nextMs / 1000; } catch {}
+    controller.lastMediaTimeMs = nextMs;
     updateTime(controller);
   });
   progress.addEventListener("keydown", (event) => {
@@ -180,6 +182,14 @@ function refreshController(controller, message, mine) {
     ...controller.heardRanges,
     ...(message.voice.progress?.heardRanges ?? [])
   ]);
+  if (
+    controller.audio.paused &&
+    controller.audio.currentTime === 0 &&
+    controller.lastMediaTimeMs === 0 &&
+    message.voice.progress?.resumeMs > 0
+  ) {
+    controller.lastMediaTimeMs = message.voice.progress.resumeMs;
+  }
   const active = controller.remoteActiveUntil > Date.now();
   updateListenStatus(controller.listenStatus, message.voice.progress, active, mine);
   updateTime(controller);
@@ -258,8 +268,13 @@ async function togglePlayback(controller) {
   if (controller.audio.paused) {
     await prepareCachedSource(controller);
     await pauseOtherPlayers(controller.message.messageId);
-    if (controller.audio.currentTime === 0 && controller.message.voice.progress?.resumeMs) {
-      controller.audio.currentTime = controller.message.voice.progress.resumeMs / 1000;
+    const startMs = effectiveVoicePositionMs(
+      controller.audio.currentTime,
+      controller.lastMediaTimeMs || controller.message.voice.progress?.resumeMs || 0
+    );
+    if (controller.audio.currentTime === 0 && startMs > 0) {
+      try { controller.audio.currentTime = startMs / 1000; } catch {}
+      controller.lastMediaTimeMs = startMs;
     }
     await controller.audio.play().catch((error) => announce(`Не удалось начать воспроизведение: ${error.message}`));
   } else {
@@ -293,11 +308,16 @@ async function pauseOtherPlayers(exceptMessageId) {
 }
 
 function seekBy(controller, seconds) {
-  const next = Math.min(controller.message.voice.durationMs / 1000, Math.max(0, controller.audio.currentTime + seconds));
-  controller.audio.currentTime = next;
-  controller.lastMediaTimeMs = next * 1000;
+  const nextMs = voiceSeekTargetMs(
+    controller.audio.currentTime,
+    controller.lastMediaTimeMs,
+    seconds,
+    controller.message.voice.durationMs
+  );
+  try { controller.audio.currentTime = nextMs / 1000; } catch {}
+  controller.lastMediaTimeMs = nextMs;
   updateTime(controller);
-  announce(`${seconds < 0 ? "Назад" : "Вперёд"} на 15 секунд. ${formatTime(next * 1000)}.`);
+  announce(`${seconds < 0 ? "Назад" : "Вперёд"} на 15 секунд. ${formatTime(nextMs)}.`);
 }
 
 function trackHeardRange(controller) {
@@ -315,11 +335,12 @@ function trackHeardRange(controller) {
 }
 
 function updateTime(controller) {
-  controller.progress.value = String(controller.audio.currentTime);
-  controller.time.textContent = `${formatTime(controller.audio.currentTime * 1000)} из ${formatTime(controller.message.voice.durationMs)}`;
+  const positionMs = effectiveVoicePositionMs(controller.audio.currentTime, controller.lastMediaTimeMs);
+  controller.progress.value = String(positionMs / 1000);
+  controller.time.textContent = `${formatTime(positionMs)} из ${formatTime(controller.message.voice.durationMs)}`;
   controller.progress.setAttribute(
     "aria-valuetext",
-    `${formatTime(controller.audio.currentTime * 1000)} из ${formatTime(controller.message.voice.durationMs)}`
+    `${formatTime(positionMs)} из ${formatTime(controller.message.voice.durationMs)}`
   );
 }
 
