@@ -11,6 +11,7 @@ import { setupSessions } from "./js/sessions.js";
 import { setupVoicePlayer } from "./js/voice-player.js";
 import { setupVoiceRecorder } from "./js/voice-recorder.js";
 import { setupVoiceSettings } from "./js/voice-settings.js";
+import { setupVoiceWebKitTimelineFix } from "./js/voice-webkit-timeline.js";
 
 setupHealth();
 setupAuth();
@@ -22,6 +23,7 @@ setupMessageScroll();
 setupPushNotifications();
 setupVoiceSettings();
 setupVoicePlayer();
+setupVoiceWebKitTimelineFix();
 setupVoiceRecorder();
 setupAudioProfiles();
 setupCalls();
