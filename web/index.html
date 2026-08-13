@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#0f766e">
+  <meta name="theme-color" content="#176b57">
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -14,27 +14,37 @@
   <a class="skip-link" href="#main">К основному содержимому</a>
 
   <header class="site-header">
-    <div>
-      <p class="eyebrow">Bulbam 0.6 · PWA + Push + Calls + Voice</p>
-      <h1>Бульбам</h1>
-      <p>Личные чаты, которые не пропадают после перезагрузки.</p>
+    <div class="brand-lockup">
+      <span class="brand-mark" aria-hidden="true">Б</span>
+      <div>
+        <h1>Бульбам</h1>
+        <p>Сообщения, голосовые и звонки</p>
+      </div>
     </div>
   </header>
 
   <main id="main" tabindex="-1">
-    <section class="system-strip" aria-labelledby="health-title">
-      <h2 id="health-title" class="visually-hidden">Состояние системы</h2>
-      <span>Worker: <strong id="worker-status">проверяется…</strong></span>
-      <span>Хранилище: <strong id="storage-status">проверяется…</strong></span>
-      <button id="check-server" type="button">Проверить сервер</button>
-    </section>
-
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
       <h2 id="account-start-title" class="visually-hidden">Вход и регистрация</h2>
 
-      <div class="card">
+      <div class="card auth-card">
+        <h3>Войти</h3>
+        <form id="login-form" class="form-stack">
+          <label>
+            Username
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
+          </label>
+          <label>
+            Пароль
+            <input name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
+          </label>
+          <button type="submit">Войти</button>
+        </form>
+      </div>
+
+      <div class="card auth-card">
         <h3>Создать аккаунт</h3>
-        <p>Для регистрации нужен одноразовый код приглашения.</p>
+        <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
         <form id="register-form" class="form-stack">
           <label>
             Username
@@ -55,133 +65,149 @@
           <button type="submit">Создать аккаунт</button>
         </form>
       </div>
-
-      <div class="card">
-        <h3>Войти</h3>
-        <form id="login-form" class="form-stack">
-          <label>
-            Username
-            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
-          </label>
-          <label>
-            Пароль
-            <input name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
-          </label>
-          <button type="submit">Войти</button>
-        </form>
-      </div>
     </section>
 
     <section id="signed-in" class="signed-in" aria-label="Мессенджер" hidden>
       <div class="messenger-shell">
         <aside class="chat-sidebar" aria-labelledby="chats-title">
           <div class="sidebar-heading">
-            <h2 id="chats-title">Чаты</h2>
-            <button id="new-chat-button" type="button" aria-expanded="false" aria-controls="user-search-panel">Новый чат</button>
+            <h2 id="chats-title" tabindex="-1">Чаты</h2>
+            <div class="sidebar-actions">
+              <button id="new-chat-button" class="icon-button" data-icon="compose" type="button" aria-label="Новый чат" aria-expanded="false" aria-controls="user-search-panel">Новый чат</button>
+              <button id="settings-button" class="icon-button" data-icon="settings" type="button" aria-label="Настройки">Настройки</button>
+            </div>
           </div>
 
           <section id="user-search-panel" class="search-panel" aria-labelledby="search-users-title" hidden>
-            <h3 id="search-users-title" class="visually-hidden">Найти человека</h3>
-            <label for="user-search-input">Найти человека</label>
+            <div class="section-heading">
+              <h3 id="search-users-title">Новый чат</h3>
+            </div>
+            <label class="visually-hidden" for="user-search-input">Найти человека</label>
             <input id="user-search-input" type="search" autocomplete="off" placeholder="Имя или @username" aria-describedby="user-search-hint">
-            <p id="user-search-hint" class="hint">Начни вводить имя или username. Минимум 2 символа.</p>
+            <p id="user-search-hint" class="hint">Введите минимум 2 символа.</p>
             <ul id="user-search-results" class="user-results" aria-label="Результаты поиска"></ul>
           </section>
 
-          <nav aria-label="Личные диалоги">
+          <nav class="chat-navigation" aria-label="Личные диалоги">
             <div id="chat-list" class="chat-list"></div>
           </nav>
         </aside>
 
         <section class="conversation-pane" aria-labelledby="conversation-title">
           <header class="conversation-header">
-            <div>
-              <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
-              <p id="conversation-peer" class="conversation-peer">Найди человека или открой существующий диалог.</p>
+            <button id="conversation-back" class="icon-button mobile-only" data-icon="back" type="button" aria-label="Назад к списку чатов">Назад</button>
+            <div class="conversation-identity">
+              <div class="conversation-avatar" aria-hidden="true">Б</div>
+              <div class="conversation-name-block">
+                <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
+                <p id="conversation-peer" class="conversation-peer">Откройте диалог или найдите человека.</p>
+              </div>
             </div>
-            <button id="call-start" type="button" hidden>Позвонить</button>
+            <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
+          <section id="call-panel" class="call-banner" aria-labelledby="call-title" hidden>
+            <div class="call-copy">
+              <h2 id="call-title" tabindex="-1">Звонок</h2>
+              <p id="call-peer"></p>
+              <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+            </div>
+            <div class="call-actions">
+              <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
+              <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
+              <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
+              <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
+            </div>
+            <audio id="call-remote-audio" autoplay></audio>
+          </section>
+
           <div id="conversation-empty" class="conversation-empty">
-            <p>Сообщения появятся здесь.</p>
+            <div class="empty-mark" aria-hidden="true">Б</div>
+            <p>Выберите чат, чтобы начать общение.</p>
           </div>
 
           <ol id="message-list" class="message-list" aria-label="Сообщения"></ol>
 
           <form id="message-form" class="composer" hidden>
             <div id="voice-draft-panel" class="voice-draft-panel" hidden>
-              <strong>Сохранённое голосовое</strong>
-              <span id="voice-draft-status">Запись была прервана и не отправлена.</span>
+              <div>
+                <strong>Сохранённое голосовое</strong>
+                <span id="voice-draft-status">Запись была прервана и не отправлена.</span>
+              </div>
               <div class="voice-draft-actions">
-                <button id="voice-draft-send" type="button">Отправить сохранённое</button>
-                <button id="voice-draft-delete" type="button">Удалить сохранённое</button>
+                <button id="voice-draft-send" class="button-with-icon" data-icon="send" type="button">Отправить</button>
+                <button id="voice-draft-delete" class="button-with-icon danger-button" data-icon="trash" type="button">Удалить</button>
               </div>
             </div>
-            <label class="visually-hidden" for="message-input">Сообщение</label>
-            <textarea id="message-input" name="text" rows="2" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
-            <button id="voice-record-button" type="button" aria-pressed="false" aria-describedby="voice-record-hint">Записать голосовое</button>
-            <span id="voice-recording-status" class="voice-recording-status" aria-live="off" hidden>Запись 0:00</span>
-            <button id="send-message" type="submit">Отправить</button>
-            <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы отправить, или Escape, чтобы отменить. На Mac можно удерживать Option.</p>
+
+            <div class="composer-input-wrap">
+              <label class="visually-hidden" for="message-input">Сообщение</label>
+              <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
+              <span id="voice-recording-status" class="voice-recording-status" aria-live="off" hidden>Запись 0:00</span>
+            </div>
+            <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
+            <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
+            <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
           </form>
         </section>
       </div>
 
-      <section id="call-panel" class="card" aria-labelledby="call-title" hidden>
-        <h2 id="call-title" tabindex="-1">Звонок</h2>
-        <p id="call-peer"></p>
-        <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
-        <div class="call-actions">
-          <button id="call-answer" type="button" hidden>Ответить</button>
-          <button id="call-decline" type="button" hidden>Отклонить</button>
-          <button id="call-resume" type="button" hidden>Восстановить звук</button>
-          <button id="call-mute" type="button" hidden>Выключить микрофон</button>
-          <button id="call-end" type="button" hidden>Завершить звонок</button>
+      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+        <div class="settings-header">
+          <div>
+            <p class="eyebrow">Бульбам</p>
+            <h2 id="settings-title" tabindex="-1">Настройки</h2>
+          </div>
+          <button id="settings-close" class="icon-button" data-icon="close" type="button" aria-label="Закрыть настройки">Закрыть</button>
         </div>
-        <audio id="call-remote-audio" autoplay></audio>
-      </section>
 
-      <details class="settings-card">
-        <summary>Аккаунт и настройки</summary>
         <div class="settings-grid">
+          <section class="card" aria-labelledby="appearance-title">
+            <h3 id="appearance-title">Интерфейс</h3>
+            <label for="message-view">Вид сообщений</label>
+            <select id="message-view">
+              <option value="bubbles">Пузырьки</option>
+              <option value="compact">Компактный список</option>
+            </select>
+            <p class="hint">Компактный список показывает каждое сообщение отдельной строкой, по принципу вашего Telegram-клиента. Семантически это остаётся списком сообщений, а не таблицей данных.</p>
+          </section>
+
           <section class="card" aria-labelledby="account-title">
-            <h2 id="account-title">Аккаунт</h2>
-            <dl class="details-list">
+            <h3 id="account-title">Аккаунт</h3>
+            <dl class="details-list compact-details">
               <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
               <div><dt>Username</dt><dd id="account-username"></dd></div>
-              <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
-              <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
-            <button id="logout" type="button">Выйти</button>
+            <button id="logout" class="button-with-icon" data-icon="logout" type="button">Выйти</button>
           </section>
 
           <section class="card" aria-labelledby="notifications-title">
-            <h2 id="notifications-title">Push-уведомления</h2>
+            <h3 id="notifications-title">Уведомления</h3>
             <p id="push-status">Проверяю поддержку уведомлений.</p>
-            <button id="push-enable" type="button">Включить уведомления</button>
-            <button id="push-disable" type="button" hidden>Отключить уведомления</button>
+            <button id="push-enable" class="button-with-icon" data-icon="bell" type="button">Включить уведомления</button>
+            <button id="push-disable" class="button-with-icon" data-icon="bell-off" type="button" hidden>Отключить уведомления</button>
           </section>
 
           <section class="card" aria-labelledby="voice-settings-title">
-            <h2 id="voice-settings-title">Голосовые сообщения</h2>
+            <h3 id="voice-settings-title">Голосовые сообщения</h3>
             <label for="voice-bitrate">Качество записи</label>
             <select id="voice-bitrate">
               <option value="24000">24 кбит/с — экономно</option>
               <option value="32000">32 кбит/с — обычное</option>
               <option value="48000">48 кбит/с — хорошее</option>
-              <option value="64000">64 кбит/с — высокое, по умолчанию</option>
+              <option value="64000">64 кбит/с — высокое</option>
               <option value="96000">96 кбит/с — максимальное</option>
             </select>
-            <p class="hint">Качество хранится отдельно на каждом устройстве. Запись использует Opus без шумоподавления, эхоподавления и автоматической регулировки громкости.</p>
             <label class="switch-row">
               <input id="voice-share-listening" type="checkbox" checked>
-              Показывать собеседникам прослушивание голосовых
+              Показывать собеседникам прогресс прослушивания
             </label>
             <p id="voice-settings-status" class="hint" role="status" aria-live="polite"></p>
           </section>
 
           <section class="card" aria-labelledby="call-audio-title">
-            <h2 id="call-audio-title">Звук звонков</h2>
+            <h3 id="call-audio-title">Звонки и микрофон</h3>
             <label for="audio-profile">Режим микрофона</label>
             <select id="audio-profile" aria-describedby="audio-profile-description audio-profile-status">
               <option value="normal">Обычный</option>
@@ -191,20 +217,19 @@
             </select>
             <p id="audio-profile-description" class="hint"></p>
             <p id="audio-profile-status">Выберите режим и проверьте микрофон.</p>
-            <button id="audio-profile-test" type="button">Проверить микрофон</button>
-            <p class="hint">В «Студийном» и «Музыке» лучше использовать наушники: без эхоподавления динамики могут снова попасть в микрофон. Стерео и 48 кГц включаются только если их реально даёт устройство и браузер.</p>
+            <button id="audio-profile-test" class="button-with-icon" data-icon="mic" type="button">Проверить микрофон</button>
           </section>
 
           <section class="card" aria-labelledby="sessions-title">
-            <h2 id="sessions-title">Устройства и сессии</h2>
-            <p>Каждый вход получает отдельную сессию. Любую из них можно завершить.</p>
+            <h3 id="sessions-title">Устройства</h3>
+            <p class="hint">Здесь можно завершить вход на любом устройстве.</p>
             <div id="sessions"></div>
-            <button id="refresh-sessions" type="button">Обновить список сессий</button>
+            <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить устройства</button>
           </section>
 
           <section id="invite-card" class="card" aria-labelledby="invite-title" hidden>
-            <h2 id="invite-title">Новое приглашение</h2>
-            <p>Доступно владельцу и администратору. Каждый код одноразовый.</p>
+            <h3 id="invite-title">Приглашение</h3>
+            <p class="hint">Одноразовый код для нового пользователя.</p>
             <form id="invite-form" class="form-stack">
               <label>
                 Сколько часов действует код
@@ -213,20 +238,36 @@
               <button type="submit">Создать приглашение</button>
             </form>
             <div id="new-invite" class="result-box" hidden>
-              <p><strong>Скопируй код сейчас. Второй раз сервер его не покажет.</strong></p>
+              <p><strong>Скопируйте код сейчас. Второй раз сервер его не покажет.</strong></p>
               <code id="new-invite-code"></code>
             </div>
           </section>
         </div>
-      </details>
+
+        <details class="developer-details">
+          <summary>Диагностика для тестирования</summary>
+          <section class="diagnostics-panel" aria-labelledby="health-title">
+            <h3 id="health-title">Состояние сервиса</h3>
+            <p>Worker: <strong id="worker-status">проверяется…</strong></p>
+            <p>Хранилище: <strong id="storage-status">проверяется…</strong></p>
+            <dl class="details-list compact-details">
+              <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
+              <div><dt>Роль</dt><dd id="account-role"></dd></div>
+            </dl>
+            <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
+          </section>
+        </details>
+      </dialog>
     </section>
 
-    <section class="status-card" aria-labelledby="status-title">
-      <h2 id="status-title" class="visually-hidden">Что происходит</h2>
-      <p id="live-status" class="live-status" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
-    </section>
+    <p id="live-status" class="visually-hidden" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
   </main>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module">
+    import { setupInterface } from "/js/ui.js";
+    setupInterface();
+    document.querySelector("#logout")?.addEventListener("click", () => document.querySelector("#settings-dialog")?.close?.());
+    await import("/app.js");
+  </script>
 </body>
 </html>
