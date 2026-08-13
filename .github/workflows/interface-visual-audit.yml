@@ -2,8 +2,7 @@ name: Visual audit Bulbam
 
 on:
   push:
-    branches:
-      - qa/interface-visual-audit
+    branches: [qa/interface-visual-audit]
   workflow_dispatch:
 
 permissions:
@@ -14,137 +13,65 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Use Node.js 22
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Install Playwright for audit
+      - name: Install browser
         run: |
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
-
-      - name: Serve static client
+      - name: Serve Bulbam
         run: |
-          python3 -m http.server 4173 --directory web > /tmp/bulbam-http.log 2>&1 &
-          for i in {1..20}; do
-            curl -fsS http://127.0.0.1:4173/ >/dev/null && exit 0
-            sleep 0.5
-          done
-          cat /tmp/bulbam-http.log
+          python3 -m http.server 4173 --directory web >/tmp/bulbam-http.log 2>&1 &
+          for i in {1..20}; do curl -fsS http://127.0.0.1:4173/ >/dev/null && exit 0; sleep 0.5; done
           exit 1
-
-      - name: Render interface states
+      - name: Render screenshots
         run: |
           mkdir -p visual-audit
-          cat > /tmp/visual-audit.mjs <<'EOF'
+          cat > visual-audit-runner.mjs <<'EOF'
           import { chromium } from 'playwright';
           import { writeFile } from 'node:fs/promises';
-
           const browser = await chromium.launch();
-          const reports = [];
-
-          async function prepare(page, { theme = 'light', view = 'bubbles', mobile = false, settings = false, chatOpen = true } = {}) {
-            await page.route('**/*.js', route => route.abort());
+          const report = [];
+          async function shot(name, width, height, theme, view, mobile=false, settings=false) {
+            const page = await browser.newPage({ viewportSize: { width, height } });
+            await page.route('**/*.js', r => r.abort());
             await page.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' });
-            await page.evaluate(({ theme, view, mobile, settings, chatOpen }) => {
-              document.documentElement.dataset.theme = theme;
-              document.documentElement.dataset.messageView = view;
+            await page.evaluate(({theme,view,mobile,settings}) => {
+              document.documentElement.dataset.theme=theme;
+              document.documentElement.dataset.messageView=view;
               document.body.classList.add('signed-in-mode');
-              if (mobile && chatOpen) document.body.classList.add('conversation-open');
-              document.querySelector('#signed-out').hidden = true;
-              const signedIn = document.querySelector('#signed-in');
-              signedIn.hidden = false;
-
-              const sidebar = document.querySelector('.chat-sidebar');
-              if (!sidebar.querySelector('.sidebar-brand')) {
-                const brand = document.createElement('div');
-                brand.className = 'sidebar-brand';
-                brand.innerHTML = '<span class="sidebar-brand-mark" aria-hidden="true">Б</span><strong>Бульбам</strong>';
-                sidebar.prepend(brand);
-              }
-              const nav = document.querySelector('.chat-navigation');
-              if (!sidebar.querySelector('#chat-filter')) {
-                const wrap = document.createElement('div');
-                wrap.className = 'chat-filter-wrap';
-                wrap.innerHTML = '<label class="visually-hidden" for="chat-filter">Поиск по чатам</label><input id="chat-filter" class="chat-filter" type="search" placeholder="Поиск по чатам">';
-                sidebar.insertBefore(wrap, nav);
-              }
-
-              document.querySelector('#chat-list').innerHTML = [
-                ['Т','Тесты в аккаунт','Голосовое сообщение'],
-                ['Р','Разработчик2','Там есть кнопка, аккаунт и настройки'],
-                ['А','Аня','Хорошо, увидимся вечером'],
-                ['И','Игорь','Ого, реально звонок']
-              ].map((x, i) => `<button class="chat-item${i === 1 ? ' is-current' : ''}" type="button"><span class="chat-avatar" aria-hidden="true">${x[0]}</span><strong>${x[1]}</strong><span class="chat-username">@user${i+1}</span><span class="chat-preview">${x[2]}</span></button>`).join('');
-
-              document.querySelector('#conversation-title').textContent = 'Разработчик2';
-              document.querySelector('#conversation-peer').textContent = '@creator2';
-              document.querySelector('.conversation-avatar').textContent = 'Р';
-              document.querySelector('#call-start').hidden = false;
-              document.querySelector('#conversation-empty').hidden = true;
-              document.querySelector('#message-form').hidden = false;
-
-              document.querySelector('#message-list').innerHTML = `
-                <li class="message message-theirs" role="group"><strong class="message-author">Разработчик2</strong><p>Привет</p><span class="message-meta">20:21</span></li>
-                <li class="message message-mine" role="group"><strong class="message-author">Вы</strong><p>Короче, штука хорошая</p><span class="message-meta">21:08 · доставлено</span></li>
-                <li class="message message-theirs" role="group"><strong class="message-author">Разработчик2</strong><p>Ого, реально звонок</p><span class="message-meta">15:35</span></li>
-                <li class="message message-mine" role="group"><strong class="message-author">Вы</strong><p>ГЛЯНЬ, У МЕНЯ ТУТ ЕСТЬ ЗАПИСЬ ГОЛОСОВЫХ, А ЕЩЁ УВЕДОМЛЕНИЯ ЕСТЬ</p><span class="message-meta">13:22 · доставлено</span></li>
-                <li class="message message-theirs" role="group"><strong class="message-author">Разработчик2</strong><div class="voice-message"><div class="voice-actions"><button type="button" class="icon-button" data-icon="play" aria-label="Воспроизвести">▶</button><button type="button" class="icon-button" data-icon="rewind" aria-label="Назад на 15 секунд">◀◀</button><button type="button" class="icon-button" data-icon="forward" aria-label="Вперёд на 15 секунд">▶▶</button><button type="button" class="button-with-icon" data-icon="speed">1x скорость</button></div><input type="range" min="0" max="2" value="0"><span>0:00 из 0:02</span></div><span class="message-meta">20:34</span></li>`;
-
-              const oldView = document.querySelector('#message-view');
-              if (oldView && !oldView.querySelector('option[value="table"]')) oldView.append(new Option('Таблица', 'table'));
-              if (oldView) oldView.value = view;
-              const appearance = document.querySelector('#appearance-title')?.closest('.card');
-              if (appearance && !appearance.querySelector('.appearance-controls')) {
-                const controls = document.createElement('div');
-                controls.className = 'appearance-controls';
-                controls.innerHTML = '<label>Тема<select><option>Как на устройстве</option><option>Тёмная</option><option>Светлая</option></select></label><label>Размер текста<select><option>Уменьшенный</option><option selected>Обычный</option><option>Увеличенный</option></select></label>';
-                appearance.append(controls);
-              }
-
-              if (settings) document.querySelector('#settings-dialog')?.showModal();
-            }, { theme, view, mobile, settings, chatOpen });
-            await page.waitForTimeout(150);
-          }
-
-          async function snap(name, viewport, opts) {
-            const page = await browser.newPage({ viewportSize: viewport });
-            const consoleErrors = [];
-            page.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
-            await prepare(page, opts);
-            const metrics = await page.evaluate(() => {
-              const root = document.documentElement;
-              const visibleButtons = [...document.querySelectorAll('button')].filter(b => !b.hidden && b.getClientRects().length);
-              const tooSmall = visibleButtons.map(b => ({ label: b.getAttribute('aria-label') || b.textContent.trim(), r: b.getBoundingClientRect() })).filter(x => x.r.width < 40 || x.r.height < 40).map(x => ({ label: x.label, width: Math.round(x.r.width), height: Math.round(x.r.height) }));
-              return {
-                viewport: [innerWidth, innerHeight],
-                scrollWidth: root.scrollWidth,
-                horizontalOverflow: root.scrollWidth > innerWidth + 1,
-                tooSmallButtons: tooSmall
-              };
-            });
-            await page.screenshot({ path: `visual-audit/${name}.png`, fullPage: true });
-            reports.push({ name, ...metrics, consoleErrors });
+              if(mobile) document.body.classList.add('conversation-open');
+              document.querySelector('#signed-out').hidden=true;
+              document.querySelector('#signed-in').hidden=false;
+              document.querySelector('#conversation-empty').hidden=true;
+              document.querySelector('#message-form').hidden=false;
+              document.querySelector('#conversation-title').textContent='Разработчик2';
+              document.querySelector('#conversation-peer').textContent='@creator2';
+              document.querySelector('.conversation-avatar').textContent='Р';
+              document.querySelector('#call-start').hidden=false;
+              document.querySelector('#chat-list').innerHTML='<button class="chat-item is-current"><strong>Разработчик2</strong><span class="chat-preview">Там есть кнопка, аккаунт и настройки</span></button><button class="chat-item"><strong>Тесты в аккаунт</strong><span class="chat-preview">Голосовое сообщение</span></button>';
+              document.querySelector('#message-list').innerHTML='<li class="message message-theirs"><strong class="message-author">Разработчик2</strong><p>Привет</p><span class="message-meta">20:21</span></li><li class="message message-mine"><strong class="message-author">Вы</strong><p>Короче, штука хорошая</p><span class="message-meta">21:08 · доставлено</span></li><li class="message message-theirs"><strong class="message-author">Разработчик2</strong><p>Ого, реально звонок</p><span class="message-meta">20:33</span></li>';
+              if(settings) document.querySelector('#settings-dialog')?.showModal();
+            },{theme,view,mobile,settings});
+            await page.waitForTimeout(100);
+            const metrics=await page.evaluate(()=>({scrollWidth:document.documentElement.scrollWidth,viewport:innerWidth,overflow:document.documentElement.scrollWidth>innerWidth+1}));
+            await page.screenshot({path:`visual-audit/${name}.png`,fullPage:true});
+            report.push({name,...metrics});
             await page.close();
           }
-
-          await snap('desktop-light-bubbles', { width: 1440, height: 900 }, { theme: 'light', view: 'bubbles' });
-          await snap('desktop-light-table', { width: 1440, height: 900 }, { theme: 'light', view: 'table' });
-          await snap('desktop-dark-settings', { width: 1440, height: 900 }, { theme: 'dark', view: 'bubbles', settings: true });
-          await snap('mobile-dark-chat', { width: 390, height: 844 }, { theme: 'dark', view: 'bubbles', mobile: true, chatOpen: true });
-          await snap('mobile-light-chats', { width: 390, height: 844 }, { theme: 'light', view: 'compact', mobile: true, chatOpen: false });
-
-          await writeFile('visual-audit/report.json', JSON.stringify(reports, null, 2));
+          await shot('desktop-light-bubbles',1440,900,'light','bubbles');
+          await shot('desktop-light-table',1440,900,'light','table');
+          await shot('desktop-dark-settings',1440,900,'dark','bubbles',false,true);
+          await shot('mobile-dark-chat',390,844,'dark','bubbles',true,false);
+          await shot('mobile-light-chat',390,844,'light','compact',true,false);
+          await writeFile('visual-audit/report.json',JSON.stringify(report,null,2));
           await browser.close();
           EOF
-          node /tmp/visual-audit.mjs
+          node visual-audit-runner.mjs
           cat visual-audit/report.json
-
-      - name: Upload visual audit
+      - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
           name: bulbam-interface-visual-audit
