@@ -165,10 +165,9 @@ export class VoiceMessageService {
     const object = await this.storage.read(message.voice.objectKey, requestHeaders);
     if (!object) notFound("voice_media_not_found", "Аудиоданные голосового сообщения не найдены.");
     const headers = new Headers(object.headers);
-    // Authentication belongs to the current Bulbam account, while the browser HTTP
-    // cache is origin-wide. Keep automatic HTTP caching off and let the explicit
-    // per-account Cache Storage layer decide what may remain locally.
-    headers.set("cache-control", "private, no-store");
+    // Range-prefetch benefits from the browser HTTP cache, but a cached authenticated
+    // voice response must not be reused under a different Bulbam session cookie.
+    headers.set("vary", appendVary(headers.get("vary"), "Cookie"));
     return new Response(object.body, { status: object.status, headers });
   }
 
@@ -253,4 +252,13 @@ function uploadView(session: {
     sizeBytes: session.sizeBytes,
     chunkCount: session.chunkCount
   };
+}
+
+function appendVary(current: string | null, value: string): string {
+  const fields = (current ?? "")
+    .split(",")
+    .map((field) => field.trim())
+    .filter(Boolean);
+  if (!fields.some((field) => field.toLowerCase() === value.toLowerCase())) fields.push(value);
+  return fields.join(", ");
 }
