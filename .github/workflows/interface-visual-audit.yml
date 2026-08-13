@@ -35,7 +35,8 @@ jobs:
           const browser = await chromium.launch();
           const report = [];
           async function shot(name, width, height, theme, view, mobile=false, settings=false) {
-            const page = await browser.newPage({ viewportSize: { width, height } });
+            const context = await browser.newContext({ viewport: { width, height } });
+            const page = await context.newPage();
             await page.route('**/*.js', r => r.abort());
             await page.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' });
             await page.evaluate(({theme,view,mobile,settings}) => {
@@ -59,7 +60,7 @@ jobs:
             const metrics=await page.evaluate(()=>({scrollWidth:document.documentElement.scrollWidth,viewport:innerWidth,overflow:document.documentElement.scrollWidth>innerWidth+1}));
             await page.screenshot({path:`visual-audit/${name}.png`,fullPage:true});
             report.push({name,...metrics});
-            await page.close();
+            await context.close();
           }
           await shot('desktop-light-bubbles',1440,900,'light','bubbles');
           await shot('desktop-light-table',1440,900,'light','table');
