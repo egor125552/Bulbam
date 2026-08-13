@@ -49,10 +49,81 @@ export const elements = {
 const VOICE_BUFFERING_MESSAGE = "Буферизация голосового сообщения.";
 const VOICE_RESUMED_MESSAGE = "Воспроизведение голосового продолжено.";
 const BUFFERING_ANNOUNCE_DELAY_MS = 350;
+const MESSAGE_VIEW_KEY = "bulbam.ui.messageView";
 
 let currentAccount = null;
 let currentSession = null;
 let bufferingAnnouncementTimer = null;
+let interfaceObserver = null;
+
+export function setupInterface() {
+  const settingsButton = document.querySelector("#settings-button");
+  const settingsDialog = document.querySelector("#settings-dialog");
+  const settingsClose = document.querySelector("#settings-close");
+  const messageView = document.querySelector("#message-view");
+  const backButton = document.querySelector("#conversation-back");
+
+  const storedView = readMessageView();
+  document.documentElement.dataset.messageView = storedView;
+  if (messageView) {
+    messageView.value = storedView;
+    messageView.addEventListener("change", () => {
+      const value = messageView.value === "compact" ? "compact" : "bubbles";
+      document.documentElement.dataset.messageView = value;
+      try { localStorage.setItem(MESSAGE_VIEW_KEY, value); } catch {}
+      announce(value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
+    });
+  }
+
+  settingsButton?.addEventListener("click", () => {
+    settingsDialog?.showModal?.();
+    document.querySelector("#settings-title")?.focus();
+  });
+  settingsClose?.addEventListener("click", () => {
+    settingsDialog?.close?.();
+    settingsButton?.focus();
+  });
+
+  backButton?.addEventListener("click", () => {
+    document.body.classList.remove("conversation-open");
+    document.querySelector("#chats-title")?.focus();
+  });
+  window.addEventListener("bulbam:chat-changed", (event) => {
+    document.body.classList.toggle("conversation-open", Boolean(event.detail?.chat));
+  });
+
+  const syncComposer = () => document.body.classList.toggle("composer-has-text", Boolean(elements.messageInput?.value.trim()));
+  elements.messageInput?.addEventListener("input", syncComposer);
+  elements.messageForm?.addEventListener("submit", () => queueMicrotask(syncComposer));
+  syncComposer();
+
+  const decorate = () => {
+    const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
+    if (elements.callMuteButton) elements.callMuteButton.dataset.icon = muted ? "mic-off" : "mic";
+    for (const button of document.querySelectorAll(".voice-actions button")) {
+      const text = button.textContent.trim();
+      if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
+        button.classList.add("icon-button");
+        button.dataset.icon = text === "Пауза" ? "pause" : "play";
+      } else if (text === "Назад на 15 секунд") {
+        button.classList.add("icon-button");
+        button.dataset.icon = "rewind";
+        button.setAttribute("aria-label", text);
+      } else if (text === "Вперёд на 15 секунд") {
+        button.classList.add("icon-button");
+        button.dataset.icon = "forward";
+        button.setAttribute("aria-label", text);
+      } else if (/скорость$/i.test(text)) {
+        button.classList.add("button-with-icon");
+        button.dataset.icon = "speed";
+      }
+    }
+  };
+  decorate();
+  interfaceObserver?.disconnect();
+  interfaceObserver = new MutationObserver(decorate);
+  interfaceObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+}
 
 export function announce(message) {
   if (message === VOICE_BUFFERING_MESSAGE) {
@@ -93,6 +164,7 @@ export function showSignedOut() {
   elements.signedIn.hidden = true;
   elements.inviteCard.hidden = true;
   elements.sessionsRoot.replaceChildren();
+  document.body.classList.remove("conversation-open");
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account: null } }));
 }
 
@@ -107,4 +179,12 @@ export function showSignedIn(account, session) {
   document.querySelector("#account-role").textContent = account.role;
   elements.inviteCard.hidden = !["owner", "admin"].includes(account.role);
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account } }));
+}
+
+function readMessageView() {
+  try {
+    return localStorage.getItem(MESSAGE_VIEW_KEY) === "compact" ? "compact" : "bubbles";
+  } catch {
+    return "bubbles";
+  }
 }
