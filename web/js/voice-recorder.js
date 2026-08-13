@@ -30,6 +30,7 @@ let draftDeleteButton = null;
 let recordingStatus = null;
 let recordingTimer = null;
 let current = null;
+let starting = false;
 let recoverableDraft = null;
 let optionTimer = null;
 let optionBlocked = false;
@@ -94,6 +95,7 @@ function observeCallPanel() {
 }
 
 async function toggleButtonRecording() {
+  if (starting) return;
   if (current) {
     await stopAndSend();
     return;
@@ -104,125 +106,180 @@ async function toggleButtonRecording() {
 async function startRecording(trigger) {
   const account = getCurrentAccount();
   const chat = getSelectedChat();
-  if (!account || !chat || current) return;
-  const callPanel = document.querySelector("#call-panel");
-  if (callPanel && !callPanel.hidden) {
-    announce("Во время активного звонка запись голосового недоступна.");
-    await playVoiceCue("error");
-    return;
-  }
-  if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
-    announce("Этот браузер не умеет записывать голосовые сообщения.");
-    await playVoiceCue("error");
-    return;
-  }
+  if (!account || !chat || current || starting) return;
 
-  const mimeType = chooseOpusMimeType();
-  if (!mimeType) {
-    announce("Браузер не умеет записывать Opus для голосовых сообщений.");
-    await playVoiceCue("error");
-    return;
-  }
+  starting = true;
+  setStartingUi(true);
+  const expectedAccountId = account.userId;
+  const expectedConversationId = chat.conversationId;
+  let stream = null;
+  let localId = null;
 
-  const bitrateBps = getVoiceBitrate();
-  let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      }
-    });
-    await enforceRawCapture(stream);
-    if (trigger === "option" && (!optionHeld || optionBlocked)) {
-      stream.getTracks().forEach((track) => track.stop());
+    if (isCallActive()) {
+      announce("Во время активного звонка запись голосового недоступна.");
+      await playVoiceCue("error");
       return;
     }
-  } catch (error) {
-    announce(`Не удалось включить микрофон без обработки: ${error.message}`);
-    await playVoiceCue("error");
-    stream?.getTracks().forEach((track) => track.stop());
-    return;
-  }
+    if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
+      announce("Этот браузер не умеет записывать голосовые сообщения.");
+      await playVoiceCue("error");
+      return;
+    }
 
-  const localId = randomId();
-  const draft = {
-    id: localId,
-    accountId: account.userId,
-    conversationId: chat.conversationId,
-    clientMessageId: randomId(),
-    mimeType,
-    bitrateBps,
-    startedAt: Date.now(),
-    lastChunkAt: Date.now(),
-    totalBytes: 0,
-    sequence: 0,
-    state: "recording",
-    upload: null,
-    interruptionReason: null
-  };
+    const mimeType = chooseOpusMimeType();
+    if (!mimeType) {
+      announce("Браузер не умеет записывать Opus для голосовых сообщений.");
+      await playVoiceCue("error");
+      return;
+    }
 
-  try {
-    await createVoiceDraft(draft);
-  } catch (error) {
-    stream.getTracks().forEach((track) => track.stop());
-    announce(`Не удалось подготовить надёжное хранение записи: ${error.message}`);
-    await playVoiceCue("error");
-    return;
-  }
+    const bitrateBps = getVoiceBitrate();
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+      await enforceRawCapture(stream);
+    } catch (error) {
+      announce(`Не удалось включить микрофон без обработки: ${error.message}`);
+      await playVoiceCue("error");
+      stream?.getTracks().forEach((track) => track.stop());
+      stream = null;
+      return;
+    }
 
-  let recorder;
-  try {
-    recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: bitrateBps });
-  } catch (error) {
-    stream.getTracks().forEach((track) => track.stop());
-    await deleteVoiceDraft(localId).catch(() => undefined);
-    announce(`Не удалось запустить запись Opus: ${error.message}`);
-    await playVoiceCue("error");
-    return;
-  }
+    if (!canFinishStarting(expectedAccountId, expectedConversationId, trigger, stream)) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      announce("Запись не началась: чат, аккаунт, звонок или состояние клавиши изменились во время запуска.");
+      await playVoiceCue("error");
+      return;
+    }
 
-  const state = {
-    draft,
-    recorder,
-    stream,
-    trigger,
-    stopMode: null,
-    dataQueue: Promise.resolve(),
-    uploadQueue: Promise.resolve(),
-    uploadPromise: null,
-    transport: null,
-    finishing: false
-  };
-  current = state;
+    localId = randomId();
+    const draft = {
+      id: localId,
+      accountId: expectedAccountId,
+      conversationId: expectedConversationId,
+      clientMessageId: randomId(),
+      mimeType,
+      bitrateBps,
+      startedAt: Date.now(),
+      lastChunkAt: Date.now(),
+      totalBytes: 0,
+      sequence: 0,
+      state: "recording",
+      upload: null,
+      interruptionReason: null
+    };
 
-  recorder.addEventListener("dataavailable", (event) => {
-    if (!event.data?.size) return;
-    state.dataQueue = state.dataQueue.then(() => persistChunk(state, event.data));
-  });
-  recorder.addEventListener("error", () => void interruptRecording("Ошибка записи микрофона."));
-  recorder.addEventListener("stop", () => void finishStoppedRecorder(state));
-  for (const track of stream.getAudioTracks()) {
-    track.addEventListener("ended", () => {
-      if (current === state && !state.stopMode) void interruptRecording("Микрофон был отключён системой.");
+    try {
+      await createVoiceDraft(draft);
+    } catch (error) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      announce(`Не удалось подготовить надёжное хранение записи: ${error.message}`);
+      await playVoiceCue("error");
+      return;
+    }
+
+    let recorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: bitrateBps });
+    } catch (error) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      await deleteVoiceDraft(localId).catch(() => undefined);
+      localId = null;
+      announce(`Не удалось запустить запись Opus: ${error.message}`);
+      await playVoiceCue("error");
+      return;
+    }
+
+    const state = {
+      draft,
+      recorder,
+      stream,
+      trigger,
+      stopMode: null,
+      dataQueue: Promise.resolve(),
+      uploadQueue: Promise.resolve(),
+      uploadPromise: null,
+      transport: null,
+      finishing: false
+    };
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (!event.data?.size) return;
+      state.dataQueue = state.dataQueue.then(() => persistChunk(state, event.data));
     });
-  }
+    recorder.addEventListener("error", () => void interruptRecording("Ошибка записи микрофона."));
+    recorder.addEventListener("stop", () => void finishStoppedRecorder(state));
+    for (const track of stream.getAudioTracks()) {
+      track.addEventListener("ended", () => {
+        if (current === state && !state.stopMode) void interruptRecording("Микрофон был отключён системой.");
+      });
+    }
 
-  await playVoiceCue("start");
-  if (trigger === "option" && (!optionHeld || optionBlocked)) {
-    stream.getTracks().forEach((track) => track.stop());
-    await deleteVoiceDraft(localId).catch(() => undefined);
-    if (current === state) current = null;
-    return;
-  }
+    await playVoiceCue("start");
+    if (!canFinishStarting(expectedAccountId, expectedConversationId, trigger, stream)) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      await deleteVoiceDraft(localId).catch(() => undefined);
+      localId = null;
+      announce("Запись не началась: контекст изменился во время стартового сигнала.");
+      await playVoiceCue("error");
+      return;
+    }
 
-  recorder.start(1000);
-  void ensureUploadSession(state);
-  setRecordingUi(true, draft.startedAt);
-  announce(trigger === "option"
-    ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
-    : "Запись голосового началась. Нажми кнопку ещё раз, чтобы отправить.");
+    current = state;
+    try {
+      recorder.start(1000);
+    } catch (error) {
+      if (current === state) current = null;
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      await deleteVoiceDraft(localId).catch(() => undefined);
+      localId = null;
+      announce(`Не удалось начать запись: ${error.message}`);
+      await playVoiceCue("error");
+      return;
+    }
+
+    localId = null;
+    stream = null;
+    void ensureUploadSession(state);
+    setRecordingUi(true, draft.startedAt);
+    announce(trigger === "option"
+      ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
+      : "Запись голосового началась. Нажми кнопку ещё раз, чтобы отправить.");
+  } finally {
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    if (localId) await deleteVoiceDraft(localId).catch(() => undefined);
+    starting = false;
+    setStartingUi(false);
+    void refreshRecoverableDraft();
+  }
+}
+
+function canFinishStarting(expectedAccountId, expectedConversationId, trigger, stream) {
+  const account = getCurrentAccount();
+  const chat = getSelectedChat();
+  const hasLiveTrack = stream?.getAudioTracks?.().some((track) => track.readyState !== "ended") === true;
+  if (!account || account.userId !== expectedAccountId) return false;
+  if (!chat || chat.conversationId !== expectedConversationId) return false;
+  if (isCallActive() || !hasLiveTrack) return false;
+  if (trigger === "option" && (!optionHeld || optionBlocked)) return false;
+  return true;
+}
+
+function isCallActive() {
+  const callPanel = document.querySelector("#call-panel");
+  return Boolean(callPanel && !callPanel.hidden);
 }
 
 async function persistChunk(state, blob) {
@@ -488,7 +545,7 @@ async function abortRemoteUpload(draft) {
 }
 
 async function refreshRecoverableDraft() {
-  if (current) return;
+  if (starting || current) return;
   const account = getCurrentAccount();
   const chat = getSelectedChat();
   if (!account || !chat) {
@@ -536,6 +593,18 @@ function hideDraftPanel() {
   if (draftPanel) draftPanel.hidden = true;
 }
 
+function setStartingUi(active) {
+  if (!recordButton) return;
+  recordButton.disabled = active;
+  recordButton.setAttribute("aria-busy", String(active));
+  if (active) {
+    recordButton.textContent = "Подготавливаю запись";
+    recordButton.setAttribute("aria-label", "Подготавливается запись голосового сообщения");
+    return;
+  }
+  if (!current) setRecordingUi(false);
+}
+
 function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date.now()) {
   if (!recordButton) return;
   recordButton.textContent = recording ? "Отправить голосовое" : "Записать голосовое";
@@ -575,13 +644,13 @@ function handleOptionKeyDown(event) {
 
   optionHeld = true;
   void prepareVoiceCues();
-  if (event.repeat || current || isEditable(event.target)) return;
+  if (event.repeat || current || starting || isEditable(event.target)) return;
   optionBlocked = event.ctrlKey || event.metaKey || event.shiftKey;
   if (optionBlocked || !getSelectedChat()) return;
   clearOptionTimer();
   optionTimer = setTimeout(() => {
     optionTimer = null;
-    if (!optionBlocked && optionHeld && !current) void startRecording("option");
+    if (!optionBlocked && optionHeld && !current && !starting) void startRecording("option");
   }, OPTION_HOLD_DELAY_MS);
 }
 
