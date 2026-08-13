@@ -9,6 +9,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -265,7 +266,9 @@
 
   <script type="module">
     import { setupInterface } from "/js/ui.js";
+    import { setupCanonicalInterface } from "/js/canonical-interface.js";
     setupInterface();
+    setupCanonicalInterface();
     document.querySelector("#logout")?.addEventListener("click", () => document.querySelector("#settings-dialog")?.close?.());
     await import("/app.js");
   </script>
