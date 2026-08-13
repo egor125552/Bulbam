@@ -5,6 +5,7 @@ const originalWindow = globalThis.window;
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.resetModules();
   if (originalDocument === undefined) delete globalThis.document;
   else globalThis.document = originalDocument;
   if (originalWindow === undefined) delete globalThis.window;
@@ -50,6 +51,7 @@ async function loadUi() {
     }
   };
   globalThis.window = { dispatchEvent() {} };
-  const module = await import(`../web/js/ui.js?voice-buffer-test=${Date.now()}-${Math.random()}`);
+  vi.resetModules();
+  const module = await import("../web/js/ui.js");
   return { announce: module.announce, liveStatus };
 }
