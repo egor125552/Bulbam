@@ -1,3 +1,5 @@
+const responseObservers = new Set();
+
 export async function api(path, options = {}) {
   const response = await fetch(path, {
     cache: "no-store",
@@ -24,7 +26,28 @@ export async function api(path, options = {}) {
     throw error;
   }
 
+  notifyResponseObservers({
+    path,
+    method: String(options.method || "GET").toUpperCase(),
+    payload
+  });
   return payload;
+}
+
+export function observeApiResponses(observer) {
+  if (typeof observer !== "function") return () => undefined;
+  responseObservers.add(observer);
+  return () => responseObservers.delete(observer);
+}
+
+function notifyResponseObservers(event) {
+  for (const observer of responseObservers) {
+    try {
+      observer(event);
+    } catch {
+      // Observability helpers must never break the API request that produced the response.
+    }
+  }
 }
 
 export function deviceName() {

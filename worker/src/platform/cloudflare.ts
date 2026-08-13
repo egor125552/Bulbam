@@ -28,7 +28,11 @@ export interface D1Database {
 export interface DurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T): Promise<void>;
+  put(entries: Record<string, unknown>): Promise<void>;
   delete(key: string): Promise<boolean>;
+  deleteAll(): Promise<void>;
+  setAlarm(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm(): Promise<void>;
 }
 
 export interface DurableObjectStub {
@@ -58,6 +62,7 @@ export interface Env {
   DB?: D1Database;
   REALTIME?: DurableObjectNamespace;
   CALL_ROOM?: DurableObjectNamespace;
+  VOICE_UPLOAD?: DurableObjectNamespace;
   DEBUG_ERRORS?: string;
   SMOKE_SECRET?: string;
   VAPID_PUBLIC_KEY?: string;

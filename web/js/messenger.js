@@ -1,5 +1,13 @@
 import { api } from "./api.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
+import {
+  applyRemoteVoiceProgress,
+  captureVoicePlaybackState,
+  renderVoiceMessage,
+  resetVoicePlayers,
+  restoreVoicePlaybackState,
+  setVoiceMessageSequence
+} from "./voice-player.js";
 
 let account = null;
 let chats = [];
@@ -37,17 +45,32 @@ export function setupMessenger() {
   });
 }
 
+export function getSelectedChat() {
+  return selectedChat;
+}
+
+export function acceptExternalMessage(message) {
+  if (!message || message.conversationId !== selectedChat?.conversationId) return;
+  upsertServerMessage(message);
+}
+
+export async function refreshChatsAfterExternalMessage() {
+  await loadChats({ quiet: true });
+}
+
 async function switchAccount(nextAccount) {
   generation += 1;
   account = nextAccount;
   chats = [];
   selectedChat = null;
   messages = [];
+  resetVoicePlayers();
   stopRealtime();
   stopPolling();
   closeSearchPanel();
   renderChats();
   renderConversation();
+  window.dispatchEvent(new CustomEvent("bulbam:chat-changed", { detail: { chat: null } }));
 
   if (!account) return;
   const currentGeneration = generation;
@@ -194,8 +217,10 @@ function renderChats() {
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
   messages = [];
+  resetVoicePlayers();
   renderChats();
   renderConversation();
+  window.dispatchEvent(new CustomEvent("bulbam:chat-changed", { detail: { chat } }));
   await loadMessages({ quiet: false });
   if (focusHeading) elements.conversationTitle.focus();
 }
@@ -214,7 +239,7 @@ async function loadMessages({ quiet = false } = {}) {
         messages.push(local);
       }
     }
-    renderMessages();
+    renderMessages({ preserveVoicePlayback: true });
     void acknowledgeIncomingMessages(conversationId, serverMessages);
   } catch (error) {
     if (!quiet) announce(`Не удалось загрузить сообщения: ${error.message}`);
@@ -223,6 +248,7 @@ async function loadMessages({ quiet = false } = {}) {
 
 function renderConversation() {
   const chat = selectedChat;
+  resetVoicePlayers();
   elements.messageList.replaceChildren();
   if (!account || !chat) {
     elements.conversationTitle.textContent = "Выберите чат";
@@ -239,7 +265,10 @@ function renderConversation() {
   renderMessages();
 }
 
-function renderMessages() {
+function renderMessages({ preserveVoicePlayback = false } = {}) {
+  const playbackState = preserveVoicePlayback ? captureVoicePlaybackState() : [];
+  const focusState = preserveVoicePlayback ? captureMessageFocus() : null;
+  resetVoicePlayers();
   elements.messageList.replaceChildren();
   if (!selectedChat) return;
 
@@ -256,13 +285,22 @@ function renderMessages() {
     const item = document.createElement("li");
     const mine = message.senderUserId === account?.userId;
     item.className = `message ${mine ? "message-mine" : "message-theirs"}`;
+    item.dataset.messageId = message.messageId;
     if (message.localState) item.classList.add(`message-${message.localState}`);
 
     const author = document.createElement("span");
     author.className = "message-author";
     author.textContent = mine ? "Вы" : selectedChat.peer.displayName;
-    const body = document.createElement("p");
-    body.textContent = message.text;
+    item.append(author);
+
+    if (message.kind === "voice" && message.voice) {
+      item.append(renderVoiceMessage(message, mine));
+    } else {
+      const body = document.createElement("p");
+      body.textContent = message.text;
+      item.append(body);
+    }
+
     const meta = document.createElement("span");
     meta.className = "message-meta";
     const state = message.localState === "pending"
@@ -275,9 +313,9 @@ function renderMessages() {
             : " · отправлено"
           : "";
     meta.textContent = `${formatTime(message.createdAt)}${state}`;
-    item.append(author, body, meta);
+    item.append(meta);
 
-    if (message.localState === "failed") {
+    if (message.localState === "failed" && message.kind !== "voice") {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "retry-message";
@@ -288,7 +326,10 @@ function renderMessages() {
 
     elements.messageList.append(item);
   }
+  setVoiceMessageSequence(messages);
   elements.messageList.lastElementChild?.scrollIntoView({ block: "nearest" });
+  if (playbackState.length) void restoreVoicePlaybackState(playbackState);
+  if (focusState) restoreMessageFocus(focusState);
 }
 
 async function sendCurrentMessage(event) {
@@ -302,21 +343,23 @@ async function sendCurrentMessage(event) {
     conversationId: selectedChat.conversationId,
     senderUserId: account.userId,
     clientMessageId: randomId(),
+    kind: "text",
     text,
+    voice: null,
     createdAt: Date.now(),
     deliveredAt: null,
     localState: "pending"
   };
   messages.push(pending);
   elements.messageInput.value = "";
-  renderMessages();
+  renderMessages({ preserveVoicePlayback: true });
   await transmitPending(pending);
 }
 
 async function transmitPending(pending) {
   if (!account || !selectedChat || pending.conversationId !== selectedChat.conversationId) return;
   pending.localState = "pending";
-  renderMessages();
+  renderMessages({ preserveVoicePlayback: true });
   try {
     const result = await api(`/api/v1/chats/${pending.conversationId}/messages`, {
       method: "POST",
@@ -330,7 +373,7 @@ async function transmitPending(pending) {
     await loadChats({ quiet: true });
   } catch (error) {
     pending.localState = "failed";
-    renderMessages();
+    renderMessages({ preserveVoicePlayback: true });
     announce(`Сообщение не отправлено: ${error.message}. Можно повторить отправку.`);
   }
 }
@@ -349,7 +392,7 @@ function upsertServerMessage(message) {
     (candidate) => candidate.messageId !== message.messageId && candidate.clientMessageId !== message.clientMessageId
   );
   messages.push(merged);
-  renderMessages();
+  renderMessages({ preserveVoicePlayback: true });
 }
 
 async function acknowledgeIncomingMessages(conversationId, candidates) {
@@ -404,6 +447,8 @@ function connectRealtime() {
       handleRealtimeMessage(payload);
     } else if (payload?.type === "messages.delivered" && Array.isArray(payload.receipts)) {
       handleDeliveredReceipts(payload);
+    } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {
+      handleVoiceProgress(payload);
     }
   });
 
@@ -426,6 +471,13 @@ function handleRealtimeMessage(payload) {
   }
 }
 
+function handleVoiceProgress(payload) {
+  if (selectedChat?.conversationId !== payload.conversationId) return;
+  const message = messages.find((candidate) => candidate.messageId === payload.messageId);
+  if (message?.voice) message.voice.progress = payload.progress;
+  applyRemoteVoiceProgress(payload.messageId, payload.progress, payload.active === true, payload.staleAt);
+}
+
 function handleDeliveredReceipts(payload) {
   const receipts = payload.receipts ?? [];
   if (selectedChat?.conversationId === payload.conversationId) {
@@ -441,7 +493,7 @@ function handleDeliveredReceipts(payload) {
         changed = true;
       }
     }
-    if (changed) renderMessages();
+    if (changed) renderMessages({ preserveVoicePlayback: true });
   }
 
   const chat = chats.find((candidate) => candidate.conversationId === payload.conversationId);
@@ -492,6 +544,36 @@ async function refreshVisibleState() {
   await loadMessages({ quiet: true });
 }
 
+function captureMessageFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const item = active.closest(".message[data-message-id]");
+  if (!item) return null;
+  return {
+    messageId: item.dataset.messageId,
+    tagName: active.tagName,
+    ariaLabel: active.getAttribute("aria-label"),
+    text: active instanceof HTMLButtonElement ? active.textContent : null
+  };
+}
+
+function restoreMessageFocus(state) {
+  if (!state?.messageId) return;
+  const item = [...elements.messageList.querySelectorAll(".message[data-message-id]")]
+    .find((candidate) => candidate.dataset.messageId === state.messageId);
+  if (!item) return;
+  const candidates = item.querySelectorAll("button, input, select, textarea, [tabindex]");
+  for (const candidate of candidates) {
+    if (!(candidate instanceof HTMLElement) || candidate.tagName !== state.tagName) continue;
+    const labelMatches = state.ariaLabel && candidate.getAttribute("aria-label") === state.ariaLabel;
+    const textMatches = state.text && candidate instanceof HTMLButtonElement && candidate.textContent === state.text;
+    if (labelMatches || textMatches) {
+      candidate.focus({ preventScroll: true });
+      return;
+    }
+  }
+}
+
 function oneLine(value) {
   const compact = String(value).replace(/\s+/g, " ").trim();
   return compact.length > 80 ? `${compact.slice(0, 77)}…` : compact;
@@ -508,5 +590,4 @@ function randomId() {
   return crypto.randomUUID ? crypto.randomUUID() : `cm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-// setupMessenger() is called before the initial account request; this keeps hot reload/manual imports sane.
 account = getCurrentAccount();

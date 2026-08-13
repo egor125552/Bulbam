@@ -29,6 +29,10 @@
       {
         "name": "CALL_ROOM",
         "class_name": "CallRoom"
+      },
+      {
+        "name": "VOICE_UPLOAD",
+        "class_name": "VoiceUploadRoom"
       }
     ]
   },
@@ -40,6 +44,10 @@
     {
       "tag": "calls-v1",
       "new_sqlite_classes": ["CallRoom"]
+    },
+    {
+      "tag": "voice-upload-v1",
+      "new_sqlite_classes": ["VoiceUploadRoom"]
     }
   ]
 }

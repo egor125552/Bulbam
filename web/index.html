@@ -15,7 +15,7 @@
 
   <header class="site-header">
     <div>
-      <p class="eyebrow">Bulbam 0.5 · PWA + Push + Calls</p>
+      <p class="eyebrow">Bulbam 0.6 · PWA + Push + Calls + Voice</p>
       <h1>Бульбам</h1>
       <p>Личные чаты, которые не пропадают после перезагрузки.</p>
     </div>
@@ -106,12 +106,23 @@
             <p>Сообщения появятся здесь.</p>
           </div>
 
-          <ol id="message-list" class="message-list" aria-label="Сообщения" role="log"></ol>
+          <ol id="message-list" class="message-list" aria-label="Сообщения"></ol>
 
           <form id="message-form" class="composer" hidden>
+            <div id="voice-draft-panel" class="voice-draft-panel" hidden>
+              <strong>Сохранённое голосовое</strong>
+              <span id="voice-draft-status">Запись была прервана и не отправлена.</span>
+              <div class="voice-draft-actions">
+                <button id="voice-draft-send" type="button">Отправить сохранённое</button>
+                <button id="voice-draft-delete" type="button">Удалить сохранённое</button>
+              </div>
+            </div>
             <label class="visually-hidden" for="message-input">Сообщение</label>
             <textarea id="message-input" name="text" rows="2" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
+            <button id="voice-record-button" type="button" aria-pressed="false" aria-describedby="voice-record-hint">Записать голосовое</button>
+            <span id="voice-recording-status" class="voice-recording-status" aria-live="off" hidden>Запись 0:00</span>
             <button id="send-message" type="submit">Отправить</button>
+            <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы отправить, или Escape, чтобы отменить. На Mac можно удерживать Option.</p>
           </form>
         </section>
       </div>
@@ -149,6 +160,24 @@
             <p id="push-status">Проверяю поддержку уведомлений.</p>
             <button id="push-enable" type="button">Включить уведомления</button>
             <button id="push-disable" type="button" hidden>Отключить уведомления</button>
+          </section>
+
+          <section class="card" aria-labelledby="voice-settings-title">
+            <h2 id="voice-settings-title">Голосовые сообщения</h2>
+            <label for="voice-bitrate">Качество записи</label>
+            <select id="voice-bitrate">
+              <option value="24000">24 кбит/с — экономно</option>
+              <option value="32000">32 кбит/с — обычное</option>
+              <option value="48000">48 кбит/с — хорошее</option>
+              <option value="64000">64 кбит/с — высокое, по умолчанию</option>
+              <option value="96000">96 кбит/с — максимальное</option>
+            </select>
+            <p class="hint">Качество хранится отдельно на каждом устройстве. Запись использует Opus без шумоподавления, эхоподавления и автоматической регулировки громкости.</p>
+            <label class="switch-row">
+              <input id="voice-share-listening" type="checkbox" checked>
+              Показывать собеседникам прослушивание голосовых
+            </label>
+            <p id="voice-settings-status" class="hint" role="status" aria-live="polite"></p>
           </section>
 
           <section class="card" aria-labelledby="call-audio-title">
