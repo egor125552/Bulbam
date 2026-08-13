@@ -1,239 +1,100 @@
 import { announce, elements } from "./ui.js";
-import {
-  normalizeFontScale,
-  normalizeMessageView,
-  normalizeTheme
-} from "./interface-preferences.js";
+import { normalizeFontScale, normalizeMessageView, normalizeTheme } from "./interface-preferences.js";
 
-const MESSAGE_VIEW_KEY = "bulbam.ui.messageView";
-const THEME_KEY = "bulbam.ui.theme";
-const FONT_SCALE_KEY = "bulbam.ui.fontScale";
+const KEYS = {
+  view: "bulbam.ui.messageView",
+  theme: "bulbam.ui.theme",
+  scale: "bulbam.ui.fontScale"
+};
 
-let observer = null;
-let chatFilterValue = "";
+let observer;
+let scheduled = false;
+let filterValue = "";
 
 export function setupCanonicalInterface() {
-  const messageView = replaceMessageViewSelect();
-  const appearance = enhanceAppearanceSettings(messageView);
-  enhanceSidebar();
+  const viewSelect = prepareViewSelect();
+  const appearance = prepareAppearance(viewSelect);
+  prepareSidebar();
 
-  applyMessageView(readPreference(MESSAGE_VIEW_KEY, normalizeMessageView), messageView);
-  applyTheme(readPreference(THEME_KEY, normalizeTheme), appearance.themeSelect);
-  applyFontScale(readPreference(FONT_SCALE_KEY, normalizeFontScale), appearance.fontScaleSelect);
+  applyView(read(KEYS.view, normalizeMessageView), viewSelect);
+  applyTheme(read(KEYS.theme, normalizeTheme), appearance.theme);
+  applyScale(read(KEYS.scale, normalizeFontScale), appearance.scale);
 
-  messageView?.addEventListener("change", () => {
-    const value = normalizeMessageView(messageView.value);
-    applyMessageView(value, messageView);
-    savePreference(MESSAGE_VIEW_KEY, value);
-    const text = value === "compact"
-      ? "Включён компактный список сообщений."
-      : value === "table"
-        ? "Включён табличный вид сообщений. Для экранного диктора сообщения остаются списком."
-        : "Включён вид сообщений пузырьками.";
-    announce(text);
+  viewSelect?.addEventListener("change", () => {
+    const value = normalizeMessageView(viewSelect.value);
+    applyView(value, viewSelect);
+    save(KEYS.view, value);
+    announce(value === "table" ? "Включён табличный вид сообщений." : value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
   });
 
-  appearance.themeSelect?.addEventListener("change", () => {
-    const value = normalizeTheme(appearance.themeSelect.value);
-    applyTheme(value, appearance.themeSelect);
-    savePreference(THEME_KEY, value);
-    announce(value === "system"
-      ? "Тема следует настройке устройства."
-      : value === "dark"
-        ? "Включена тёмная тема."
-        : "Включена светлая тема.");
+  appearance.theme?.addEventListener("change", () => {
+    const value = normalizeTheme(appearance.theme.value);
+    applyTheme(value, appearance.theme);
+    save(KEYS.theme, value);
   });
 
-  appearance.fontScaleSelect?.addEventListener("change", () => {
-    const value = normalizeFontScale(appearance.fontScaleSelect.value);
-    applyFontScale(value, appearance.fontScaleSelect);
-    savePreference(FONT_SCALE_KEY, value);
-    announce(value === "small"
-      ? "Выбран уменьшенный размер текста."
-      : value === "large"
-        ? "Выбран увеличенный размер текста."
-        : "Выбран обычный размер текста.");
+  appearance.scale?.addEventListener("change", () => {
+    const value = normalizeFontScale(appearance.scale.value);
+    applyScale(value, appearance.scale);
+    save(KEYS.scale, value);
   });
 
   window.addEventListener("bulbam:account-changed", (event) => {
     document.body.classList.toggle("signed-in-mode", Boolean(event.detail?.account));
+    scheduleDecorate();
   });
-
-  const colorPreference = window.matchMedia?.("(prefers-color-scheme: dark)");
-  colorPreference?.addEventListener?.("change", () => {
-    if (normalizeTheme(readStorage(THEME_KEY)) === "system") updateThemeColor("system");
-  });
-
-  const decorate = () => {
-    syncComposerState();
-    decorateCallButtons();
-    decorateVoicePlayers();
-    decorateChats();
-    decorateConversationAvatar();
-    decorateMessages();
-    filterChats(chatFilterValue);
-  };
-
-  elements.messageInput?.addEventListener("input", syncComposerState);
-  elements.messageForm?.addEventListener("submit", () => queueMicrotask(syncComposerState));
+  elements.messageInput?.addEventListener("input", syncComposer);
+  elements.messageForm?.addEventListener("submit", () => queueMicrotask(syncComposer));
 
   decorate();
   observer?.disconnect();
-  observer = new MutationObserver(decorate);
-  observer.observe(document.body, {
-    subtree: true,
-    childList: true,
-    characterData: true,
-    attributes: true,
-    attributeFilter: ["aria-pressed", "hidden"]
+  observer = new MutationObserver(scheduleDecorate);
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-pressed"] });
+}
+
+function scheduleDecorate() {
+  if (scheduled) return;
+  scheduled = true;
+  queueMicrotask(() => {
+    scheduled = false;
+    decorate();
   });
 }
 
-function replaceMessageViewSelect() {
-  const oldSelect = document.querySelector("#message-view");
-  if (!oldSelect) return null;
-  const select = oldSelect.cloneNode(true);
-  if (!select.querySelector('option[value="table"]')) {
-    const option = document.createElement("option");
-    option.value = "table";
-    option.textContent = "Таблица";
-    select.append(option);
-  }
-  oldSelect.replaceWith(select);
-  return select;
+function decorate() {
+  syncComposer();
+  decorateChats();
+  decorateConversationAvatar();
+  decorateVoiceButtons();
+  decorateMessages();
+  filterChats();
 }
 
-function enhanceAppearanceSettings(messageView) {
-  const card = document.querySelector("#appearance-title")?.closest(".card");
-  if (!card) return { themeSelect: null, fontScaleSelect: null };
-
-  const hint = card.querySelector(".hint");
-  if (hint) {
-    if (!hint.id) hint.id = "message-view-hint";
-    hint.textContent = "Пузырьки — обычный чат. Компактный список — по принципу Telegram-клиента. Таблица добавляет устойчивые визуальные колонки, но для VoiceOver сохраняется семантика списка сообщений.";
-    messageView?.setAttribute("aria-describedby", hint.id);
-  }
-
-  let controls = card.querySelector(".appearance-controls");
-  if (!controls) {
-    controls = document.createElement("div");
-    controls.className = "appearance-controls";
-
-    const themeLabel = document.createElement("label");
-    themeLabel.htmlFor = "interface-theme";
-    themeLabel.append("Тема");
-    const themeSelect = document.createElement("select");
-    themeSelect.id = "interface-theme";
-    for (const [value, label] of [["system", "Как на устройстве"], ["dark", "Тёмная"], ["light", "Светлая"]]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      themeSelect.append(option);
-    }
-    themeLabel.append(themeSelect);
-
-    const scaleLabel = document.createElement("label");
-    scaleLabel.htmlFor = "interface-font-scale";
-    scaleLabel.append("Размер текста");
-    const scaleSelect = document.createElement("select");
-    scaleSelect.id = "interface-font-scale";
-    for (const [value, label] of [["small", "Уменьшенный"], ["medium", "Обычный"], ["large", "Увеличенный"]]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      scaleSelect.append(option);
-    }
-    scaleLabel.append(scaleSelect);
-
-    controls.append(themeLabel, scaleLabel);
-    card.append(controls);
-  }
-
-  return {
-    themeSelect: controls.querySelector("#interface-theme"),
-    fontScaleSelect: controls.querySelector("#interface-font-scale")
-  };
-}
-
-function enhanceSidebar() {
-  const sidebar = document.querySelector(".chat-sidebar");
-  const heading = document.querySelector(".sidebar-heading");
-  const navigation = document.querySelector(".chat-navigation");
-  if (!sidebar || !heading || !navigation) return;
-
-  if (!sidebar.querySelector(".sidebar-brand")) {
-    const brand = document.createElement("div");
-    brand.className = "sidebar-brand";
-    const mark = document.createElement("span");
-    mark.className = "sidebar-brand-mark";
-    mark.setAttribute("aria-hidden", "true");
-    mark.textContent = "Б";
-    const name = document.createElement("strong");
-    name.textContent = "Бульбам";
-    brand.append(mark, name);
-    sidebar.insertBefore(brand, heading);
-  }
-
-  if (!sidebar.querySelector("#chat-filter")) {
-    const wrap = document.createElement("div");
-    wrap.className = "chat-filter-wrap";
-    const label = document.createElement("label");
-    label.className = "visually-hidden";
-    label.htmlFor = "chat-filter";
-    label.textContent = "Поиск по открытым чатам";
-    const input = document.createElement("input");
-    input.id = "chat-filter";
-    input.className = "chat-filter";
-    input.type = "search";
-    input.autocomplete = "off";
-    input.placeholder = "Поиск по чатам";
-    input.addEventListener("input", () => {
-      chatFilterValue = input.value.trim().toLocaleLowerCase("ru");
-      filterChats(chatFilterValue);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && input.value) {
-        input.value = "";
-        chatFilterValue = "";
-        filterChats("");
-        announce("Фильтр чатов очищен.");
-      }
-    });
-    wrap.append(label, input);
-    sidebar.insertBefore(wrap, navigation);
-  }
-}
-
-function syncComposerState() {
+function syncComposer() {
   document.body.classList.toggle("composer-has-text", Boolean(elements.messageInput?.value.trim()));
   const button = document.querySelector("#voice-record-button");
   const recording = button?.getAttribute("aria-pressed") === "true";
   document.body.classList.toggle("voice-recording", recording);
-  if (button) button.dataset.icon = recording ? "stop" : "mic";
-}
-
-function decorateCallButtons() {
+  setIcon(button, recording ? "stop" : "mic");
   const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
-  if (elements.callMuteButton) elements.callMuteButton.dataset.icon = muted ? "mic-off" : "mic";
+  setIcon(elements.callMuteButton, muted ? "mic-off" : "mic");
 }
 
-function decorateVoicePlayers() {
+function decorateVoiceButtons() {
   for (const button of document.querySelectorAll(".voice-actions button")) {
     const text = button.textContent.trim();
     if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
       button.classList.add("icon-button");
-      button.dataset.icon = text === "Пауза" ? "pause" : "play";
+      setIcon(button, text === "Пауза" ? "pause" : "play");
     } else if (text === "Назад на 15 секунд") {
       button.classList.add("icon-button");
-      button.dataset.icon = "rewind";
-      button.setAttribute("aria-label", text);
+      setIcon(button, "rewind");
     } else if (text === "Вперёд на 15 секунд") {
       button.classList.add("icon-button");
-      button.dataset.icon = "forward";
-      button.setAttribute("aria-label", text);
+      setIcon(button, "forward");
     } else if (/скорость$/i.test(text)) {
       button.classList.add("button-with-icon");
-      button.dataset.icon = "speed";
+      setIcon(button, "speed");
     }
   }
 }
@@ -241,80 +102,91 @@ function decorateVoicePlayers() {
 function decorateChats() {
   for (const button of document.querySelectorAll(".chat-item")) {
     if (button.querySelector(":scope > .chat-avatar")) continue;
-    const name = button.querySelector(":scope > strong")?.textContent?.trim() || "Б";
     const avatar = document.createElement("span");
     avatar.className = "chat-avatar";
     avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = firstLetter(name);
+    avatar.textContent = firstLetter(button.querySelector("strong")?.textContent || "Б");
     button.prepend(avatar);
   }
 }
 
 function decorateConversationAvatar() {
   const avatar = document.querySelector(".conversation-avatar");
-  if (avatar) avatar.textContent = firstLetter(elements.conversationTitle?.textContent || "Б");
+  const next = firstLetter(elements.conversationTitle?.textContent || "Б");
+  if (avatar && avatar.textContent !== next) avatar.textContent = next;
 }
 
 function decorateMessages() {
   for (const item of document.querySelectorAll(".message")) {
-    item.setAttribute("role", "group");
+    if (item.getAttribute("role") !== "group") item.setAttribute("role", "group");
     const author = item.querySelector(".message-author")?.textContent?.trim() || "Сообщение";
     const meta = item.querySelector(".message-meta")?.textContent?.trim() || "";
-    const voice = item.querySelector(".voice-message");
-    const text = item.querySelector(":scope > p")?.textContent?.trim();
-    const description = voice ? "голосовое сообщение" : text || "сообщение";
-    item.setAttribute("aria-label", `${author}: ${description}. ${meta}`.trim());
+    const body = item.querySelector(".voice-message") ? "голосовое сообщение" : item.querySelector(":scope > p")?.textContent?.trim() || "сообщение";
+    const label = `${author}: ${body}. ${meta}`.trim();
+    if (item.getAttribute("aria-label") !== label) item.setAttribute("aria-label", label);
   }
 }
 
-function filterChats(query) {
+function prepareSidebar() {
+  const sidebar = document.querySelector(".chat-sidebar");
+  const heading = document.querySelector(".sidebar-heading");
+  const nav = document.querySelector(".chat-navigation");
+  if (!sidebar || !heading || !nav) return;
+  if (!sidebar.querySelector(".sidebar-brand")) {
+    const brand = document.createElement("div");
+    brand.className = "sidebar-brand";
+    brand.innerHTML = '<span class="sidebar-brand-mark" aria-hidden="true">Б</span><strong>Бульбам</strong>';
+    sidebar.insertBefore(brand, heading);
+  }
+  if (!sidebar.querySelector("#chat-filter")) {
+    const wrap = document.createElement("div");
+    wrap.className = "chat-filter-wrap";
+    wrap.innerHTML = '<label class="visually-hidden" for="chat-filter">Поиск по открытым чатам</label><input id="chat-filter" class="chat-filter" type="search" autocomplete="off" placeholder="Поиск по чатам">';
+    const input = wrap.querySelector("input");
+    input.addEventListener("input", () => { filterValue = input.value.trim().toLocaleLowerCase("ru"); filterChats(); });
+    sidebar.insertBefore(wrap, nav);
+  }
+}
+
+function filterChats() {
   for (const button of document.querySelectorAll(".chat-item")) {
-    button.hidden = Boolean(query) && !button.textContent.toLocaleLowerCase("ru").includes(query);
+    const next = Boolean(filterValue) && !button.textContent.toLocaleLowerCase("ru").includes(filterValue);
+    if (button.hidden !== next) button.hidden = next;
   }
 }
 
-function applyMessageView(value, select) {
-  const normalized = normalizeMessageView(value);
-  document.documentElement.dataset.messageView = normalized;
-  if (select) select.value = normalized;
+function prepareViewSelect() {
+  const old = document.querySelector("#message-view");
+  if (!old) return null;
+  const select = old.cloneNode(true);
+  if (!select.querySelector('option[value="table"]')) select.append(new Option("Таблица", "table"));
+  old.replaceWith(select);
+  return select;
 }
 
-function applyTheme(value, select) {
-  const normalized = normalizeTheme(value);
-  document.documentElement.dataset.theme = normalized;
-  if (select) select.value = normalized;
-  updateThemeColor(normalized);
-}
-
-function applyFontScale(value, select) {
-  const normalized = normalizeFontScale(value);
-  document.documentElement.dataset.fontScale = normalized;
-  if (select) select.value = normalized;
-}
-
-function updateThemeColor(theme) {
-  const dark = theme === "dark" || (theme === "system" && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#0b0e14" : "#f7f7fb");
-}
-
-function firstLetter(value) {
-  return Array.from(value.trim())[0]?.toLocaleUpperCase("ru") || "Б";
-}
-
-function readPreference(key, normalize) {
-  return normalize(readStorage(key));
-}
-
-function readStorage(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
+function prepareAppearance(viewSelect) {
+  const card = document.querySelector("#appearance-title")?.closest(".card");
+  if (!card) return { theme: null, scale: null };
+  const hint = card.querySelector(".hint");
+  if (hint) {
+    hint.id ||= "message-view-hint";
+    hint.textContent = "Пузырьки — обычный чат. Компактный список — одна строка на сообщение. Таблица — визуальные колонки; для VoiceOver сообщения остаются списком.";
+    viewSelect?.setAttribute("aria-describedby", hint.id);
   }
+  let controls = card.querySelector(".appearance-controls");
+  if (!controls) {
+    controls = document.createElement("div");
+    controls.className = "appearance-controls";
+    controls.innerHTML = '<label>Тема<select id="interface-theme"><option value="system">Как на устройстве</option><option value="dark">Тёмная</option><option value="light">Светлая</option></select></label><label>Размер текста<select id="interface-font-scale"><option value="small">Уменьшенный</option><option value="medium">Обычный</option><option value="large">Увеличенный</option></select></label>';
+    card.append(controls);
+  }
+  return { theme: controls.querySelector("#interface-theme"), scale: controls.querySelector("#interface-font-scale") };
 }
 
-function savePreference(key, value) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {}
-}
+function setIcon(element, value) { if (element && element.dataset.icon !== value) element.dataset.icon = value; }
+function firstLetter(value) { return Array.from(value.trim())[0]?.toLocaleUpperCase("ru") || "Б"; }
+function applyView(value, select) { const v = normalizeMessageView(value); document.documentElement.dataset.messageView = v; if (select) select.value = v; }
+function applyScale(value, select) { const v = normalizeFontScale(value); document.documentElement.dataset.fontScale = v; if (select) select.value = v; }
+function applyTheme(value, select) { const v = normalizeTheme(value); document.documentElement.dataset.theme = v; if (select) select.value = v; document.querySelector('meta[name="theme-color"]')?.setAttribute("content", v === "dark" ? "#0b0e14" : "#f7f7fb"); }
+function read(key, normalize) { try { return normalize(localStorage.getItem(key)); } catch { return normalize(null); } }
+function save(key, value) { try { localStorage.setItem(key, value); } catch {} }
