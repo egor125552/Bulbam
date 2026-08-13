@@ -252,7 +252,8 @@ async function startRecording(trigger) {
 
     localId = null;
     stream = null;
-    void ensureUploadSession(state);
+    // Не создаём server upload заранее. Для короткой или отменённой записи это
+    // лишняя сессия; длинная запись создаст её сама при первом полном 256-KiB куске.
     setRecordingUi(true, draft.startedAt);
     announce(trigger === "option"
       ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
