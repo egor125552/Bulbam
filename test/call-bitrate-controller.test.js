@@ -23,6 +23,7 @@ describe("adaptive call bitrate", () => {
     expect(classifySenderNetwork({ fractionLost: 0.01, roundTripTime: 0.5 })).toBe("severe");
     expect(classifySenderNetwork({ fractionLost: 0.03, roundTripTime: 0.12 })).toBe("degraded");
     expect(classifySenderNetwork({ fractionLost: 0.005, roundTripTime: 0.1 })).toBe("good");
+    expect(classifySenderNetwork({ fractionLost: null, roundTripTime: null })).toBe("unknown");
   });
 
   test("cuts bitrate aggressively on a severe sample", () => {
@@ -87,5 +88,20 @@ describe("adaptive call bitrate", () => {
       fractionLost: 0.04,
       roundTripTime: 0.31
     });
+  });
+
+  test("does not treat missing browser metrics as a perfect network", () => {
+    const reports = new Map([
+      ["remote", {
+        type: "remote-inbound-rtp",
+        kind: "audio",
+        fractionLost: null,
+        roundTripTime: null
+      }]
+    ]);
+
+    const sample = extractSenderNetworkSample(reports);
+    expect(sample).toEqual({ fractionLost: null, roundTripTime: null });
+    expect(classifySenderNetwork(sample)).toBe("unknown");
   });
 });
