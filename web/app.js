@@ -1,5 +1,6 @@
 import { loadCurrentAccount, setupAuth } from "./js/auth.js";
 import { setupAudioProfiles } from "./js/audio-profiles.js";
+import { setupFinishedCallPanelCleanup } from "./js/call-finished-panel.js";
 import { setupCalls } from "./js/calls.js";
 import { checkServer, setupHealth } from "./js/health.js";
 import { setupInvites } from "./js/invites.js";
@@ -26,6 +27,7 @@ setupVoiceSettings();
 setupVoicePlayer();
 setupVoiceWebKitTimelineFix();
 setupAppleVoiceRecordingPreference();
+setupFinishedCallPanelCleanup();
 setupVoiceRecorder();
 setupAudioProfiles();
 setupCalls();
