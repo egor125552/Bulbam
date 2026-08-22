@@ -56,7 +56,7 @@ export async function requestCallMicrophone() {
     throw new Error("браузер не вернул аудиодорожку микрофона");
   }
 
-  await preferMonoCallCapture(track, selectedProfileId);
+  await preferMonoCallCapture(track, selectedProfileId, constraints);
   applyContentHint(track);
   updateAudioProfileStatus(track);
   return stream;
@@ -70,7 +70,7 @@ export async function applySelectedAudioProfileToTrack(track) {
   if (typeof track.applyConstraints === "function") {
     await track.applyConstraints(constraints);
   }
-  await preferMonoCallCapture(track, selectedProfileId);
+  await preferMonoCallCapture(track, selectedProfileId, constraints);
   applyContentHint(track);
   return updateAudioProfileStatus(track);
 }
