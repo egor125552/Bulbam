@@ -1,5 +1,6 @@
 import { announce, elements } from "./ui.js";
 import { preferMonoCallCapture } from "./call-audio-channels.js";
+import { configureAdaptiveBitrate } from "./call-bitrate-controller.js";
 import {
   AUDIO_PROFILES,
   buildAudioConstraints,
@@ -75,22 +76,8 @@ export async function applySelectedAudioProfileToTrack(track) {
   return updateAudioProfileStatus(track);
 }
 
-export async function tuneAudioSender(sender) {
-  if (!sender?.getParameters || !sender?.setParameters) return false;
-  const profile = getSelectedAudioProfile();
-  const parameters = sender.getParameters();
-  if (!Array.isArray(parameters.encodings) || !parameters.encodings.length) return false;
-
-  const nextEncodings = parameters.encodings.map((encoding) => ({
-    ...encoding,
-    maxBitrate: profile.maxBitrate
-  }));
-
-  await sender.setParameters({
-    ...parameters,
-    encodings: nextEncodings
-  });
-  return true;
+export function tuneAudioSender(sender) {
+  return configureAdaptiveBitrate(sender, getSelectedAudioProfile());
 }
 
 export function updateAudioProfileStatus(track) {
