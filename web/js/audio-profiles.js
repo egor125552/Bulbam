@@ -1,4 +1,5 @@
 import { announce, elements } from "./ui.js";
+import { preferMonoCallCapture } from "./call-audio-channels.js";
 import {
   AUDIO_PROFILES,
   buildAudioConstraints,
@@ -55,6 +56,7 @@ export async function requestCallMicrophone() {
     throw new Error("браузер не вернул аудиодорожку микрофона");
   }
 
+  await preferMonoCallCapture(track, selectedProfileId);
   applyContentHint(track);
   updateAudioProfileStatus(track);
   return stream;
@@ -68,6 +70,7 @@ export async function applySelectedAudioProfileToTrack(track) {
   if (typeof track.applyConstraints === "function") {
     await track.applyConstraints(constraints);
   }
+  await preferMonoCallCapture(track, selectedProfileId);
   applyContentHint(track);
   return updateAudioProfileStatus(track);
 }
