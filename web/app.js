@@ -27,8 +27,8 @@ setupVoiceSettings();
 setupVoicePlayer();
 setupVoiceWebKitTimelineFix();
 setupAppleVoiceRecordingPreference();
-setupVoiceRecorder();
 setupFinishedCallPanelCleanup();
+setupVoiceRecorder();
 setupAudioProfiles();
 setupCalls();
 
