@@ -20,7 +20,9 @@ import { VoiceUploadSocket } from "./voice-upload-socket.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
-const MIME_CANDIDATES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
+const MIME_CANDIDATES = /android/i.test(navigator.userAgent)
+  ? ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
+  : ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
 
 let recordButton = null;
 let draftPanel = null;
@@ -127,9 +129,9 @@ async function startRecording(trigger) {
       return;
     }
 
-    const mimeType = chooseOpusMimeType();
+    const mimeType = chooseVoiceMimeType();
     if (!mimeType) {
-      announce("Браузер не умеет записывать Opus для голосовых сообщений.");
+      announce("Браузер не умеет записывать совместимый формат голосовых сообщений.");
       await playVoiceCue("error");
       return;
     }
@@ -195,7 +197,7 @@ async function startRecording(trigger) {
       stream = null;
       await deleteVoiceDraft(localId).catch(() => undefined);
       localId = null;
-      announce(`Не удалось запустить запись Opus: ${error.message}`);
+      announce(`Не удалось запустить запись голосового: ${error.message}`);
       await playVoiceCue("error");
       return;
     }
@@ -685,7 +687,7 @@ function clearOptionTimer() {
   optionTimer = null;
 }
 
-function chooseOpusMimeType() {
+function chooseVoiceMimeType() {
   return MIME_CANDIDATES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null;
 }
 
