@@ -111,7 +111,7 @@ async function sampleSender(sender, state) {
     }
   } catch {
     state.failures += 1;
-    if (state.failures >= 5 && sender.transport?.state === "closed") stopController(sender, state);
+    if (state.failures >= 5) stopController(sender, state);
   } finally {
     state.sampling = false;
   }
