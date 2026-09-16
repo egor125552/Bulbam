@@ -1,97 +1,137 @@
 # Bulbam
 
-**Бульбам** — web-first мессенджер. Сначала надёжный мессенджер, потом уже очень странный белорусский мессенджер.
+Bulbam is an accessible, web-first messenger focused on reliable realtime communication.
 
-## Текущее состояние
+The project is intentionally building the communication core first: accounts, persistent direct messages, realtime delivery, notifications, audio calls, multi-device behavior, accessibility, and recovery from unreliable networks. Product experiments and the broader Bulbam identity come later, after the core is trustworthy.
 
-Ядро уже включает:
+## What works today
 
-- приглашения, стабильные `user_id`, роли и отдельные сессии устройств;
-- PBKDF2-хеширование паролей;
-- постоянные личные диалоги и сообщения в D1;
-- `client_message_id` для идемпотентной отправки без дублей;
-- серверное подтверждение доставки;
-- per-user Durable Object + WebSocket для realtime;
-- polling fallback при потере WebSocket;
-- Web Push для сообщений и входящих звонков;
-- one-to-one WebRTC аудиозвонки;
-- ICE/STUN/TURN и автоматическое восстановление звонка при части сетевых сбоев;
-- доступный web/PWA-интерфейс с VoiceOver как обязательным сценарием.
+- invite-based registration, stable user IDs, roles, and separate device sessions;
+- PBKDF2 password hashing;
+- persistent one-to-one conversations and messages stored in Cloudflare D1;
+- idempotent message sending with client-generated message IDs to prevent duplicates after retries;
+- server-side delivery confirmation;
+- per-user Durable Objects and WebSockets for realtime events;
+- polling fallback when the realtime connection is unavailable;
+- Web Push for new messages and incoming calls;
+- one-to-one WebRTC audio calls;
+- ICE, STUN, TURN, and call recovery for some network failures;
+- an accessible web/PWA interface designed for keyboard and screen-reader use, including VoiceOver.
 
-Ближайший продуктовый приоритет — не наращивать декоративные функции, а добить multi-device/read, media/voice messages, safety и полевые тесты сетевой устойчивости.
+The current product priority is to finish multi-device and read-state behavior, strengthen authentication and session handling, add media and voice messages, improve safety features, and continue real-world network testing.
 
-Подробный порядок разработки: `docs/roadmap.md`.
+For a concise English product and technical overview, see `docs/overview.md`.
 
-Полная продуктовая идея Bulbam — Беларусь, антифрод, группы/каналы, бульба, подарки, купоны и возможный международный рост: `docs/product-vision.md`.
+The detailed development order is documented in `docs/roadmap.md`.
 
-## Архитектура
+The broader Bulbam product vision, including Belarusian identity, anti-fraud ideas, groups, channels, potato-themed features, gifts, coupons, and possible international growth, is documented in `docs/product-vision.md`.
 
-Bulbam — **модульный монолит**: один репозиторий и один Worker, но жёсткие границы бизнес-доменов.
+## Architecture
 
-Серверные модули живут в `worker/src/modules/<domain>/` и разделяются на:
+Bulbam is a modular monolith: one repository and one deployable Cloudflare Worker, with strict boundaries between business domains.
 
-- `domain/` — чистые модели и инварианты;
+Server modules live under `worker/src/modules/<domain>/` and are split into:
+
+- `domain/` — pure models and invariants;
 - `application/` — use cases;
-- `ports/` — абстрактные зависимости;
-- `infrastructure/` — D1/R2/Cloudflare и другие адаптеры;
-- `transport/` — HTTP/WebSocket граница.
+- `ports/` — abstract dependencies;
+- `infrastructure/` — D1, R2, Cloudflare, and other adapters;
+- `transport/` — HTTP and WebSocket boundaries.
 
-Сейчас код уже содержит отдельные области `identity`, `messaging`, `realtime`, `notifications` и `calls`. D1 остаётся источником истины для постоянных данных; Durable Objects координируют живые соединения и состояние звонков, но не заменяют постоянное хранение сообщений.
+The codebase currently contains separate domains for identity, messaging, realtime, notifications, and calls.
 
-`worker/src/index.ts` остаётся тонкой точкой входа, а `worker/src/app.ts` только соединяет зависимости. SQL не должен появляться вне `infrastructure/`.
+D1 is the source of truth for persistent data. Durable Objects coordinate live connections and call state, but they do not replace durable message storage.
 
-Подробности и правила расширения: `docs/architecture.md` и `AGENTS.md`.
+`worker/src/index.ts` remains a thin Worker entry point. `worker/src/app.ts` wires dependencies together. SQL should stay inside infrastructure adapters.
 
-## Главные продуктовые правила
+See `docs/architecture.md` and `AGENTS.md` for implementation rules.
 
-- сервер — источник истины для аккаунтов и сообщений;
-- сообщение считается отправленным только после подтверждения сервера;
-- повтор запроса после обрыва не должен создавать дубликаты;
-- локальное хранилище браузера — только кэш/outbox;
-- большие медиа не передаются inline/base64 через WebSocket;
-- доступность с VoiceOver и клавиатуры проверяется с первого дня;
-- звонки Lenovo Messenger используются как донор проверенных идей, но старая архитектура не копируется;
-- безопасность и accessibility важнее декоративной функции;
-- маркетинг не обещает больше, чем подтверждено реальными тестами.
+## Product principles
 
-## Структура
+- The server is the source of truth for accounts and messages.
+- A message is considered sent only after server acknowledgement.
+- Retrying after a connection failure must not create duplicate messages.
+- Browser storage is only a cache and outbox, not the durable source of truth.
+- Large media files must not be sent inline or as base64 over WebSocket.
+- Accessibility with VoiceOver and keyboard navigation is tested from the beginning.
+- Security and accessibility take priority over decorative features.
+- Marketing must not promise behavior that has not been confirmed by tests and real use.
 
-- `web/` — доступный браузерный клиент и его ES-модули;
-- `worker/src/core/` — общие технические примитивы;
-- `worker/src/platform/` — контракты Cloudflare bindings;
-- `worker/src/modules/` — бизнес-домены;
-- `shared/` — общие контракты протокола;
-- `docs/architecture.md` — архитектура и границы модулей;
-- `docs/audio-calls.md` — архитектура аудиозвонков;
-- `docs/push-notifications.md` — Web Push;
-- `docs/roadmap.md` — актуальный порядок разработки;
-- `docs/product-vision.md` — продуктовая концепция и будущие идеи.
+## Repository structure
 
-## Первый запуск
+- `web/` — accessible browser client and ES modules;
+- `worker/src/core/` — shared technical primitives;
+- `worker/src/platform/` — Cloudflare binding contracts;
+- `worker/src/modules/` — business domains;
+- `shared/` — shared protocol contracts;
+- `docs/overview.md` — English project overview;
+- `docs/architecture.md` — architecture and module boundaries;
+- `docs/audio-calls.md` — audio call design;
+- `docs/push-notifications.md` — Web Push setup and behavior;
+- `docs/roadmap.md` — current development roadmap;
+- `docs/product-vision.md` — long-term product concept and experimental ideas.
+
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Проверки:
+Run verification:
 
 ```bash
 npm run verify
 ```
 
-API smoke:
+API smoke endpoints:
 
 ```text
 GET /api/health
 GET /api/ready
 ```
 
-Продакшен Worker: `bulbam-api`.
+Production Worker: `bulbam-api`.
 
-## Старые проекты-доноры
+Live deployment:
 
-- `MyMessenger` — Swift-клиент Lenovo Messenger, особенно полезен как лаборатория звонков, Opus, WebRTC, LiveKit и доступности;
-- `LenovoMessengerCloudflareRelay` — донор проверенных идей Durable Object/WebSocket и сетевого поведения.
+https://bulbam-api.k69ysrndm7.workers.dev
 
-Старый строковый протокол, глобальная комната и хранение критичного состояния только в realtime-слое в Bulbam не переносятся.
+## Reliability and accessibility
+
+Bulbam treats unreliable networks and accessibility as normal operating conditions, not edge cases.
+
+The client is expected to recover from reloads, retries, temporary WebSocket loss, and reconnects without silently duplicating durable messages. The interface is built around semantic controls, keyboard access, meaningful status text, and screen-reader compatibility.
+
+Audio calls follow the same rule: realtime is the fast path, but short signaling interruptions should not immediately destroy the call state.
+
+## Current limitations
+
+Bulbam is still under active development.
+
+The following features are not yet complete and should not be presented as finished:
+
+- server-side read state and complete multi-device read semantics;
+- media and voice messages;
+- groups and channels;
+- blocking, reporting, and the full trust-and-safety layer;
+- end-to-end encryption;
+- video calls;
+- large-scale production hardening.
+
+Text messages should not currently be described as end-to-end encrypted because the server stores readable message bodies.
+
+## Project direction
+
+Bulbam is deliberately avoiding the common prototype trap of adding many visible features while the communication core remains fragile.
+
+The development order is:
+
+1. reliable direct communication;
+2. trust, safety, privacy, and device management;
+3. groups and controlled channels;
+4. Bulbam-specific social and playful features;
+5. regional ecosystem and partnerships;
+6. possible international growth.
+
+Each layer must preserve the reliability and accessibility of the layers below it.
