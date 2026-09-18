@@ -43,6 +43,7 @@ const QUALITY_SAMPLE_MS = 2_000;
 const JITTER_BUFFER_DEGRADED_MS = 180;
 const JITTER_BUFFER_SEVERE_MS = 300;
 const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
+const ICE_CANDIDATE_POOL_SIZE = 4;
 
 export function setupCalls() {
   elements.callStartButton.addEventListener("click", () => void startCall());
@@ -120,6 +121,7 @@ async function handleVisibleCallPush(data) {
     if (currentCall.direction === "incoming" && currentCall.status === "ringing") {
       recoveryPending = false;
       showIncoming(currentCall);
+      void prefetchIceServers();
       startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
       return;
@@ -156,6 +158,7 @@ async function startCall() {
     offerStarted = false;
     recoveryPending = false;
     showOutgoing(currentCall);
+    void prewarmOutgoingPeerConnection();
     startCallPolling();
     ringTimeout = setTimeout(() => void timeoutRinging(), 60_000);
     announce(`Звоним ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
@@ -331,6 +334,7 @@ async function handleCallEvent(event) {
     if (currentCall.status === "ringing" && currentCall.direction === "incoming") {
       recoveryPending = false;
       showIncoming(currentCall);
+      void prefetchIceServers();
       startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
     } else if (currentCall.status === "ringing" || currentCall.status === "accepted") {
@@ -356,6 +360,7 @@ async function handleCallEvent(event) {
       offerStarted = false;
       recoveryPending = false;
       showIncoming(currentCall);
+      void prefetchIceServers();
       startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
     }
@@ -457,11 +462,44 @@ async function restartOffer({ rebuild = false, refreshIce = true, automatic = fa
   }
 }
 
+async function prefetchIceServers() {
+  try {
+    await getIceServers();
+  } catch {
+    // A later connection attempt still has the built-in STUN fallback.
+  }
+}
+
+async function prewarmOutgoingPeerConnection() {
+  if (!currentCall || currentCall.direction !== "outgoing" || currentCall.status !== "ringing" || !localStream || peerConnection) return;
+  try {
+    await ensurePeerConnection();
+  } catch {
+    // Prewarming is only a latency optimization. The normal offer path retries after answer.
+  }
+}
+
+function createPeerConnectionWithRoutePool(iceServers) {
+  const baseConfiguration = {
+    iceServers,
+    iceTransportPolicy: "all"
+  };
+  try {
+    return new RTCPeerConnection({
+      ...baseConfiguration,
+      iceCandidatePoolSize: ICE_CANDIDATE_POOL_SIZE
+    });
+  } catch {
+    // Older WebKit builds may reject candidate pooling. Keep normal trickle ICE working.
+    return new RTCPeerConnection(baseConfiguration);
+  }
+}
+
 async function ensurePeerConnection({ iceServers: providedIceServers = null, refreshIce = false } = {}) {
   if (peerConnection) return peerConnection;
   if (!localStream) localStream = await requestMicrophone();
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
-  const pc = new RTCPeerConnection({ iceServers });
+  const pc = createPeerConnectionWithRoutePool(iceServers);
   peerConnection = pc;
 
   for (const track of localStream.getTracks()) {
