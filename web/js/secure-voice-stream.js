@@ -107,22 +107,20 @@ export function createProtectedVoiceStream({
       const chunks = readProtectedVoiceChunks({
         url, mimeType, ciphertextBytes, key, context, isStillAuthorized, signal: aborter.signal, fetchImpl
       });
-      let first = true;
       for await (const chunk of chunks) {
         if (stop) return;
         // Backpressure: keep about 25s of decoded audio ahead of playback.
         while (!stop && buffer.buffered.length &&
           buffer.buffered.end(buffer.buffered.length - 1) - audio.currentTime > 25 &&
-          audio.readyState >= 2 && !audio.seeking) {
-          await Promise.race([
-            waitEvent(audio, "timeupdate", "error", aborter.signal),
-            new Promise((resolve) => setTimeout(resolve, 500))
-          ]);
+          !audio.seeking) {
+          // Pause network reads while enough authenticated audio is buffered.
+          // A short polling pause avoids accumulating stale event listeners.
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          if (aborter.signal.aborted || !isStillAuthorized()) throw new Error("Прослушивание отменено.");
         }
         if (stop) return;
         buffer.appendBuffer(chunk);
         await waitEvent(buffer, "updateend", "error", aborter.signal);
-        first = false;
       }
       if (stop) return;
       if (mediaSource.readyState === "open" && !buffer.updating) mediaSource.endOfStream();
