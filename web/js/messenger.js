@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { decryptText, encryptText, isEncryptedText } from "./secure-messages.js";
+import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
 import { getSecureChatState, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
@@ -26,7 +26,28 @@ let generation = 0;
 let jumpButton = null;
 
 export function setupMessenger() {
-  setupSecureChat({ onKeyChanged: () => renderMessages({ preserveVoicePlayback: true }) });
+  setupSecureChat({
+    onKeyChanged: () => renderMessages({ preserveVoicePlayback: true }),
+    verifyCandidateKey: async (secret, candidateAccountId, candidateConversationId) => {
+      if (account?.userId !== candidateAccountId ||
+          selectedChat?.conversationId !== candidateConversationId) {
+        throw new Error("Переписка изменилась во время проверки ключа.");
+      }
+      const sample = messages.find((message) =>
+        message.conversationId === candidateConversationId && isEncryptedText(message.text));
+      if (!sample) return;
+      const key = await importConversationSecret(secret);
+      try {
+        await decryptText(sample.text, key, {
+          conversationId: sample.conversationId,
+          senderUserId: sample.senderUserId,
+          clientMessageId: sample.clientMessageId
+        });
+      } catch {
+        throw new Error("Ключ не подходит к защищённым сообщениям. Проверьте код у собеседника.");
+      }
+    }
+  });
   jumpButton = document.querySelector("#jump-to-latest");
   jumpButton?.addEventListener("click", jumpToLatest);
   elements.messageList.addEventListener("scroll", () => {
