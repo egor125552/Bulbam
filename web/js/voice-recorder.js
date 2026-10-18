@@ -19,7 +19,7 @@ import { getVoiceBitrate } from "./voice-settings.js";
 import { VoiceUploadSocket } from "./voice-upload-socket.js";
 import { getSecureChatState } from "./secure-chat-ui.js";
 import {
-  encryptedVoiceMime, generateVoiceNonce, encryptVoicePart, encryptVoiceEnd,
+  encryptedVoiceMime, generateVoiceNonce, encryptVoicePart,
   VOICE_PLAIN_CHUNK_BYTES
 } from "./secure-voice.js";
 
@@ -417,10 +417,6 @@ function requireVoiceKey(draft) {
 async function voicePartPayload(draft, key, partNumber, totalPlainBytes) {
   const chunkSize = voiceDataChunkSize(draft);
   const dataParts = Math.ceil(totalPlainBytes / chunkSize);
-  if (draft.encrypted && partNumber === dataParts + 1) {
-    return new Blob([await encryptVoiceEnd(key, draft.mimeType, encryptionContext(draft),
-      partNumber, totalPlainBytes)], { type: "application/octet-stream" });
-  }
   const startByte = (partNumber - 1) * chunkSize;
   const body = await getVoicePartBlob(draft.id, startByte,
     Math.min(chunkSize, totalPlainBytes - startByte), draft.recordingMimeType ?? draft.mimeType);
@@ -428,7 +424,8 @@ async function voicePartPayload(draft, key, partNumber, totalPlainBytes) {
   if (!draft.encrypted) return body;
   const bytes = new Uint8Array(await body.arrayBuffer());
   return new Blob([await encryptVoicePart(bytes, key, draft.mimeType,
-    encryptionContext(draft), partNumber)], { type: "application/octet-stream" });
+    encryptionContext(draft), partNumber, partNumber === dataParts ? totalPlainBytes : null)],
+    { type: "application/octet-stream" });
 }
 
 async function sendDraftById(id, existingTransport = null) {
@@ -444,8 +441,8 @@ async function sendDraftById(id, existingTransport = null) {
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     if (partSize !== LOCAL_PART_SIZE) throw new Error("Размер сетевых частей изменился.");
     const dataParts = Math.ceil(totalPlainBytes / voiceDataChunkSize(draft));
-    const partCount = dataParts + (draft.encrypted ? 1 : 0);
-    const totalWireBytes = draft.encrypted ? totalPlainBytes + dataParts * 16 + 16 : totalPlainBytes;
+    const partCount = dataParts;
+    const totalWireBytes = draft.encrypted ? totalPlainBytes + dataParts * 16 : totalPlainBytes;
     const parts = [...(upload.parts ?? [])];
 
     if (upload.state !== "ready") {
@@ -578,7 +575,10 @@ async function uploadReadyFullParts(state) {
   }
   const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
   if (partSize !== LOCAL_PART_SIZE) return;
-  const fullPartCount = Math.floor(state.draft.totalBytes / voiceDataChunkSize(state.draft));
+  // Never upload the last encrypted part until recording has stopped: its
+  // authentication tag must commit to the final, exact byte count.
+  const fullPartCount = Math.max(0, Math.floor(state.draft.totalBytes / voiceDataChunkSize(state.draft)) -
+    (state.draft.encrypted ? 1 : 0));
   if (!fullPartCount) return;
 
   try {
