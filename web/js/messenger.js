@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
-import { getSecureChatState, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
+import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
+import { parseEncryptedVoiceMime } from "./secure-voice.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
@@ -282,6 +283,7 @@ async function loadMessages({ quiet = false } = {}) {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
     if (!selectedChat || selectedChat.conversationId !== conversationId) return;
     const serverMessages = result.messages ?? [];
+    requireProtectedConversationKey(account.userId, conversationId, serverMessages.some(isProtectedContent));
     const pending = messages.filter((message) => message.localState);
     messages = serverMessages;
     for (const local of pending) {
@@ -460,7 +462,7 @@ async function sendCurrentMessage(event) {
     announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
     return;
   }
-  if (!secure.key && messages.some((message) => isEncryptedText(message.text))) {
+  if (!secure.key && (secure.requiresKey || messages.some(isProtectedContent))) {
     announce("В переписке есть защищённые сообщения. Введите ключ перед отправкой, чтобы не отправить текст открыто.");
     return;
   }
@@ -516,7 +518,7 @@ async function transmitPending(pending) {
       announce("Нельзя повторить отправку, пока ключ переписки недоступен.");
       return;
     }
-    if (!secure.key && messages.some((message) => isEncryptedText(message.text))) {
+    if (!secure.key && (secure.requiresKey || messages.some(isProtectedContent))) {
       announce("Повторная отправка без ключа заблокирована.");
       return;
     }
@@ -560,6 +562,7 @@ function upsertServerMessage(message) {
     (candidate) => candidate.messageId !== message.messageId && candidate.clientMessageId !== message.clientMessageId
   );
   messages.push(merged);
+  requireProtectedConversationKey(account?.userId, merged.conversationId, isProtectedContent(merged));
   renderMessages({ preserveVoicePlayback: true });
 }
 
@@ -740,6 +743,11 @@ function restoreMessageFocus(state) {
       return;
     }
   }
+}
+
+function isProtectedContent(message) {
+  return isEncryptedText(message?.text) ||
+    Boolean(message?.voice?.mimeType?.startsWith("application/vnd.bulbam.encrypted-voice"));
 }
 
 function randomId() {
