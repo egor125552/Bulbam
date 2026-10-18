@@ -23,6 +23,12 @@ class FakeElement extends EventHub {
     this.textContent = "";
     this.srcObject = null;
     this.value = "";
+    const classes = new Set();
+    this.classList = {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+      contains(name) { return classes.has(name); }
+    };
   }
 
   click() {

@@ -24,7 +24,7 @@ export function setupCanonicalInterface() {
     const value = normalizeMessageView(viewSelect.value);
     applyView(value, viewSelect);
     save(KEYS.view, value);
-    announce(value === "table" ? "Включён табличный вид сообщений." : value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
+    announce(value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
   });
 
   appearance.theme?.addEventListener("change", () => {
@@ -159,7 +159,7 @@ function prepareViewSelect() {
   const old = document.querySelector("#message-view");
   if (!old) return null;
   const select = old.cloneNode(true);
-  if (!select.querySelector('option[value="table"]')) select.append(new Option("Таблица", "table"));
+  select.querySelector('option[value="table"]')?.remove();
   old.replaceWith(select);
   return select;
 }
@@ -170,7 +170,7 @@ function prepareAppearance(viewSelect) {
   const hint = card.querySelector(".hint");
   if (hint) {
     hint.id ||= "message-view-hint";
-    hint.textContent = "Пузырьки — обычный чат. Компактный список — одна строка на сообщение. Таблица — визуальные колонки; для VoiceOver сообщения остаются списком.";
+    hint.textContent = "Выберите, как удобнее читать переписку. Оба варианта подходят для VoiceOver.";
     viewSelect?.setAttribute("aria-describedby", hint.id);
   }
   let controls = card.querySelector(".appearance-controls");

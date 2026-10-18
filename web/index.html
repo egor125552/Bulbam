@@ -32,7 +32,7 @@
         <h3>Войти</h3>
         <form id="login-form" class="form-stack">
           <label>
-            Username
+            Имя пользователя
             <input name="username" autocomplete="username" required minlength="3" maxlength="32">
           </label>
           <label>
@@ -48,7 +48,7 @@
         <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
         <form id="register-form" class="form-stack">
           <label>
-            Username
+            Имя пользователя
             <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="egor">
           </label>
           <label>
@@ -107,21 +107,7 @@
             <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
-          <section id="call-panel" class="call-banner" aria-labelledby="call-title" hidden>
-            <div class="call-copy">
-              <h2 id="call-title" tabindex="-1">Звонок</h2>
-              <p id="call-peer"></p>
-              <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
-            </div>
-            <div class="call-actions">
-              <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
-              <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
-              <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
-              <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
-              <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
-            </div>
-            <audio id="call-remote-audio" autoplay></audio>
-          </section>
+
 
           <div id="conversation-empty" class="conversation-empty">
             <div class="empty-mark" aria-hidden="true">Б</div>
@@ -154,6 +140,27 @@
         </section>
       </div>
 
+          <section id="call-panel" class="call-banner" aria-labelledby="call-title" hidden>
+            <div class="call-copy">
+              <h2 id="call-title" tabindex="-1">Звонок</h2>
+              <p id="call-peer"></p>
+              <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+            </div>
+            <div class="call-screen-navigation">
+              <button id="call-minimize" type="button" hidden>Свернуть звонок</button>
+              <button id="call-expand" type="button" hidden>Открыть звонок</button>
+            </div>
+            <div class="call-actions">
+              <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
+              <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
+              <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
+              <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
+              <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
+            </div>
+            <audio id="call-remote-audio" autoplay></audio>
+          </section>
+
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <div class="settings-header">
           <div>
@@ -178,7 +185,7 @@
             <h3 id="account-title">Аккаунт</h3>
             <dl class="details-list compact-details">
               <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
-              <div><dt>Username</dt><dd id="account-username"></dd></div>
+              <div><dt>Имя пользователя</dt><dd id="account-username"></dd></div>
             </dl>
             <button id="logout" class="button-with-icon" data-icon="logout" type="button">Выйти</button>
           </section>
@@ -192,13 +199,13 @@
 
           <section class="card" aria-labelledby="voice-settings-title">
             <h3 id="voice-settings-title">Голосовые сообщения</h3>
-            <label for="voice-bitrate">Качество записи</label>
+            <label for="voice-bitrate">Качество голосовых сообщений</label>
             <select id="voice-bitrate">
-              <option value="24000">24 кбит/с — экономно</option>
-              <option value="32000">32 кбит/с — обычное</option>
-              <option value="48000">48 кбит/с — хорошее</option>
-              <option value="64000">64 кбит/с — высокое</option>
-              <option value="96000">96 кбит/с — максимальное</option>
+              <option value="24000">Очень маленький файл</option>
+              <option value="32000">Экономия интернета</option>
+              <option value="48000">Обычное качество</option>
+              <option value="64000">Хорошее качество</option>
+              <option value="96000">Максимальное качество</option>
             </select>
             <label class="switch-row">
               <input id="voice-share-listening" type="checkbox" checked>
