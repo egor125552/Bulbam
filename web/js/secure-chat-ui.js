@@ -24,7 +24,7 @@ function updatePresentation() {
   if (open) open.hidden = !hasChat;
   if (label) {
     label.hidden = !hasChat;
-    label.textContent = active ? "Экспериментальная защита новых текстовых сообщений включена" :
+    label.textContent = active ? "Экспериментальная защита новых сообщений и голосовых включена" :
       keyIsLoading || loadFailed ? "Защита недоступна. Отправка временно остановлена" :
         "Обычные сообщения. Без сквозного шифрования";
   }
@@ -33,14 +33,14 @@ function updatePresentation() {
   const recording = document.querySelector("#voice-record-button");
   const draftSend = element("voice-draft-send");
   if (recording) {
-    recording.disabled = active;
-    recording.title = active ? "Голосовые пока не защищены" : "";
+    recording.disabled = keyIsLoading || loadFailed;
+    recording.title = active ? "Запись защищённого голосового сообщения" : "";
   }
-  if (draftSend) draftSend.disabled = active;
+  if (draftSend) draftSend.disabled = keyIsLoading || loadFailed;
   if (!hasChat) setStatus("Откройте переписку.");
   else if (keyIsLoading) setStatus("Проверяю наличие ключа на этом устройстве.");
   else if (loadFailed) setStatus("Не удалось проверить сохранённые ключи. Обычная отправка отключена во избежание ошибки.");
-  else if (active) setStatus("Новые текстовые сообщения шифруются на этом устройстве. Ключ хранится только здесь. Голосовые отключены.");
+  else if (active) setStatus("Новые текстовые сообщения и голосовые шифруются на этом устройстве. Ключ хранится только здесь.");
   else setStatus("Защита выключена. Создайте новый ключ или введите ключ собеседника.");
 }
 
