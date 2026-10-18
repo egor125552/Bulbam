@@ -88,6 +88,12 @@ export function newSessionToken(): string {
   return `bs_${bytesToHex(randomBytes(32))}`;
 }
 
+export function newRecoveryCode(): string {
+  // 96 bits of entropy per code; store only the SHA-256 digest.
+  const hex = bytesToHex(randomBytes(12)).toUpperCase();
+  return `BRC-${hex.slice(0, 6)}-${hex.slice(6, 12)}-${hex.slice(12, 18)}-${hex.slice(18, 24)}`;
+}
+
 export function newInviteCode(): string {
   return `BULBAM-${bytesToHex(randomBytes(16)).toUpperCase()}`;
 }
