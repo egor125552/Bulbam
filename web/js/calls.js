@@ -6,6 +6,7 @@ import {
   tuneAudioSender
 } from "./audio-profiles.js";
 import { announce, elements } from "./ui.js";
+import { setupCallQualityReport } from "./call-quality-report.js";
 
 let account = null;
 let currentCall = null;
@@ -52,6 +53,11 @@ export function setupCalls() {
   elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
   elements.callMuteButton.addEventListener("click", toggleMute);
+  setupCallQualityReport({
+    button: elements.callQualityButton,
+    status: elements.callQualityStatus,
+    getPeerConnection: () => peerConnection
+  });
 
   const observer = new MutationObserver(syncCallButton);
   observer.observe(elements.conversationPeer, { childList: true, characterData: true, subtree: true });
@@ -974,6 +980,7 @@ function requestMicrophone() {
 }
 
 function showIncoming(call) {
+  setCallQualityVisible(false);
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Входящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
@@ -987,6 +994,7 @@ function showIncoming(call) {
 }
 
 function showOutgoing(call) {
+  setCallQualityVisible(false);
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Исходящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
@@ -1000,6 +1008,7 @@ function showOutgoing(call) {
 }
 
 function showConnectedControls(status) {
+  setCallQualityVisible(true);
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Аудиозвонок";
   setCallStatus(status);
@@ -1012,6 +1021,7 @@ function showConnectedControls(status) {
 }
 
 function showRecoveredCall(status) {
+  setCallQualityVisible(false);
   if (!currentCall) return;
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Активный звонок";
@@ -1036,6 +1046,7 @@ function finishCall(message) {
 }
 
 function renderFinished(message) {
+  setCallQualityVisible(false);
   elements.callPanel.hidden = false;
   elements.callTitle.textContent = "Звонок";
   elements.callPeer.textContent = "";
@@ -1048,6 +1059,7 @@ function renderFinished(message) {
 }
 
 function renderIdle() {
+  setCallQualityVisible(false);
   elements.callPanel.hidden = true;
   elements.callPeer.textContent = "";
   elements.callStatus.textContent = "Звонок не активен.";
@@ -1056,6 +1068,16 @@ function renderIdle() {
   elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
+}
+
+function setCallQualityVisible(visible) {
+  const button = elements.callQualityButton;
+  const status = elements.callQualityStatus;
+  if (!button || !status) return;
+  const wasHidden = button.hidden;
+  button.hidden = !visible;
+  status.hidden = !visible;
+  if (!visible || wasHidden) status.textContent = "";
 }
 
 function setCallStatus(text) {
