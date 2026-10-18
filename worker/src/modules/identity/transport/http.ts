@@ -1,7 +1,7 @@
 import { ApiError } from "../../../core/errors";
 import { json, methodNotAllowed, readJsonObject } from "../../../core/http";
 import type { IdentityService } from "../application/identity-service";
-import { loginInput, registrationInput } from "../domain/validation";
+import { loginInput, registrationInput, normalizeUsername, validateDeviceName, validatePassword } from "../domain/validation";
 
 const SESSION_COOKIE = "bulbam_session";
 
@@ -15,7 +15,7 @@ export async function handleIdentityHttp(
     const input = registrationInput(await readJsonObject(request));
     const result = await service.register(input);
     return withSessionCookie(
-      json({ ok: true, account: result.account, session: result.session }, { status: 201 }),
+      json({ ok: true, account: result.account, session: result.session, recoveryCodes: result.recoveryCodes }, { status: 201 }),
       result.token,
       result.session.expiresAt
     );
@@ -30,6 +30,41 @@ export async function handleIdentityHttp(
       result.token,
       result.session.expiresAt
     );
+  }
+
+  if (url.pathname === "/api/v1/auth/reset-with-recovery-code") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const body = await readJsonObject(request);
+    const username = normalizeUsername(String(body.username ?? ""));
+    const rawCode = body.code;
+    if (typeof rawCode !== "string" || !/^BRC-[0-9a-fA-F]{6}(?:-[0-9a-fA-F]{6}){3}$/.test(rawCode)) {
+      throw new ApiError(400, "invalid_recovery_code", "Неверное имя пользователя или код восстановления.");
+    }
+    const newPassword = validatePassword(String(body.newPassword ?? ""));
+    const deviceName = validateDeviceName(typeof body.deviceName === "string" ? body.deviceName : undefined);
+    const result = await service.resetPasswordWithRecoveryCode({
+      username, code: rawCode, newPassword, deviceName
+    });
+    return withSessionCookie(
+      json({ ok: true, account: result.account, session: result.session }),
+      result.token, result.session.expiresAt
+    );
+  }
+
+  if (url.pathname === "/api/v1/auth/recovery-codes") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const authenticated = await service.authenticate(sessionToken(request));
+    const recoveryCodes = await service.issueRecoveryCodes(authenticated.account.userId);
+    return json({ ok: true, recoveryCodes });
+  }
+
+  if (url.pathname === "/api/v1/auth/change-password") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const authenticated = await service.authenticate(sessionToken(request));
+    const body = await readJsonObject(request);
+    const password = validatePassword(String(body.newPassword ?? ""));
+    await service.changePasswordFromSession(authenticated, password);
+    return json({ ok: true, note: "Другие устройства отключены. Создайте новые резервные коды." });
   }
 
   if (url.pathname === "/api/v1/auth/me") {
