@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -20,8 +21,14 @@ let reconnectDelay = 1000;
 let heartbeatTimer = null;
 let pollTimer = null;
 let generation = 0;
+let jumpButton = null;
 
 export function setupMessenger() {
+  jumpButton = document.querySelector("#jump-to-latest");
+  jumpButton?.addEventListener("click", jumpToLatest);
+  elements.messageList.addEventListener("scroll", () => {
+    if (jumpButton && isNearBottom(elements.messageList)) jumpButton.hidden = true;
+  });
   elements.newChatButton.addEventListener("click", toggleSearchPanel);
   elements.userSearchInput.addEventListener("input", scheduleUserSearch);
   elements.userSearchInput.addEventListener("keydown", (event) => {
@@ -70,6 +77,7 @@ async function switchAccount(nextAccount) {
   closeSearchPanel();
   renderChats();
   renderConversation();
+  if (jumpButton) jumpButton.hidden = true;
   window.dispatchEvent(new CustomEvent("bulbam:chat-changed", { detail: { chat: null } }));
 
   if (!account) return;
@@ -176,13 +184,14 @@ async function loadChats({ quiet = false } = {}) {
 }
 
 function renderChats() {
+  const focusedChatId = document.activeElement?.closest?.(".chat-item")?.dataset.conversationId;
   elements.chatList.replaceChildren();
   if (!account) return;
 
   if (!chats.length) {
     const empty = document.createElement("p");
-    empty.className = "hint";
-    empty.textContent = "Пока нет диалогов. Нажми «Новый чат».";
+    empty.className = "chat-list-empty";
+    empty.textContent = "Здесь будут ваши переписки. Нажмите «Новый чат», чтобы найти человека.";
     elements.chatList.append(empty);
     return;
   }
@@ -191,6 +200,7 @@ function renderChats() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-item";
+    button.dataset.conversationId = chat.conversationId;
     if (selectedChat?.conversationId === chat.conversationId) {
       button.classList.add("is-current");
       button.setAttribute("aria-current", "page");
@@ -201,21 +211,35 @@ function renderChats() {
     const username = document.createElement("span");
     username.className = "chat-username";
     username.textContent = `@${chat.peer.username}`;
+
     const preview = document.createElement("span");
     preview.className = "chat-preview";
-    preview.textContent = chat.lastMessage ? oneLine(chat.lastMessage.text) : "Сообщений пока нет";
-    button.append(name, username, preview);
-    button.setAttribute(
-      "aria-label",
-      `${chat.peer.displayName}, @${chat.peer.username}. ${preview.textContent}`
-    );
+    preview.textContent = chatPreview(chat.lastMessage, account.userId);
+
+    const time = document.createElement("time");
+    time.className = "chat-time";
+    const lastMessageAt = chat.lastMessage?.createdAt ?? chat.lastMessageAt;
+    time.textContent = lastMessageAt ? chatTimeLabel(lastMessageAt) : "";
+    time.hidden = !time.textContent;
+    if (lastMessageAt && Number.isFinite(new Date(lastMessageAt).getTime())) {
+      time.dateTime = new Date(lastMessageAt).toISOString();
+    }
+
+    button.append(name, time, username, preview);
+    button.setAttribute("aria-label", chatAccessibleLabel(chat, account.userId));
     button.addEventListener("click", () => void selectChat(chat, { focusHeading: true }));
     elements.chatList.append(button);
+  }
+  if (focusedChatId) {
+    const restored = [...elements.chatList.querySelectorAll(".chat-item")]
+      .find((button) => button.dataset.conversationId === focusedChatId);
+    restored?.focus({ preventScroll: true });
   }
 }
 
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
+  if (jumpButton) jumpButton.hidden = true;
   messages = [];
   resetVoicePlayers();
   renderChats();
@@ -265,23 +289,41 @@ function renderConversation() {
   renderMessages();
 }
 
-function renderMessages({ preserveVoicePlayback = false } = {}) {
+function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false } = {}) {
+  const list = elements.messageList;
+  const wasNearBottom = isNearBottom(list);
+  const oldScrollTop = list.scrollTop;
+  const previousIds = new Set([...list.querySelectorAll(".message[data-message-id]")]
+    .map((item) => item.dataset.messageId));
   const playbackState = preserveVoicePlayback ? captureVoicePlaybackState() : [];
   const focusState = preserveVoicePlayback ? captureMessageFocus() : null;
   resetVoicePlayers();
-  elements.messageList.replaceChildren();
+  list.replaceChildren();
   if (!selectedChat) return;
 
   if (!messages.length) {
     const item = document.createElement("li");
     item.className = "message-empty";
-    item.textContent = "Сообщений пока нет. Напиши первым.";
-    elements.messageList.append(item);
+    item.textContent = "Здесь пока нет сообщений. Напишите что-нибудь или запишите голосовое.";
+    list.append(item);
+    if (jumpButton) jumpButton.hidden = true;
     return;
   }
 
   messages.sort((left, right) => left.createdAt - right.createdAt);
+  let lastDay = "";
   for (const message of messages) {
+    const currentDay = dayKey(message.createdAt);
+    if (currentDay !== lastDay) {
+      const separator = document.createElement("li");
+      separator.className = "message-day";
+      separator.setAttribute("role", "separator");
+      separator.setAttribute("aria-label", dayLabel(message.createdAt));
+      separator.textContent = dayLabel(message.createdAt);
+      list.append(separator);
+      lastDay = currentDay;
+    }
+
     const item = document.createElement("li");
     const mine = message.senderUserId === account?.userId;
     item.className = `message ${mine ? "message-mine" : "message-theirs"}`;
@@ -303,16 +345,24 @@ function renderMessages({ preserveVoicePlayback = false } = {}) {
 
     const meta = document.createElement("span");
     meta.className = "message-meta";
+    const time = document.createElement("time");
+    const validDate = new Date(message.createdAt);
+    if (Number.isFinite(validDate.getTime())) time.dateTime = validDate.toISOString();
+    time.textContent = messageTime(message.createdAt);
+    meta.append(time);
+
     const state = message.localState === "pending"
-      ? " · отправляется"
+      ? "отправляется"
       : message.localState === "failed"
-        ? " · не отправлено"
+        ? "не отправлено"
         : mine
-          ? message.deliveredAt
-            ? " · доставлено"
-            : " · отправлено"
+          ? message.deliveredAt ? "доставлено" : "отправлено"
           : "";
-    meta.textContent = `${formatTime(message.createdAt)}${state}`;
+    if (state) {
+      const stateLabel = document.createElement("span");
+      stateLabel.textContent = ` · ${state}`;
+      meta.append(stateLabel);
+    }
     item.append(meta);
 
     if (message.localState === "failed" && message.kind !== "voice") {
@@ -324,12 +374,32 @@ function renderMessages({ preserveVoicePlayback = false } = {}) {
       item.append(retry);
     }
 
-    elements.messageList.append(item);
+    list.append(item);
   }
+
   setVoiceMessageSequence(messages);
-  elements.messageList.lastElementChild?.scrollIntoView({ block: "nearest" });
+  const stickToBottom = scrollToBottom || !preserveVoicePlayback || wasNearBottom;
+  if (stickToBottom) {
+    list.scrollTop = list.scrollHeight;
+    if (jumpButton) jumpButton.hidden = true;
+  } else {
+    list.scrollTop = oldScrollTop;
+    const newMessage = messages.some((message) => !previousIds.has(message.messageId) &&
+      message.senderUserId !== account?.userId && !message.localState);
+    if (newMessage && jumpButton) jumpButton.hidden = false;
+  }
   if (playbackState.length) void restoreVoicePlaybackState(playbackState);
   if (focusState) restoreMessageFocus(focusState);
+}
+
+function jumpToLatest() {
+  elements.messageList.scrollTop = elements.messageList.scrollHeight;
+  if (jumpButton) jumpButton.hidden = true;
+  const latest = elements.messageList.querySelector(".message:last-child");
+  if (latest) {
+    latest.tabIndex = -1;
+    latest.focus({ preventScroll: true });
+  }
 }
 
 async function sendCurrentMessage(event) {
@@ -352,7 +422,7 @@ async function sendCurrentMessage(event) {
   };
   messages.push(pending);
   elements.messageInput.value = "";
-  renderMessages({ preserveVoicePlayback: true });
+  renderMessages({ preserveVoicePlayback: true, scrollToBottom: true });
   await transmitPending(pending);
 }
 
@@ -572,18 +642,6 @@ function restoreMessageFocus(state) {
       return;
     }
   }
-}
-
-function oneLine(value) {
-  const compact = String(value).replace(/\s+/g, " ").trim();
-  return compact.length > 80 ? `${compact.slice(0, 77)}…` : compact;
-}
-
-function formatTime(timestamp) {
-  return new Intl.DateTimeFormat("ru", {
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(timestamp));
 }
 
 function randomId() {
