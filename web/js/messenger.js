@@ -1,7 +1,6 @@
 import { api } from "./api.js";
 import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
 import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
-import { parseEncryptedVoiceMime } from "./secure-voice.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
