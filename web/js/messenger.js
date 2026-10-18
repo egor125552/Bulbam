@@ -1,4 +1,7 @@
 import { api } from "./api.js";
+import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
+import { decryptVoiceFile } from "./secure-voice.js";
+import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
@@ -24,6 +27,40 @@ let generation = 0;
 let jumpButton = null;
 
 export function setupMessenger() {
+  setupSecureChat({
+    onKeyChanged: () => renderMessages({ preserveVoicePlayback: true }),
+    verifyCandidateKey: async (secret, candidateAccountId, candidateConversationId) => {
+      if (account?.userId !== candidateAccountId ||
+          selectedChat?.conversationId !== candidateConversationId) {
+        throw new Error("Переписка изменилась во время проверки ключа.");
+      }
+      const sample = messages.find((message) =>
+        message.conversationId === candidateConversationId && isProtectedContent(message));
+      if (!sample) return;
+      const key = await importConversationSecret(secret);
+      try {
+        const context = {
+          conversationId: sample.conversationId,
+          senderUserId: sample.senderUserId,
+          clientMessageId: sample.clientMessageId
+        };
+        if (isEncryptedText(sample.text)) {
+          await decryptText(sample.text, key, context);
+        } else if (sample.voice?.mimeType?.startsWith("application/vnd.bulbam.encrypted-voice")) {
+          // A conversation containing only protected voice must also reject a
+          // wrong key BEFORE it becomes the non-replaceable device key.
+          const response = await fetch(
+            `/api/v1/chats/${sample.conversationId}/messages/${sample.messageId}/voice/audio`,
+            { credentials: "same-origin", cache: "no-store" }
+          );
+          if (!response.ok) throw new Error("Protected sample unavailable");
+          await decryptVoiceFile(await response.blob(), key, sample.voice.mimeType, context);
+        }
+      } catch {
+        throw new Error("Не удалось проверить ключ по защищённому сообщению. Проверьте код у собеседника.");
+      }
+    }
+  });
   jumpButton = document.querySelector("#jump-to-latest");
   jumpButton?.addEventListener("click", jumpToLatest);
   elements.messageList.addEventListener("scroll", () => {
@@ -67,6 +104,7 @@ export async function refreshChatsAfterExternalMessage() {
 
 async function switchAccount(nextAccount) {
   generation += 1;
+  void setSecureConversation(nextAccount, null);
   account = nextAccount;
   chats = [];
   selectedChat = null;
@@ -239,6 +277,7 @@ function renderChats() {
 
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
+  void setSecureConversation(account, chat);
   if (jumpButton) jumpButton.hidden = true;
   messages = [];
   resetVoicePlayers();
@@ -256,6 +295,7 @@ async function loadMessages({ quiet = false } = {}) {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
     if (!selectedChat || selectedChat.conversationId !== conversationId) return;
     const serverMessages = result.messages ?? [];
+    requireProtectedConversationKey(account.userId, conversationId, serverMessages.some(isProtectedContent));
     const pending = messages.filter((message) => message.localState);
     messages = serverMessages;
     for (const local of pending) {
@@ -339,7 +379,29 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
       item.append(renderVoiceMessage(message, mine));
     } else {
       const body = document.createElement("p");
-      body.textContent = message.text;
+      if (isEncryptedText(message.text)) {
+        body.textContent = "Защищённое сообщение. Для чтения нужен ключ этой переписки.";
+        const current = getSecureChatState();
+        if (current.key && current.conversationId === selectedChat.conversationId) {
+          void decryptText(message.text, current.key, {
+            conversationId: message.conversationId,
+            senderUserId: message.senderUserId,
+            clientMessageId: message.clientMessageId
+          }).then((plaintext) => {
+            if (item.isConnected && selectedChat?.conversationId === message.conversationId) {
+              body.textContent = plaintext;
+            }
+          }).catch(() => {
+            if (item.isConnected) body.textContent = "Не удалось расшифровать. Проверьте ключ переписки.";
+          });
+        }
+      } else {
+        body.textContent = message.text;
+        if (getSecureChatState().key && !message.localState && message.kind === "text") {
+          item.classList.add("message-unprotected");
+          body.setAttribute("aria-label", "Без шифрования. " + message.text);
+        }
+      }
       item.append(body);
     }
 
@@ -407,14 +469,36 @@ async function sendCurrentMessage(event) {
   if (!account || !selectedChat) return;
   const text = elements.messageInput.value.replace(/\r\n?/g, "\n").trim();
   if (!text) return;
+  const secure = getSecureChatState();
+  if (secure.blocked || secure.conversationId !== selectedChat.conversationId) {
+    announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
+    return;
+  }
+  if (!secure.key && (secure.requiresKey || messages.some(isProtectedContent))) {
+    announce("В переписке есть защищённые сообщения. Введите ключ перед отправкой, чтобы не отправить текст открыто.");
+    return;
+  }
+  const expectedChat = selectedChat.conversationId;
+  const clientMessageId = randomId();
+  let wireText = text;
+  try {
+    if (secure.key) wireText = await encryptText(text, secure.key, {
+      conversationId: expectedChat, senderUserId: account.userId, clientMessageId
+    });
+  } catch (error) {
+    announce("Сообщение не отправлено: " + error.message);
+    return;
+  }
+  if (selectedChat?.conversationId !== expectedChat || account?.userId !== secure.accountId) return;
 
   const pending = {
     messageId: `pending_${randomId()}`,
     conversationId: selectedChat.conversationId,
     senderUserId: account.userId,
-    clientMessageId: randomId(),
+    clientMessageId,
     kind: "text",
     text,
+    wireText,
     voice: null,
     createdAt: Date.now(),
     deliveredAt: null,
@@ -428,6 +512,34 @@ async function sendCurrentMessage(event) {
 
 async function transmitPending(pending) {
   if (!account || !selectedChat || pending.conversationId !== selectedChat.conversationId) return;
+  const secure = getSecureChatState();
+  if (secure.blocked || secure.conversationId !== pending.conversationId || secure.accountId !== account.userId) {
+    announce("Сообщение осталось в черновике: ключ переписки пока недоступен.");
+    return;
+  }
+  try {
+    // Retrying a draft written before protection was enabled must never send it in the clear.
+    if (secure.key && !isEncryptedText(pending.wireText ?? pending.text)) {
+      pending.wireText = await encryptText(pending.text, secure.key, {
+        conversationId: pending.conversationId,
+        senderUserId: account.userId,
+        clientMessageId: pending.clientMessageId
+      });
+    }
+    if (!secure.key && isEncryptedText(pending.wireText ?? pending.text)) {
+      announce("Нельзя повторить отправку, пока ключ переписки недоступен.");
+      return;
+    }
+    if (!secure.key && (secure.requiresKey || messages.some(isProtectedContent))) {
+      announce("Повторная отправка без ключа заблокирована.");
+      return;
+    }
+  } catch (error) {
+    announce("Не удалось защитить сообщение: " + error.message);
+    return;
+  }
+  if (!account || selectedChat?.conversationId !== pending.conversationId ||
+    getSecureChatState().key !== secure.key) return;
   pending.localState = "pending";
   renderMessages({ preserveVoicePlayback: true });
   try {
@@ -435,7 +547,7 @@ async function transmitPending(pending) {
       method: "POST",
       body: JSON.stringify({
         clientMessageId: pending.clientMessageId,
-        text: pending.text
+        text: pending.wireText ?? pending.text
       })
     });
     upsertServerMessage(result.message);
@@ -462,6 +574,7 @@ function upsertServerMessage(message) {
     (candidate) => candidate.messageId !== message.messageId && candidate.clientMessageId !== message.clientMessageId
   );
   messages.push(merged);
+  requireProtectedConversationKey(account?.userId, merged.conversationId, isProtectedContent(merged));
   renderMessages({ preserveVoicePlayback: true });
 }
 
@@ -642,6 +755,11 @@ function restoreMessageFocus(state) {
       return;
     }
   }
+}
+
+function isProtectedContent(message) {
+  return isEncryptedText(message?.text) ||
+    Boolean(message?.voice?.mimeType?.startsWith("application/vnd.bulbam.encrypted-voice"));
 }
 
 function randomId() {

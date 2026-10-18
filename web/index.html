@@ -117,8 +117,10 @@
               <div class="conversation-name-block">
                 <h2 id="conversation-title" tabindex="-1">Выберите чат</h2>
                 <p id="conversation-peer" class="conversation-peer">Откройте диалог или найдите человека.</p>
+                <p id="secure-chat-label" class="secure-chat-label" hidden>Обычные сообщения</p>
               </div>
             </div>
+            <button id="secure-chat-open" class="button-with-icon" type="button" hidden>Защита</button>
             <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
@@ -178,6 +180,30 @@
             </div>
             <audio id="call-remote-audio" autoplay></audio>
           </section>
+
+      <dialog id="secure-chat-dialog" class="secure-chat-dialog" aria-labelledby="secure-chat-title">
+        <div class="settings-header">
+          <h2 id="secure-chat-title" tabindex="-1">Защита сообщений и голосовых</h2>
+          <button type="button" id="secure-chat-close" aria-label="Закрыть настройки защиты">Закрыть</button>
+        </div>
+        <p id="secure-chat-status" role="status" aria-live="polite">Проверяю ключ переписки.</p>
+        <p class="hint">Экспериментальная защита новых текстовых и голосовых сообщений. Старые записи, сообщения и звонки не шифруются. Это не протокол Signal.</p>
+        <p class="hint">Ключ необходимо передать собеседнику через другой надёжный канал, НЕ в сообщении Бульбама. Без ключа сообщения не восстановить. Этот ключ останется только на текущем устройстве.</p>
+        <div id="secure-chat-onboarding">
+          <button id="secure-chat-generate" type="button">Создать ключ переписки</button>
+          <div class="secure-chat-import">
+            <label for="secure-chat-key-input">Ввести ключ от собеседника</label>
+            <input id="secure-chat-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="Вставьте полученный ключ">
+            <button id="secure-chat-save" type="button">Сохранить ключ на устройстве</button>
+          </div>
+        </div>
+        <div id="secure-chat-export" hidden>
+          <label for="secure-chat-key-output">Ключ для передачи через другой надёжный канал</label>
+          <input id="secure-chat-key-output" type="text" autocomplete="off" spellcheck="false" readonly>
+          <button id="secure-chat-copy" type="button">Скопировать ключ</button>
+          <p class="hint">Сохраните ключ вне Бульбама сейчас. После закрытия окна показать его повторно не получится.</p>
+        </div>
+      </dialog>
 
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <div class="settings-header">

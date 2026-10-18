@@ -218,6 +218,8 @@ function validatePushKey(value: unknown, name: string): string {
 }
 
 function notificationPreview(text: string): string {
+  // Never forward an encrypted message envelope to third-party push services.
+  if (text.startsWith("bmsec1:")) return "Защищённое сообщение";
   const compact = text.replace(/\s+/g, " ").trim();
   return compact.length > 180 ? `${compact.slice(0, 177)}…` : compact;
 }

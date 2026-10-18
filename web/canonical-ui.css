@@ -538,3 +538,46 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
     text-align: left;
   }
 }
+
+
+/* Experimental protection control: clear labels and keyboard-friendly key setup. */
+#secure-chat-open {
+  min-height: 2.6rem;
+  padding: 0.45rem 0.75rem;
+  margin-right: 0.25rem;
+  border-radius: 0.75rem;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+.secure-chat-label {
+  margin: 0.25rem 0 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.secure-chat-dialog {
+  width: min(35rem, calc(100% - 1rem));
+  max-height: min(90dvh, 55rem);
+  overflow-y: auto;
+  padding: clamp(1rem, 4vw, 1.7rem);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  color: CanvasText;
+}
+.secure-chat-dialog::backdrop { background: rgb(0 0 0 / 60%); }
+.secure-chat-dialog .settings-header { margin-bottom: 0.8rem; }
+.secure-chat-import, #secure-chat-export {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+#secure-chat-status { font-weight: 700; line-height: 1.5; }
+#secure-chat-key-input, #secure-chat-key-output { width: 100%; max-width: 100%; }
+.message-unprotected {
+  border: 2px dashed var(--danger);
+}
+@media (max-width: 48rem) {
+  #secure-chat-open { min-height: 2.75rem; font-size: 0.8rem; padding-inline: 0.45rem; }
+  .secure-chat-dialog { width: 100%; height: 100dvh; max-height: none; border-radius: 0; }
+}

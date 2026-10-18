@@ -1,4 +1,7 @@
 import { announce, getCurrentAccount } from "./ui.js";
+import { getSecureChatState } from "./secure-chat-ui.js";
+import { decryptVoiceFile, parseEncryptedVoiceMime } from "./secure-voice.js";
+import { createProtectedVoiceStream } from "./secure-voice-stream.js";
 import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
 
 const SPEED_KEY = "bulbam.voice.playbackRate";
@@ -35,13 +38,15 @@ export function renderVoiceMessage(message, mine) {
   const voice = message.voice;
   const root = document.createElement("section");
   root.className = "voice-message";
-  root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(voice.durationMs)}`);
+  const protectedMime = parseEncryptedVoiceMime(voice.mimeType);
+  root.setAttribute("aria-label", `${protectedMime ? "Защищённое" : "Обычное"} голосовое сообщение, ${formatTime(voice.durationMs)}`);
 
   // Keep the actual media engine outside the message subtree. Messenger rerenders can
   // rebuild message cards without destroying a playing HTMLMediaElement on Safari.
   const audio = document.createElement("audio");
   audio.preload = "metadata";
-  audio.src = voice.localUrl || voiceUrl(message);
+  // Ciphertext must never be sent directly to the browser's media decoder.
+  if (!protectedMime) audio.src = voice.localUrl || voiceUrl(message);
   audio.hidden = true;
   audio.setAttribute("aria-hidden", "true");
   audio.tabIndex = -1;
@@ -97,6 +102,10 @@ export function renderVoiceMessage(message, mine) {
     buffering: false,
     objectUrl: null,
     preparedSource: false,
+    protectedMime: Boolean(protectedMime),
+    preparingProtected: null,
+    protectedSession: null,
+    streamingUnsupported: false,
     pendingCleanupGeneration: 0,
     disposing: false
   };
@@ -174,7 +183,7 @@ function refreshController(controller, message, mine) {
   controller.pendingCleanupGeneration = 0;
   controller.message = message;
   controller.mine = mine;
-  controller.root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(message.voice.durationMs)}`);
+  controller.root.setAttribute("aria-label", `${controller.protectedMime ? "Защищённое" : "Обычное"} голосовое сообщение, ${formatTime(message.voice.durationMs)}`);
   controller.progress.max = String(Math.max(0.1, message.voice.durationMs / 1000));
   controller.speed.textContent = `${formatSpeed(playbackRate)} скорость`;
   controller.play.textContent = controller.audio.paused ? "Воспроизвести" : "Пауза";
@@ -260,13 +269,40 @@ function disposeController(controller) {
   clearTimeout(controller.remoteStaleTimer);
   controller.remoteStaleTimer = null;
   try { controller.audio.pause(); } catch {}
+  controller.protectedSession?.stop();
   controller.audio.remove();
   if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
 }
 
 async function togglePlayback(controller) {
   if (controller.audio.paused) {
-    await prepareCachedSource(controller);
+    if (controller.protectedMime && !controller.preparedSource && !controller.streamingUnsupported) {
+      try {
+        if (startStreamingProtectedVoice(controller)) {
+          // Invoke play() during the user's actual click. On Safari the browser
+          // may deny playback when it is deferred until after a network request.
+          void pauseOtherPlayers(controller.message.messageId);
+          const playing = controller.audio.play();
+          void playing?.catch((error) => {
+            if (!controller.disposing) announce(`Не удалось начать потоковое голосовое: ${error.message}`);
+          });
+          return;
+        }
+      } catch (error) {
+        announce(`Защищённое голосовое не открыто: ${error.message}`);
+        return;
+      }
+    }
+    try {
+      if (controller.protectedMime) {
+        announce("Потоковый режим недоступен для этого браузера или формата. Загружаю защищённое голосовое целиком.");
+        await prepareProtectedSource(controller);
+      } else await prepareCachedSource(controller);
+    } catch (error) {
+      announce(`Защищённое голосовое не открыто: ${error.message}`);
+      return;
+    }
+    if (controller.disposing) return;
     await pauseOtherPlayers(controller.message.messageId);
     const startMs = effectiveVoicePositionMs(
       controller.audio.currentTime,
@@ -279,6 +315,95 @@ async function togglePlayback(controller) {
     await controller.audio.play().catch((error) => announce(`Не удалось начать воспроизведение: ${error.message}`));
   } else {
     controller.audio.pause();
+  }
+}
+
+function startStreamingProtectedVoice(controller) {
+  const security = getSecureChatState();
+  const account = getCurrentAccount();
+  if (!account || security.blocked || !security.key ||
+      security.accountId !== account.userId ||
+      security.conversationId !== controller.message.conversationId) {
+    throw new Error("Для прослушивания нужен ключ этой переписки.");
+  }
+  const expectedKey = security.key;
+  const expectedAccountId = account.userId;
+  const message = controller.message;
+  const session = createProtectedVoiceStream({
+    audio: controller.audio,
+    url: voiceUrl(message),
+    mimeType: message.voice.mimeType,
+    ciphertextBytes: message.voice.sizeBytes,
+    key: expectedKey,
+    context: {
+      conversationId: message.conversationId,
+      senderUserId: message.senderUserId,
+      clientMessageId: message.clientMessageId
+    },
+    isStillAuthorized: () => {
+      const active = getSecureChatState();
+      return !controller.disposing && getCurrentAccount()?.userId === expectedAccountId &&
+        active.conversationId === message.conversationId && active.key === expectedKey && !active.blocked;
+    }
+  });
+  if (!session) return false;
+  controller.protectedSession = session;
+  controller.objectUrl = session.objectUrl;
+  controller.preparedSource = true;
+  void session.done.catch((error) => {
+    if (controller.disposing) return;
+    announce(`Не удалось продолжить буферизацию защищённого голосового: ${error.message}`);
+    controller.streamingUnsupported = true;
+    try { controller.audio.pause(); } catch {}
+    session.stop();
+    controller.protectedSession = null;
+    controller.preparedSource = false;
+    controller.audio.removeAttribute("src");
+    controller.audio.load();
+    if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
+    controller.objectUrl = null;
+  });
+  return true;
+}
+
+async function prepareProtectedSource(controller) {
+  if (controller.preparedSource) return;
+  if (controller.preparingProtected) return controller.preparingProtected;
+  const security = getSecureChatState();
+  const account = getCurrentAccount();
+  if (!account || security.blocked || !security.key ||
+      security.accountId !== account.userId ||
+      security.conversationId !== controller.message.conversationId) {
+    throw new Error("Для прослушивания нужен ключ этой переписки.");
+  }
+  const currentKey = security.key;
+  const currentAccountId = account.userId;
+  controller.preparingProtected = (async () => {
+    const response = await fetch(voiceUrl(controller.message), {
+      credentials: "same-origin", cache: "no-store"
+    });
+    if (!response.ok) throw new Error(`Не удалось загрузить аудио: HTTP ${response.status}.`);
+    const encrypted = await response.blob();
+    const decoded = await decryptVoiceFile(encrypted, currentKey,
+      controller.message.voice.mimeType, {
+        conversationId: controller.message.conversationId,
+        senderUserId: controller.message.senderUserId,
+        clientMessageId: controller.message.clientMessageId
+      });
+    const latest = getSecureChatState();
+    if (controller.disposing || getCurrentAccount()?.userId !== currentAccountId ||
+        latest.key !== currentKey || latest.conversationId !== controller.message.conversationId) {
+      throw new Error("Переписка или ключ изменились во время загрузки.");
+    }
+    const objectUrl = URL.createObjectURL(decoded);
+    controller.objectUrl = objectUrl;
+    controller.audio.src = objectUrl;
+    controller.preparedSource = true;
+  })();
+  try {
+    await controller.preparingProtected;
+  } finally {
+    controller.preparingProtected = null;
   }
 }
 
@@ -407,7 +532,7 @@ async function prefetchNextVoice(messageId) {
   const next = messageSequence[index + 1];
   if (next?.kind !== "voice") return;
   const controller = controllers.get(next.messageId);
-  if (!controller || controller.message.voice.localUrl) return;
+  if (!controller || controller.message.voice.localUrl || controller.protectedMime) return;
   try {
     const response = await fetch(voiceUrl(controller.message), {
       credentials: "same-origin",
@@ -420,7 +545,7 @@ async function prefetchNextVoice(messageId) {
 }
 
 async function cacheVoice(message) {
-  if (!window.caches || message.voice.localUrl) return;
+  if (!window.caches || message.voice.localUrl || parseEncryptedVoiceMime(message.voice.mimeType)) return;
   const account = getCurrentAccount();
   if (!account) return;
   try {
