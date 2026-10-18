@@ -2,6 +2,7 @@ import { handleError, json, methodNotAllowed } from "./core/http";
 import { CallService } from "./modules/calls/application/call-service";
 import { handleCallHttp } from "./modules/calls/transport/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
+import { AdminRecoveryService } from "./modules/identity/application/admin-recovery-service";
 import { PasskeyService } from "./modules/identity/application/passkey-service";
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
@@ -19,7 +20,7 @@ import { DurableObjectRealtime } from "./modules/realtime/public";
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
-const VERSION = "0.6.0-voice-do-storage";
+const VERSION = "0.7.0-continuity-i18n-recovery";
 
 function storageBindingMissing(): Response {
   return json({ ok: false, error: { code: "storage_binding_missing", message: "Хранилище D1 не подключено к Worker." } }, { status: 503 });
@@ -76,6 +77,9 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
+    const adminRecovery = env.DB && identity ? new AdminRecoveryService(
+      env.DB,identity,realtime,push??undefined,ctx ? (promise)=>ctx.waitUntil(promise) : undefined
+    ) : null;
     const directory = identity ? { findUser: (userId: string) => identity.findPublicAccountById(userId) } : null;
     const messaging = messagingRepository && directory
       ? new MessagingService(
@@ -139,14 +143,14 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
       if (smokeResponse) return smokeResponse;
     }
     if (identity) {
-      const identityResponse = await handleIdentityHttp(request, url, identity, passkeys);
+      const identityResponse = await handleIdentityHttp(request, url, identity, passkeys, adminRecovery);
       if (identityResponse) return identityResponse;
     }
 
     const authenticate = identity
       ? async (incoming: Request) => {
           const authenticated = await identity.authenticate(sessionToken(incoming));
-          return { userId: authenticated.account.userId };
+          return { userId: authenticated.account.userId, sessionId: authenticated.session.sessionId };
         }
       : null;
 

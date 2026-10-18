@@ -243,4 +243,52 @@ describe("one-to-one audio call signaling", () => {
     expect(await activeCallFor(gamma.account.userId)).toMatchObject({ callId: gammaCall.callId });
     expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: gammaCall.callId });
   });
+  test("Пераход transfers an accepted call across sessions but never to an unrelated account", async () => {
+    const inviteA="BULBAM-HANDOFF-ALPHA-2026";
+    const inviteB="BULBAM-HANDOFF-BETA-2026";
+    const inviteC="BULBAM-HANDOFF-GAMMA-2026";
+    await seedInvite(inviteA,"handoff-alpha-invite");
+    await seedInvite(inviteB,"handoff-beta-invite");
+    await seedInvite(inviteC,"handoff-gamma-invite");
+    const a=await register({username:"handoff_alpha",displayName:"Альфа",inviteCode:inviteA});
+    const b=await register({username:"handoff_beta",displayName:"Бета",inviteCode:inviteB});
+    const c=await register({username:"handoff_gamma",displayName:"Гамма",inviteCode:inviteC});
+    const chat=await openChat(a,b);
+    const root=`/api/v1/chats/${chat.conversationId}/calls`;
+    const started=await api(root,a.cookie,{method:"POST"});
+    await expectStatus(started,201);
+    const {call}=await json(started);
+    const path=`${root}/${call.callId}`;
+    const answered=await api(path+"/answer",b.cookie,{method:"POST"});
+    await expectStatus(answered,200);
+    const discovered=await api("/api/v1/calls/active",a.cookie);
+    await expectStatus(discovered,200);
+    expect((await json(discovered)).call.callId).toBe(call.callId);
+    expect((await api("/api/v1/calls/active",c.cookie)).status).toBe(200);
+    expect((await json(await api("/api/v1/calls/active",c.cookie))).call).toBeNull();
+    const stillOnA=await json(await api(path,a.cookie));
+    expect(stillOnA.call.sessionOwnerId).toBeTruthy();
+    const second=await api("/api/v1/auth/login",null,{
+      method:"POST",
+      body:JSON.stringify({username:"handoff_alpha",password:PASSWORD,deviceName:"Android"})
+    });
+    await expectStatus(second,200);
+    const secondCookie=sessionCookie(second);
+    const before=await json(await api(path,secondCookie));
+    expect(before.call.sessionOwnerId).toBe(stillOnA.call.sessionOwnerId);
+    expect((await api(path+"/handoff",c.cookie,{method:"POST"})).status).toBe(404);
+    const transfer=await api(path+"/handoff",secondCookie,{method:"POST"});
+    await expectStatus(transfer,200);
+    const switched=await json(transfer);
+    expect(switched.call.status).toBe("accepted");
+    expect(switched.call.sessionOwnerId).not.toBe(stillOnA.call.sessionOwnerId);
+    const offer={kind:"offer",payload:{type:"offer",sdp:"v=0\r\nnew-device-offer"}};
+    expect((await api(path+"/signals",a.cookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(403);
+    expect((await api(path+"/end",a.cookie,{method:"POST"})).status).toBe(403);
+    expect((await api(path+"/signals",secondCookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(201);
+    expect((await api(path,b.cookie)).status).toBe(200);
+    expect((await api(path+"/handoff",secondCookie,{method:"POST"})).status).toBe(200);
+    await expectStatus(await api(path+"/end",b.cookie,{method:"POST"}),200);
+    expect((await api(path+"/handoff",a.cookie,{method:"POST"})).status).toBe(409);
+  });
 });

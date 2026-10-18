@@ -106,6 +106,28 @@
         <p>Если вы всё ещё вошли в Бульбам на другом устройстве, откройте там «Настройки», затем «Безопасность аккаунта», и смените пароль.</p>
         <h4>Способ 4. Помощь администратора</h4>
         <p>Если нет ни резервного кода, ни действующего сеанса, потребуется подтверждение личности администратором сервиса. Имя пользователя само по себе не даёт права на сброс пароля. Вход по почте пока недоступен: в Бульбаме нет подтверждённых адресов почты.</p>
+        <form id="admin-recovery-form" class="form-stack">
+          <label>Имя пользователя, чей доступ нужно восстановить
+            <input name="username" autocomplete="username" minlength="3" maxlength="32" required>
+          </label>
+          <button type="submit">Отправить запрос администратору</button>
+        </form>
+        <p class="hint">Администратор должен сначала проверить вашу личность по заранее известному ему способу связи. Не передавайте ему свой пароль.</p>
+        <div id="admin-recovery-progress" role="status" aria-live="polite" hidden>
+          <p id="admin-recovery-state"></p>
+          <p>Код заявки: <strong id="admin-recovery-verification"></strong>. Сообщите его администратору, когда он проверит, что обращаетесь именно вы.</p>
+          <button type="button" id="admin-recovery-check">Проверить решение администратора</button>
+          <form id="admin-recovery-complete" class="form-stack" hidden>
+            <p>Заявка одобрена. Создайте новый пароль. Одобрение одноразовое и действует 15 минут.</p>
+            <label>Новый пароль
+              <input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+            </label>
+            <label>Повторите новый пароль
+              <input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+            </label>
+            <button type="submit">Установить пароль и войти</button>
+          </form>
+        </div>
         <button id="auth-login-from-recovery" type="button">Вернуться ко входу</button>
       </div>
     </section>
@@ -117,6 +139,32 @@
       <textarea id="recovery-codes-text" rows="10" readonly spellcheck="false"></textarea>
       <button id="copy-recovery-codes" type="button">Скопировать коды</button>
       <button id="close-recovery-codes" type="button">Я сохранил коды</button>
+    </dialog>
+
+    <dialog id="bulbam-welcome-dialog" aria-labelledby="bulbam-welcome-title">
+      <h2 id="bulbam-welcome-title" tabindex="-1">Добро пожаловать в Бульбам!</h2>
+      <p id="bulbam-welcome-name">Рады видеть вас здесь.</p>
+      <p>Бульбам создан в Беларуси. Здесь можно переписываться, отправлять голосовые сообщения и звонить.</p>
+      <ol>
+        <li>Нажмите «Новый чат», чтобы найти собеседника.</li>
+        <li>Для безопасного входа откройте «Настройки → Ключи доступа».</li>
+        <li>При звонке «Бульбам Пераход» позволяет продолжить разговор на другом устройстве, где вы уже вошли.</li>
+        <li>Язык приложения можно изменить в настройках. VoiceOver и экранные дикторы поддерживаются.</li>
+      </ol>
+      <label for="welcome-language">Язык интерфейса</label>
+      <select id="welcome-language">
+        <option value="ru">Русский</option>
+        <option value="be">Беларуская</option>
+      </select>
+      <p>Совет: сохраните резервные коды восстановления в безопасном месте.</p>
+      <button id="bulbam-welcome-close" type="button">Начать общение</button>
+    </dialog>
+
+    <dialog id="admin-recovery-help" aria-labelledby="admin-recovery-help-title">
+      <h2 id="admin-recovery-help-title" tabindex="-1">Доступ к аккаунту восстановлен</h2>
+      <p>Вы вошли с новым паролем. В дальнейшем сменить его можно в «Настройки → Безопасность аккаунта». Сохраните новые резервные коды и добавьте ключ доступа, чтобы не терять вход.</p>
+      <label><input type="checkbox" id="admin-recovery-help-skip"> Больше не показывать это объяснение</label>
+      <button type="button" id="admin-recovery-help-close">Понятно</button>
     </dialog>
 
     <section id="signed-in" class="signed-in" aria-label="Мессенджер" hidden>
@@ -217,6 +265,7 @@
               <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
               <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
+              <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
@@ -236,6 +285,11 @@
         <div class="settings-grid">
           <section class="card" aria-labelledby="appearance-title">
             <h3 id="appearance-title">Интерфейс</h3>
+            <label for="settings-language">Язык интерфейса</label>
+            <select id="settings-language" aria-label="Язык интерфейса">
+              <option value="ru">Русский</option>
+              <option value="be">Беларуская</option>
+            </select>
             <label for="message-view">Вид сообщений</label>
             <select id="message-view">
               <option value="bubbles">Пузырьки</option>
@@ -268,6 +322,14 @@
             <p class="hint">После смены пароля другие устройства выйдут из аккаунта. Старые резервные коды перестанут работать.</p>
             <button id="new-recovery-codes" type="button">Создать новые резервные коды</button>
             <p class="hint">Новый набор заменит предыдущие коды.</p>
+          </section>
+
+          <section id="admin-recovery-queue" class="card" aria-labelledby="admin-recovery-queue-title" hidden>
+            <h3 id="admin-recovery-queue-title" tabindex="-1">Запросы восстановления</h3>
+            <p>Одобряйте заявку только после независимой проверки владельца аккаунта. Запрос без подтверждения личности может быть попыткой захвата.</p>
+            <button id="admin-recovery-refresh" type="button">Обновить заявки</button>
+            <p id="admin-recovery-queue-status" role="status" aria-live="polite"></p>
+            <ul id="admin-recovery-requests" aria-label="Ожидающие запросы восстановления"></ul>
           </section>
 
           <section class="card" aria-labelledby="passkeys-settings-title">
@@ -313,6 +375,7 @@
               <option value="studio">Студийный</option>
               <option value="music">Музыка</option>
             </select>
+            <button id="call-discover" type="button">Найти активный звонок на других устройствах</button>
             <p id="audio-profile-description" class="hint"></p>
             <p id="audio-profile-status">Выберите режим и проверьте микрофон.</p>
             <button id="audio-profile-test" class="button-with-icon" data-icon="mic" type="button">Проверить микрофон</button>

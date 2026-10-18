@@ -1,3 +1,5 @@
+import { originalText, translateText } from "./i18n.js";
+
 export const elements = {
   workerStatus: document.querySelector("#worker-status"),
   storageStatus: document.querySelector("#storage-status"),
@@ -41,6 +43,7 @@ export const elements = {
   callAnswerButton: document.querySelector("#call-answer"),
   callDeclineButton: document.querySelector("#call-decline"),
   callResumeButton: document.querySelector("#call-resume"),
+  callHandoffButton: document.querySelector("#call-handoff"),
   callMuteButton: document.querySelector("#call-mute"),
   callEndButton: document.querySelector("#call-end"),
   callMinimizeButton: document.querySelector("#call-minimize"),
@@ -101,11 +104,11 @@ export function setupInterface() {
   syncComposer();
 
   const decorate = () => {
-    const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
+    const muted = originalText(elements.callMuteButton?.textContent.trim()??"").startsWith("Включить");
     if (elements.callMuteButton) elements.callMuteButton.dataset.icon = muted ? "mic-off" : "mic";
     for (const button of document.querySelectorAll(".voice-actions button")) {
-      const text = button.textContent.trim();
-      if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
+      const text = originalText(button.textContent.trim());
+      if (originalText(button.getAttribute("aria-label")??"").includes("Воспроизвести или поставить")) {
         button.classList.add("icon-button");
         button.dataset.icon = text === "Пауза" ? "pause" : "play";
       } else if (text === "Назад на 15 секунд") {
@@ -133,7 +136,7 @@ export function announce(message) {
     clearTimeout(bufferingAnnouncementTimer);
     bufferingAnnouncementTimer = setTimeout(() => {
       bufferingAnnouncementTimer = null;
-      elements.liveStatus.textContent = message;
+      elements.liveStatus.textContent = translateText(message);
     }, BUFFERING_ANNOUNCE_DELAY_MS);
     return;
   }
@@ -149,7 +152,7 @@ export function announce(message) {
 
   clearTimeout(bufferingAnnouncementTimer);
   bufferingAnnouncementTimer = null;
-  elements.liveStatus.textContent = message;
+  elements.liveStatus.textContent = translateText(message);
 }
 
 export function getCurrentAccount() {

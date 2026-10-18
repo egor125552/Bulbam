@@ -16,6 +16,8 @@ export interface CallRoomRecord {
   answeredAt: number | null;
   endedAt: number | null;
   endedByUserId: string | null;
+  callerSessionId?: string | null;
+  calleeSessionId?: string | null;
 }
 export interface CallRoomSignal {
   sequence: number;
@@ -46,6 +48,7 @@ export class CallRoom {
         return this.getCall(url.searchParams.get("callId") ?? "", url.searchParams.get("viewerUserId") ?? "");
       }
       if (request.method === "POST" && url.pathname === "/transition") return this.transition(await readObject(request));
+      if (request.method === "POST" && url.pathname === "/handoff") return this.handoff(await readObject(request));
       if (request.method === "POST" && url.pathname === "/signal") return this.signal(await readObject(request));
       if (request.method === "GET" && url.pathname === "/signals") {
         return this.signals(
@@ -109,7 +112,8 @@ export class CallRoom {
       if (actorUserId !== call.calleeUserId) return forbidden("call_answer_forbidden", "Ответить может только получатель звонка.");
       if (call.status !== "ringing") return conflictResponse("call_not_ringing", "Звонок уже не ожидает ответа.");
       const now = Date.now();
-      const updated: CallRoomRecord = { ...call, status: "accepted", answeredAt: now, updatedAt: now };
+      const updated: CallRoomRecord = { ...call, status: "accepted", answeredAt: now, updatedAt: now,
+        calleeSessionId: stringValue(body.actorSessionId) || null };
       await this.state.storage.put(CALL_KEY, updated);
       await this.syncActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
@@ -141,6 +145,10 @@ export class CallRoom {
 
     if (action === "end") {
       if (!isActive(call)) return result({ ok: true, call: publicCall(call, actorUserId) });
+      const activeSession = actorUserId===call.callerUserId ? call.callerSessionId : call.calleeSessionId;
+      if(activeSession && activeSession!==stringValue(body.actorSessionId)){
+        return forbidden("call_moved","Звонок перенесён на другое ваше устройство.");
+      }
       const updated = endRecord(call, "ended", actorUserId);
       await Promise.all([
         this.state.storage.put(CALL_KEY, updated),
@@ -159,6 +167,27 @@ export class CallRoom {
     return invalid("invalid_call_action", "Неизвестное действие звонка.");
   }
 
+  private async handoff(body:Record<string,unknown>):Promise<Response> {
+    const call=await this.current();
+    const callId=stringValue(body.callId);
+    const actorUserId=stringValue(body.actorUserId);
+    const actorSessionId=stringValue(body.actorSessionId);
+    if(!call||call.callId!==callId||!participant(call,actorUserId))return notFoundResponse();
+    if(call.status!=="accepted")return conflictResponse("call_not_accepted","Перенос возможен только во время разговора.");
+    if(!actorSessionId)return forbidden("invalid_session","Для переноса нужен вход на новом устройстве.");
+    const field=actorUserId===call.callerUserId?"callerSessionId":"calleeSessionId";
+    if(call[field]===actorSessionId)return result({ok:true,call:publicCall(call,actorUserId)});
+    const now=Date.now();
+    const updated={...call,[field]:actorSessionId,updatedAt:now};
+    await this.state.storage.put(CALL_KEY,updated);
+    await this.syncActivePointers(updated);
+    await this.realtime.publishToUsers([updated.callerUserId,updated.calleeUserId],{
+      type:"call.handoff",callId,conversationId:updated.conversationId,
+      actorUserId,newSessionId:actorSessionId
+    });
+    return result({ok:true,call:publicCall(updated,actorUserId)});
+  }
+
   private async signal(body: Record<string, unknown>): Promise<Response> {
     const callId = stringValue(body.callId);
     const actorUserId = stringValue(body.actorUserId);
@@ -173,6 +202,9 @@ export class CallRoom {
     if (kind === "answer" && actorUserId !== call.calleeUserId) return forbidden("call_answer_signal_forbidden", "Answer создаёт получатель звонка.");
     if (kind === "resume" && actorUserId !== call.calleeUserId) return forbidden("call_resume_forbidden", "Resume запрашивает получатель звонка.");
 
+    const ownerSession = actorUserId===call.callerUserId ? call.callerSessionId : call.calleeSessionId;
+    if(ownerSession && ownerSession!==stringValue(body.actorSessionId))
+      return forbidden("call_moved","Звонок перенесён на другое устройство.");
     const currentSignals = await this.state.storage.get<CallRoomSignal[]>(SIGNALS_KEY) ?? [];
     const now = Date.now();
     const signal: CallRoomSignal = {
@@ -249,7 +281,10 @@ function publicCall(call: CallRoomRecord, viewerUserId: string) {
   return {
     ...call,
     direction: call.callerUserId === viewerUserId ? "outgoing" : "incoming",
-    peer: call.callerUserId === viewerUserId ? call.callee : call.caller
+    peer: call.callerUserId === viewerUserId ? call.callee : call.caller,
+    sessionOwnerId: call.callerUserId === viewerUserId ? (call.callerSessionId ?? null) : (call.calleeSessionId ?? null),
+    // Never expose the other participant's session owner.
+    callerSessionId: undefined, calleeSessionId: undefined
   };
 }
 
@@ -291,7 +326,9 @@ function asCall(value: unknown): CallRoomRecord | null {
     updatedAt: createdAt,
     answeredAt: null,
     endedAt: null,
-    endedByUserId: null
+    endedByUserId: null,
+    callerSessionId: stringValue(raw.callerSessionId) || null,
+    calleeSessionId: null
   };
 }
 function asPeer(value: unknown): CallPeerSnapshot | null {

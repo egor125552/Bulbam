@@ -36,11 +36,13 @@ function restoreUsernameHint() {
   if (!username) return;
   const loginInput = elements.loginForm.querySelector('[name="username"]');
   const recoveryInput = document.querySelector('#recovery-form [name="username"]');
+  const adminRecoveryInput = document.querySelector('#admin-recovery-form [name="username"]');
   if (loginInput && !loginInput.value) loginInput.value = username;
   if (recoveryInput && !recoveryInput.value) recoveryInput.value = username;
+  if (adminRecoveryInput && !adminRecoveryInput.value) adminRecoveryInput.value = username;
 }
 
-function showRecoveryCodes(codes) {
+export function showRecoveryCodes(codes) {
   if (!Array.isArray(codes) || !codes.length) {
     announce("Не удалось получить резервные коды. Создайте их в настройках безопасности.");
     return;

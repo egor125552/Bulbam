@@ -1,6 +1,7 @@
 import { ApiError } from "../../../core/errors";
 import { json, methodNotAllowed, readJsonObject } from "../../../core/http";
 import type { IdentityService } from "../application/identity-service";
+import type { AdminRecoveryService } from "../application/admin-recovery-service";
 import type { PasskeyService } from "../application/passkey-service";
 import type { RegistrationResponseJSON, AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { loginInput, registrationInput, normalizeUsername, validateDeviceName, validatePassword } from "../domain/validation";
@@ -11,8 +12,44 @@ export async function handleIdentityHttp(
   request: Request,
   url: URL,
   service: IdentityService,
-  passkeys?: PasskeyService | null
+  passkeys?: PasskeyService | null,
+  recovery?: AdminRecoveryService | null
 ): Promise<Response | null> {
+  if (recovery && url.pathname === "/api/v1/auth/admin-recovery/request") {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const body=await readJsonObject(request);
+    return json(await recovery.request(normalizeUsername(String(body.username??"")),
+      validateDeviceName(typeof body.deviceName==="string"?body.deviceName:undefined),
+      request.headers.get("cf-connecting-ip") ?? "unknown"));
+  }
+  if (recovery && url.pathname === "/api/v1/auth/admin-recovery/status") {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const body=await readJsonObject(request);
+    return json(await recovery.status(String(body.requestId??""),String(body.secret??"")));
+  }
+  if (recovery && url.pathname === "/api/v1/auth/admin-recovery/complete") {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const body=await readJsonObject(request);
+    const result=await recovery.complete(String(body.requestId??""),String(body.secret??""),
+      validatePassword(String(body.newPassword??"")),
+      validateDeviceName(typeof body.deviceName==="string"?body.deviceName:undefined));
+    return withSessionCookie(json({ok:true,account:result.account,session:result.session,
+      recoveryCodes:result.recoveryCodes}),result.token,result.session.expiresAt);
+  }
+  if (recovery && url.pathname === "/api/v1/admin/recovery-requests") {
+    if(request.method!=="GET")return methodNotAllowed(["GET"]);
+    const auth=await service.authenticate(sessionToken(request));
+    return json({ok:true,requests:await recovery.list(auth)});
+  }
+  const decision = recovery && url.pathname.match(/^\/api\/v1\/admin\/recovery-requests\/([0-9a-f-]{36})\/decision$/i);
+  if (recovery && decision) {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const auth=await service.authenticate(sessionToken(request));
+    const body=await readJsonObject(request);
+    if(typeof body.approve!=="boolean")throw new ApiError(400,"invalid_input","Выберите решение.");
+    return json(await recovery.decide(auth,decision[1],body.approve,body.verifiedIdentity===true));
+  }
+
   if (passkeys && url.pathname === "/api/v1/passkeys") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const auth = await service.authenticate(sessionToken(request));

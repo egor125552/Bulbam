@@ -112,6 +112,30 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_passkey_challenges_expiry ON passkey_challenges(expires_at)",
       "CREATE INDEX IF NOT EXISTS idx_passkey_challenges_requester ON passkey_challenges(requester_hash, expires_at)"
     ]
+  },
+  {
+    version: 5,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS admin_recovery_requests (
+        request_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        secret_hash TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        requester_hash TEXT NOT NULL,
+        verification_code TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending','approved','denied','consumed')),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        reviewed_at INTEGER,
+        reviewed_by TEXT,
+        consumed_at INTEGER,
+        consumed_nonce TEXT,
+        FOREIGN KEY(user_id) REFERENCES accounts(user_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_admin_recovery_user ON admin_recovery_requests(user_id,created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_admin_recovery_requester ON admin_recovery_requests(requester_hash,created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_admin_recovery_pending ON admin_recovery_requests(status,created_at)"
+    ]
   }
 ] as const;
 
