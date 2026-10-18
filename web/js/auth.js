@@ -1,6 +1,7 @@
 import { api, deviceName } from "./api.js";
 import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
+import { setupPasskeys, startPasskeyAutofill, cancelPasskeyAutofill } from "./passkeys.js";
 import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut } from "./ui.js";
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
@@ -9,11 +10,13 @@ let visibleRecoveryCodes = [];
 
 function showAuthView(view) {
   if (!AUTH_VIEWS.includes(view)) return;
+  if (view !== "login") cancelPasskeyAutofill();
   for (const candidate of AUTH_VIEWS) {
     const panel = document.querySelector(`#auth-view-${candidate}`);
     if (panel) panel.hidden = candidate !== view;
   }
   document.querySelector(`#auth-${view}-heading`)?.focus();
+  if (view === "login" && !getCurrentAccount()) void startPasskeyAutofill();
 }
 
 function rememberUsername(account) {
@@ -53,6 +56,13 @@ function showRecoveryCodes(codes) {
 }
 
 export function setupAuth() {
+  setupPasskeys(async (account, session) => {
+    clearAuthCheckProblem();
+    showSignedIn(account, session);
+    rememberUsername(account);
+    announce(`Вы вошли как ${account.displayName} с помощью ключа доступа.`);
+    await loadSessions({quiet:true});
+  });
   elements.registerForm.addEventListener("submit", register);
   elements.loginForm.addEventListener("submit", login);
   elements.logoutButton.addEventListener("click", logout);
@@ -164,6 +174,7 @@ async function register(event) {
 
 async function login(event) {
   event.preventDefault();
+  cancelPasskeyAutofill();
   const button = elements.loginForm.querySelector("button[type=submit]");
   button.disabled = true;
   const data = new FormData(elements.loginForm);

@@ -2,6 +2,7 @@ import { handleError, json, methodNotAllowed } from "./core/http";
 import { CallService } from "./modules/calls/application/call-service";
 import { handleCallHttp } from "./modules/calls/transport/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
+import { PasskeyService } from "./modules/identity/application/passkey-service";
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
 import { VoiceMessageService } from "./modules/media/application/voice-message-service";
@@ -70,6 +71,7 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
 
     const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
     const identity = identityRepository ? new IdentityService(identityRepository) : null;
+    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
@@ -137,7 +139,7 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
       if (smokeResponse) return smokeResponse;
     }
     if (identity) {
-      const identityResponse = await handleIdentityHttp(request, url, identity);
+      const identityResponse = await handleIdentityHttp(request, url, identity, passkeys);
       if (identityResponse) return identityResponse;
     }
 
