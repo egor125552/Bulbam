@@ -41,6 +41,11 @@ export function setupCanonicalInterface() {
 
   window.addEventListener("bulbam:account-changed", (event) => {
     document.body.classList.toggle("signed-in-mode", Boolean(event.detail?.account));
+    if (!event.detail?.account) {
+      filterValue = "";
+      const search = document.querySelector("#chat-filter");
+      if (search) search.value = "";
+    }
     scheduleDecorate();
   });
   elements.messageInput?.addEventListener("input", syncComposer);
@@ -128,31 +133,58 @@ function decorateMessages() {
 }
 
 function prepareSidebar() {
-  const sidebar = document.querySelector(".chat-sidebar");
-  const heading = document.querySelector(".sidebar-heading");
-  const nav = document.querySelector(".chat-navigation");
-  if (!sidebar || !heading || !nav) return;
-  if (!sidebar.querySelector(".sidebar-brand")) {
-    const brand = document.createElement("div");
-    brand.className = "sidebar-brand";
-    brand.innerHTML = '<span class="sidebar-brand-mark" aria-hidden="true">Б</span><strong>Бульбам</strong>';
-    sidebar.insertBefore(brand, heading);
-  }
-  if (!sidebar.querySelector("#chat-filter")) {
-    const wrap = document.createElement("div");
-    wrap.className = "chat-filter-wrap";
-    wrap.innerHTML = '<label class="visually-hidden" for="chat-filter">Поиск по открытым чатам</label><input id="chat-filter" class="chat-filter" type="search" autocomplete="off" placeholder="Поиск по чатам">';
-    const input = wrap.querySelector("input");
-    input.addEventListener("input", () => { filterValue = input.value.trim().toLocaleLowerCase("ru"); filterChats(); });
-    sidebar.insertBefore(wrap, nav);
-  }
+  const input = document.querySelector("#chat-filter");
+  const clear = document.querySelector("#chat-filter-clear");
+  const start = document.querySelector("#chat-start-empty");
+  if (!input || !clear) return;
+
+  input.addEventListener("input", () => {
+    filterValue = input.value.trim().toLocaleLowerCase("ru");
+    filterChats();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    clearSearch();
+  });
+  clear.addEventListener("click", clearSearch);
+  start?.addEventListener("click", () => elements.newChatButton?.click());
+
+  // A convenience shortcut, but standard VoiceOver arrow navigation remains untouched.
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "k") return;
+    if (document.querySelector("#settings-dialog")?.open) return;
+    if (document.querySelector("#signed-in")?.hidden) return;
+    if (document.body.classList.contains("conversation-open") && matchMedia("(max-width: 48rem)").matches) {
+      document.querySelector("#conversation-back")?.click();
+    }
+    event.preventDefault();
+    input.focus();
+    input.select();
+  });
+}
+
+function clearSearch() {
+  const input = document.querySelector("#chat-filter");
+  if (!input) return;
+  input.value = "";
+  filterValue = "";
+  filterChats();
+  input.focus();
 }
 
 function filterChats() {
-  for (const button of document.querySelectorAll(".chat-item")) {
-    const next = Boolean(filterValue) && !button.textContent.toLocaleLowerCase("ru").includes(filterValue);
-    if (button.hidden !== next) button.hidden = next;
+  const buttons = document.querySelectorAll(".chat-item");
+  let visible = 0;
+  for (const button of buttons) {
+    const hidden = Boolean(filterValue) && !button.textContent.toLocaleLowerCase("ru").includes(filterValue);
+    if (button.hidden !== hidden) button.hidden = hidden;
+    if (!hidden) visible += 1;
   }
+  const clear = document.querySelector("#chat-filter-clear");
+  const empty = document.querySelector("#chat-filter-empty");
+  if (clear) clear.hidden = !filterValue;
+  if (empty) empty.hidden = !filterValue || !buttons.length || visible > 0;
 }
 
 function prepareViewSelect() {
