@@ -17,6 +17,7 @@ import {
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
 import { VoiceUploadSocket } from "./voice-upload-socket.js";
+import { getSecureChatState } from "./secure-chat-ui.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
@@ -109,6 +110,11 @@ async function startRecording(trigger) {
   const account = getCurrentAccount();
   const chat = getSelectedChat();
   if (!account || !chat || current || starting) return;
+  const security = getSecureChatState();
+  if (security.blocked || (security.key && security.conversationId === chat.conversationId)) {
+    announce("В защищённом режиме голосовые пока не поддерживаются. Запись не начата.");
+    return;
+  }
 
   starting = true;
   setStartingUi(true);
@@ -380,6 +386,11 @@ async function finishStoppedRecorder(state) {
 async function sendDraftById(id, existingTransport = null) {
   const draft = await getVoiceDraft(id);
   if (!draft) return;
+  const security = getSecureChatState();
+  if (security.blocked || (security.key && security.conversationId === draft.conversationId)) {
+    announce("Голосовое не отправлено: в защищённом режиме запись не шифруется. Черновик сохранён.");
+    return;
+  }
   let transport = existingTransport;
   try {
     const totalBytes = Number(draft.totalBytes ?? 0);
