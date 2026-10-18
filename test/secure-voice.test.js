@@ -38,6 +38,10 @@ describe("chunked protected voice", () => {
     const wire = new Blob([first, second]);
     const decoded = await decryptVoiceFile(wire, key, metadata, context);
     expect(new Uint8Array(await decoded.arrayBuffer())).toEqual(plain);
+    await expect(decryptVoiceFile(new Blob([first]), key, metadata, context)).rejects.toThrow();
+    await expect(decryptVoiceFile(new Blob([first, second.slice(0, -1)]), key, metadata, context)).rejects.toThrow();
+    const tampered = second.slice(); tampered[0] ^= 1;
+    await expect(decryptVoiceFile(new Blob([first, tampered]), key, metadata, context)).rejects.toThrow();
     const repeated = await encryptVoicePart(plain.subarray(0, VOICE_PLAIN_CHUNK_BYTES), key, metadata, context, 1);
     expect(repeated).toEqual(first); // resumable duplicate uploads produce identical ciphertext
     expect(new Uint8Array(await decryptVoicePart(first, key, metadata, context, 1))).toEqual(plain.subarray(0, VOICE_PLAIN_CHUNK_BYTES));
