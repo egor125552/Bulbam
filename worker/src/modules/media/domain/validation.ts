@@ -14,8 +14,11 @@ const ALLOWED_MIME_TYPES = new Set([
 export function validateVoiceStart(body: Record<string, unknown>) {
   const mimeType = typeof body.mimeType === "string" ? body.mimeType.toLowerCase() : "";
   const bitrateBps = Number(body.bitrateBps);
-  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
-    badRequest("unsupported_voice_format", "Нужен поддерживаемый аудиоформат MP4, WebM или Ogg.");
+  // Encrypted payloads remain opaque bytes on the server. Only a strict
+  // versioned envelope with a whitelisted inner codec is accepted.
+  const encrypted = /^application\/vnd\.bulbam\.encrypted-voice;v=1;codec=(mp4|webm-opus|webm|ogg-opus|ogg);nonce=[a-z0-9_-]{16}$/.test(mimeType);
+  if (!ALLOWED_MIME_TYPES.has(mimeType) && !encrypted) {
+    badRequest("unsupported_voice_format", "Нужен поддерживаемый аудиоформат или защищённое голосовое Бульбама.");
   }
   if (!ALLOWED_BITRATES.has(bitrateBps)) {
     badRequest("invalid_voice_bitrate", "Некорректный битрейт голосового сообщения.");
