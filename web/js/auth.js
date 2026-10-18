@@ -231,6 +231,7 @@ async function recoverWithCode(event) {
     showSignedIn(result.account, result.session);
     rememberUsername(result.account);
     announce("Пароль восстановлен. Вы вошли в прежний аккаунт. Старые устройства отключены.");
+    showRecoveryCodes(result.recoveryCodes);
     await loadSessions({ quiet: true });
   } catch (error) {
     announce(`Не удалось восстановить аккаунт: ${error.message}`);
