@@ -118,8 +118,10 @@
               <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
             </div>
+            <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
             <audio id="call-remote-audio" autoplay></audio>
           </section>
 
