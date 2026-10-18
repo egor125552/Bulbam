@@ -109,7 +109,14 @@ export class IdentityService {
     if (!accountCredentials) throw new Error("Recovered account was not found.");
     const { passwordHash: _hash, ...account } = accountCredentials;
     const issued = await this.issueSession(account.userId, input.deviceName, Date.now());
-    return { account, ...issued };
+    let recoveryCodes: string[] = [];
+    try {
+      recoveryCodes = await this.issueRecoveryCodes(account.userId);
+    } catch (error) {
+      // Password and new session already work; don't hide a successful recovery.
+      console.error("[IdentityService] post-recovery backup codes failed", error);
+    }
+    return { account, ...issued, recoveryCodes };
   }
 
   async changePasswordFromSession(
