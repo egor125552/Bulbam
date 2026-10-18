@@ -52,6 +52,9 @@ export function setupCalls() {
   elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
   elements.callMuteButton.addEventListener("click", toggleMute);
+  elements.callMinimizeButton.addEventListener("click", minimizeCall);
+  elements.callExpandButton.addEventListener("click", expandCall);
+  elements.callDismissButton.addEventListener("click", dismissFinishedCall);
 
   const observer = new MutationObserver(syncCallButton);
   observer.observe(elements.conversationPeer, { childList: true, characterData: true, subtree: true });
@@ -975,6 +978,7 @@ function requestMicrophone() {
 
 function showIncoming(call) {
   elements.callPanel.hidden = false;
+  setCallPresentation("incoming");
   elements.callTitle.textContent = "Входящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
   setCallStatus("Входящий аудиозвонок.");
@@ -984,10 +988,12 @@ function showIncoming(call) {
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
   syncCallButton();
+  elements.callAnswerButton.focus();
 }
 
 function showOutgoing(call) {
   elements.callPanel.hidden = false;
+  setCallPresentation("outgoing");
   elements.callTitle.textContent = "Исходящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
   setCallStatus(`Ожидаю ответа… Режим: ${getSelectedAudioProfile().label}.`);
@@ -997,10 +1003,13 @@ function showOutgoing(call) {
   elements.callMuteButton.hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
+  elements.callEndButton.focus();
 }
 
 function showConnectedControls(status) {
   elements.callPanel.hidden = false;
+  const focusMoved = [elements.callAnswerButton, elements.callResumeButton].includes(document.activeElement);
+  setCallPresentation("connected");
   elements.callTitle.textContent = "Аудиозвонок";
   setCallStatus(status);
   elements.callAnswerButton.hidden = true;
@@ -1009,11 +1018,13 @@ function showConnectedControls(status) {
   elements.callMuteButton.hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
+  if (focusMoved) elements.callEndButton.focus();
 }
 
 function showRecoveredCall(status) {
   if (!currentCall) return;
   elements.callPanel.hidden = false;
+  setCallPresentation("connected");
   elements.callTitle.textContent = "Активный звонок";
   elements.callPeer.textContent = `${currentCall.peer.displayName}, @${currentCall.peer.username}`;
   setCallStatus(status);
@@ -1037,6 +1048,7 @@ function finishCall(message) {
 
 function renderFinished(message) {
   elements.callPanel.hidden = false;
+  setCallPresentation("finished");
   elements.callTitle.textContent = "Звонок";
   elements.callPeer.textContent = "";
   setCallStatus(message);
@@ -1045,10 +1057,12 @@ function renderFinished(message) {
   elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
+  elements.callDismissButton.focus();
 }
 
 function renderIdle() {
   elements.callPanel.hidden = true;
+  setCallPresentation("idle");
   elements.callPeer.textContent = "";
   elements.callStatus.textContent = "Звонок не активен.";
   elements.callAnswerButton.hidden = true;
@@ -1056,6 +1070,40 @@ function renderIdle() {
   elements.callResumeButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
+}
+
+function setCallPresentation(mode) {
+  if (["incoming", "outgoing", "finished", "idle"].includes(mode)) {
+    elements.callPanel.classList.remove("is-minimized");
+  }
+  const canMinimize = mode === "outgoing" || mode === "connected";
+  const minimized = elements.callPanel.classList.contains("is-minimized");
+  elements.callMinimizeButton.hidden = !canMinimize || minimized;
+  elements.callExpandButton.hidden = !canMinimize || !minimized;
+  elements.callDismissButton.hidden = mode !== "finished";
+}
+
+function minimizeCall() {
+  if (!currentCall) return;
+  elements.callPanel.classList.add("is-minimized");
+  setCallPresentation("connected");
+  elements.callExpandButton.focus();
+}
+
+function expandCall() {
+  if (!currentCall) return;
+  elements.callPanel.classList.remove("is-minimized");
+  setCallPresentation("connected");
+  elements.callTitle.focus();
+}
+
+function dismissFinishedCall() {
+  if (currentCall) return;
+  renderIdle();
+  const target = document.body.classList.contains("conversation-open")
+    ? elements.conversationTitle
+    : document.querySelector("#chats-title");
+  target?.focus();
 }
 
 function setCallStatus(text) {
