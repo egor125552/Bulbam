@@ -46,7 +46,7 @@ export async function handleIdentityHttp(
       username, code: rawCode, newPassword, deviceName
     });
     return withSessionCookie(
-      json({ ok: true, account: result.account, session: result.session }),
+      json({ ok: true, account: result.account, session: result.session, recoveryCodes: result.recoveryCodes }),
       result.token, result.session.expiresAt
     );
   }
