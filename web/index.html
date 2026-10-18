@@ -112,12 +112,14 @@
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
-            </div>
+              <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
+              </div>
             <div class="call-actions">
               <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
               <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
             </div>
             <audio id="call-remote-audio" autoplay></audio>
