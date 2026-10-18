@@ -1,7 +1,8 @@
 // Voice encryption v1. This uses Web Crypto AES-256-GCM, not a novel cipher.
 // Each recorded file has a fresh 96-bit random nonce; the last 32 bits are
 // XORed with an independent part number, preventing nonce reuse within a file.
-// Every part is authenticated and a dedicated final tag detects truncation.
+// Every part is authenticated and the final part uses an authenticated
+// end-of-file marker bound to the exact plaintext length, detecting truncation.
 export const VOICE_CIPHER_CHUNK_BYTES = 256 * 1024;
 export const VOICE_PLAIN_CHUNK_BYTES = VOICE_CIPHER_CHUNK_BYTES - 16;
 export const MAX_PROTECTED_VOICE_BYTES = 32 * 1024 * 1024;
@@ -86,60 +87,52 @@ function bytesView(data) {
   throw new Error("Некорректные байты защищённого голосового.");
 }
 
-export async function encryptVoicePart(plaintext, key, mime, context, partNumber) {
+export async function encryptVoicePart(plaintext, key, mime, context, partNumber, finalPlainBytes = null) {
   const bytes = bytesView(plaintext);
   if (!bytes.length || bytes.length > VOICE_PLAIN_CHUNK_BYTES) {
     throw new Error("Некорректный размер части голосового.");
   }
   const cipher = await cryptoApi().subtle.encrypt({
     name: "AES-GCM", iv: partIv(mime, partNumber),
-    additionalData: metadata(mime, context, partNumber), tagLength: 128
+    additionalData: metadata(mime, context, partNumber, finalPlainBytes), tagLength: 128
   }, key, bytes);
   return new Uint8Array(cipher);
 }
 
-export async function decryptVoicePart(ciphertext, key, mime, context, partNumber) {
+export async function decryptVoicePart(ciphertext, key, mime, context, partNumber, finalPlainBytes = null) {
   const bytes = bytesView(ciphertext);
   if (bytes.length <= 16 || bytes.length > VOICE_CIPHER_CHUNK_BYTES) {
     throw new Error("Повреждённый размер зашифрованной части.");
   }
   return cryptoApi().subtle.decrypt({
     name: "AES-GCM", iv: partIv(mime, partNumber),
-    additionalData: metadata(mime, context, partNumber), tagLength: 128
+    additionalData: metadata(mime, context, partNumber, finalPlainBytes), tagLength: 128
   }, key, bytes);
-}
-
-export async function encryptVoiceEnd(key, mime, context, partNumber, totalPlainBytes) {
-  if (!Number.isSafeInteger(totalPlainBytes) || totalPlainBytes < 1) throw new Error("Пустое голосовое.");
-  const tag = await cryptoApi().subtle.encrypt({
-    name: "AES-GCM", iv: partIv(mime, partNumber),
-    additionalData: metadata(mime, context, partNumber, totalPlainBytes), tagLength: 128
-  }, key, new Uint8Array());
-  return new Uint8Array(tag);
 }
 
 export async function decryptVoiceFile(blob, key, mime, context) {
   const parsed = parseEncryptedVoiceMime(mime);
   if (!parsed) throw new Error("Файл голосового не зашифрован.");
-  if (!blob || blob.size <= 32 || blob.size > MAX_PROTECTED_VOICE_BYTES + 32 * 1024) {
+  if (!blob || blob.size <= 16 || blob.size > MAX_PROTECTED_VOICE_BYTES + 32 * 1024) {
     throw new Error("Недопустимый размер защищённого голосового.");
   }
-  const dataSize = blob.size - 16;
+  const dataSize = blob.size;
   const dataParts = Math.ceil(dataSize / VOICE_CIPHER_CHUNK_BYTES);
+  const expectedPlainBytes = dataSize - dataParts * 16;
+  if (expectedPlainBytes < 1 || expectedPlainBytes > MAX_PROTECTED_VOICE_BYTES) {
+    throw new Error("Недопустимая длина защищённого голосового.");
+  }
   if (!dataParts) throw new Error("Пустое защищённое голосовое.");
   const decoded = [];
   let plainBytes = 0;
   for (let index = 0; index < dataParts; index++) {
     const part = new Uint8Array(await blob.slice(index * VOICE_CIPHER_CHUNK_BYTES,
       Math.min(dataSize, (index + 1) * VOICE_CIPHER_CHUNK_BYTES)).arrayBuffer());
-    const bytes = await decryptVoicePart(part, key, mime, context, index + 1);
+    const bytes = await decryptVoicePart(part, key, mime, context, index + 1,
+      index === dataParts - 1 ? expectedPlainBytes : null);
     decoded.push(bytes);
     plainBytes += bytes.byteLength;
   }
-  const finalTag = new Uint8Array(await blob.slice(dataSize).arrayBuffer());
-  await cryptoApi().subtle.decrypt({
-    name: "AES-GCM", iv: partIv(mime, dataParts + 1),
-    additionalData: metadata(mime, context, dataParts + 1, plainBytes), tagLength: 128
-  }, key, finalTag);
+  if (plainBytes !== expectedPlainBytes) throw new Error("Нарушена целостность голосового.");
   return new Blob(decoded, { type: parsed.mimeType });
 }
