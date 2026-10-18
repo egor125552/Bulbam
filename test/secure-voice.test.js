@@ -3,7 +3,7 @@ import { beforeAll, afterAll, describe, expect, test } from "vitest";
 import { generateConversationSecret, importConversationSecret } from "../web/js/secure-messages.js";
 import {
   encryptedVoiceMime, parseEncryptedVoiceMime, generateVoiceNonce,
-  encryptVoicePart, decryptVoicePart, decryptVoiceFile,
+  encryptVoicePart, encryptVoiceEnd, decryptVoicePart, decryptVoiceFile,
   VOICE_PLAIN_CHUNK_BYTES, VOICE_CIPHER_CHUNK_BYTES
 } from "../web/js/secure-voice.js";
 
@@ -35,7 +35,8 @@ describe("chunked protected voice", () => {
     expect(first.byteLength).toBe(VOICE_CIPHER_CHUNK_BYTES);
     expect(second.byteLength).toBe(543 + 16);
     expect(first.subarray(0,32)).not.toEqual(plain.subarray(0,32));
-    const wire = new Blob([first, second]);
+    const last = await encryptVoiceEnd(key, metadata, context, 3, plain.byteLength);
+    const wire = new Blob([first, second, last]);
     const decoded = await decryptVoiceFile(wire, key, metadata, context);
     expect(new Uint8Array(await decoded.arrayBuffer())).toEqual(plain);
     const repeated = await encryptVoicePart(plain.subarray(0, VOICE_PLAIN_CHUNK_BYTES), key, metadata, context, 1);
