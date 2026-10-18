@@ -40,7 +40,9 @@ function userHandle(userId: string): string {
 function validateOrigin(origin: string): { rpID: string; origin: string } {
   if (origin === RP_ORIGIN) return { rpID: RP_ID, origin };
   // Browser localhost development only; arbitrary remote domains are forbidden.
-  if (/^http:\/\/localhost(?::\\d+)?$/.test(origin)) return { rpID: "localhost", origin };
+  const parsed = new URL(origin);
+  if (parsed.protocol === "http:" && parsed.hostname === "localhost")
+    return {rpID:"localhost",origin};
   throw new ApiError(403, "untrusted_origin", "Этот адрес Бульбама не поддерживает ключи доступа.");
 }
 function accountFromRow(row: Row): Account {
