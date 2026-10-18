@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
+import { decryptVoiceFile } from "./secure-voice.js";
 import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
@@ -34,17 +35,29 @@ export function setupMessenger() {
         throw new Error("Переписка изменилась во время проверки ключа.");
       }
       const sample = messages.find((message) =>
-        message.conversationId === candidateConversationId && isEncryptedText(message.text));
+        message.conversationId === candidateConversationId && isProtectedContent(message));
       if (!sample) return;
       const key = await importConversationSecret(secret);
       try {
-        await decryptText(sample.text, key, {
+        const context = {
           conversationId: sample.conversationId,
           senderUserId: sample.senderUserId,
           clientMessageId: sample.clientMessageId
-        });
+        };
+        if (isEncryptedText(sample.text)) {
+          await decryptText(sample.text, key, context);
+        } else if (sample.voice?.mimeType?.startsWith("application/vnd.bulbam.encrypted-voice")) {
+          // A conversation containing only protected voice must also reject a
+          // wrong key BEFORE it becomes the non-replaceable device key.
+          const response = await fetch(
+            `/api/v1/chats/${sample.conversationId}/messages/${sample.messageId}/voice/audio`,
+            { credentials: "same-origin", cache: "no-store" }
+          );
+          if (!response.ok) throw new Error("Protected sample unavailable");
+          await decryptVoiceFile(await response.blob(), key, sample.voice.mimeType, context);
+        }
       } catch {
-        throw new Error("Ключ не подходит к защищённым сообщениям. Проверьте код у собеседника.");
+        throw new Error("Не удалось проверить ключ по защищённому сообщению. Проверьте код у собеседника.");
       }
     }
   });
