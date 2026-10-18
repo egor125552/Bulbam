@@ -156,12 +156,11 @@ body.signed-in-mode {
     color-mix(in srgb, var(--brand) 2.5%, var(--surface));
 }
 
-/* Keep the four conversation rows stable even when optional rows are hidden. */
+/* The call screen lives outside the conversation; chat keeps three stable rows. */
 .conversation-header { grid-row: 1; }
-.call-banner { grid-row: 2; }
 .conversation-empty,
-.message-list { grid-row: 3; }
-.composer { grid-row: 4; }
+.message-list { grid-row: 2; }
+.composer { grid-row: 3; }
 
 .conversation-header { padding: 0.62rem 0.85rem; }
 
