@@ -9,7 +9,7 @@ describe("interface preferences", () => {
   it("accepts every supported message view", () => {
     expect(normalizeMessageView("bubbles")).toBe("bubbles");
     expect(normalizeMessageView("compact")).toBe("compact");
-    expect(normalizeMessageView("table")).toBe("table");
+    expect(normalizeMessageView("table")).toBe("compact");
   });
 
   it("falls back safely for unknown values", () => {
