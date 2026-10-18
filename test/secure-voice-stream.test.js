@@ -1,11 +1,11 @@
 import { webcrypto } from "node:crypto";
-import { beforeAll, afterAll, describe, expect, test } from "vitest";
+import { beforeAll, afterAll, describe, expect, test, vi } from "vitest";
 import { generateConversationSecret, importConversationSecret } from "../web/js/secure-messages.js";
 import {
  encryptedVoiceMime, generateVoiceNonce, encryptVoicePart,
  VOICE_PLAIN_CHUNK_BYTES, VOICE_CIPHER_CHUNK_BYTES
 } from "../web/js/secure-voice.js";
-import { protectedVoiceRanges, readProtectedVoiceChunks, selectVoiceSourceType } from "../web/js/secure-voice-stream.js";
+import { protectedVoiceRanges, readProtectedVoiceChunks, selectVoiceSourceType, createProtectedVoiceStream } from "../web/js/secure-voice-stream.js";
 
 let previousCrypto;
 beforeAll(() => { previousCrypto = globalThis.crypto; Object.defineProperty(globalThis,"crypto",{ value:webcrypto,configurable:true }); });
@@ -75,4 +75,56 @@ describe("progressive encrypted voice", () => {
    expect(selectVoiceSourceType(mimeType,{ManagedMediaSource:Managed,MediaSource:Standard}).constructor).toBe(Managed);
    expect(selectVoiceSourceType(mimeType,{})).toBeNull();
  });
+ test("progressive media source appends verified audio chunks instead of a full file",async()=>{
+   const {key,mimeType,original,wire}=await recording();
+   const appended=[], requested=[];
+   class FakeSourceBuffer extends EventTarget {
+     buffered={length:0}; updating=false;
+     appendBuffer(chunk){
+       appended.push(new Uint8Array(chunk));
+       queueMicrotask(()=>this.dispatchEvent(new Event("updateend")));
+     }
+   }
+   class FakeManagedSource extends EventTarget {
+     static isTypeSupported(type){return type.includes("opus");}
+     readyState="closed";
+     ended=false;
+     constructor(){super();queueMicrotask(()=>{this.readyState="open";this.dispatchEvent(new Event("sourceopen"));});}
+     addSourceBuffer(){return new FakeSourceBuffer();}
+     endOfStream(){this.ended=true;this.readyState="ended";}
+   }
+   const oldManaged=globalThis.ManagedMediaSource;
+   const oldStandard=globalThis.MediaSource;
+   Object.defineProperty(globalThis,"ManagedMediaSource",{configurable:true,value:FakeManagedSource});
+   Object.defineProperty(globalThis,"MediaSource",{configurable:true,value:undefined});
+   vi.spyOn(URL,"createObjectURL").mockReturnValue("blob:voice-test");
+   try{
+     const audio={currentTime:0,readyState:0,seeking:false,disableRemotePlayback:false,src:""};
+     const session=createProtectedVoiceStream({
+       audio,url:"/secure-voice",mimeType,ciphertextBytes:wire.length,key,context,
+       fetchImpl:async(_,opts)=>{
+         requested.push(opts.headers.Range);
+         const [start,end]=opts.headers.Range.slice(6).split("-").map(Number);
+         return new Response(wire.slice(start,end+1),{
+           status:206,headers:{"content-range":`bytes ${start}-${end}/${wire.length}`}
+         });
+       },
+       isStillAuthorized:()=>true
+     });
+     expect(audio.disableRemotePlayback).toBe(true);
+     expect(audio.src).toBe("blob:voice-test");
+     await session.done;
+     expect(requested).toHaveLength(2);
+     expect(appended).toHaveLength(2);
+     expect(new Uint8Array([...appended[0],...appended[1]])).toEqual(original);
+     session.stop();
+   }finally{
+     vi.restoreAllMocks();
+     if(oldManaged===undefined)delete globalThis.ManagedMediaSource;
+     else Object.defineProperty(globalThis,"ManagedMediaSource",{configurable:true,value:oldManaged});
+     if(oldStandard===undefined)delete globalThis.MediaSource;
+     else Object.defineProperty(globalThis,"MediaSource",{configurable:true,value:oldStandard});
+   }
+ });
+
 });
