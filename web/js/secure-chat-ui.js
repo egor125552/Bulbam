@@ -89,7 +89,7 @@ function clearGeneratedSecret() {
   if (exported) exported.hidden = true;
 }
 
-export function setupSecureChat({ onKeyChanged } = {}) {
+export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
   updateMessages = onKeyChanged ?? null;
   const dialog = element("secure-chat-dialog");
   element("secure-chat-open")?.addEventListener("click", () => {
@@ -147,6 +147,8 @@ export function setupSecureChat({ onKeyChanged } = {}) {
     button.disabled = true;
     try {
       const input = element("secure-chat-key-input");
+      await verifyCandidateKey?.(input.value, accountId, conversationId);
+      if (serial !== requestSerial) return;
       const key = await saveConversationKey(accountId, conversationId, input.value);
       input.value = "";
       if (serial !== requestSerial) return;
