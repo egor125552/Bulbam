@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { createTestHarness } from "wrangler";
+import { PasskeyService } from "../worker/src/modules/identity/application/passkey-service";
+import { IdentityService } from "../worker/src/modules/identity/application/identity-service";
+import { D1IdentityRepository } from "../worker/src/modules/identity/infrastructure/d1-identity-repository";
+const ORIGIN="https://bulbam-api.k69ysrndm7.workers.dev";
+function passkeys(env){return new PasskeyService(env.DB,new IdentityService(new D1IdentityRepository(env.DB)));}
 
 const server=createTestHarness({workers:[{configPath:"./wrangler.test.jsonc"}]});
 beforeAll(async()=>server.listen());
@@ -18,18 +23,20 @@ async function register() {
   const response=await post("/api/v1/auth/register",{username:"passkey_owner",displayName:"Passkeys",password:"test-passkey-password",inviteCode:invite,deviceName:"Test browser"});
   expect(response.status).toBe(201);
   const cookie="bulbam_session="+response.headers.get("set-cookie").match(/bulbam_session=([^;]+)/)[1];
-  const account=(await response.json()).account;
-  return {env,cookie,account};
+  const data=await response.json();
+  return {env,cookie,account:data.account,session:data.session};
 }
 
 describe("WebAuthn passkeys",()=>{
   test("registration and list require an authenticated session",async()=>{
-    const {env,cookie,account}=await register();
+    const {env,cookie,account,session}=await register();
     expect((await post("/api/v1/passkeys/registration/options",{})).status).toBe(401);
     expect((await server.fetch("/api/v1/passkeys")).status).toBe(401);
-    const issued=await post("/api/v1/passkeys/registration/options",{},cookie);
-    expect(issued.status).toBe(200);
-    const registration=await issued.json();
+    // Wrangler's harness rewrites Request.url to its own hostname. The real
+    // WebAuthn origin is tested at the service boundary to avoid loosening
+    // the production RP allowlist for test-only hostnames.
+    expect((await post("/api/v1/passkeys/registration/options",{},cookie)).status).toBe(403);
+    const registration=await passkeys(env).registrationOptions({account,session},ORIGIN);
     expect(registration.options.rp.name).toBe("Бульбам");
     expect(registration.options.authenticatorSelection.userVerification).toBe("required");
     expect(registration.options.authenticatorSelection.residentKey).toBe("required");
@@ -43,22 +50,18 @@ describe("WebAuthn passkeys",()=>{
   });
 
   test("forged registration responses cannot create a key",async()=>{
-    const {env,cookie}=await register();
-    const begin=await post("/api/v1/passkeys/registration/options",{},cookie);
-    const {challengeId}=await begin.json();
-    const forged=await post("/api/v1/passkeys/registration/verify",{
+    const {env,account,session}=await register();
+    const {challengeId}=await passkeys(env).registrationOptions({account,session},ORIGIN);
+    await expect(passkeys(env).registrationFinish({account,session},ORIGIN,{
       challengeId,response:{id:"fake",type:"public-key",rawId:"fake",response:{clientDataJSON:"",attestationObject:""}}
-    },cookie);
-    expect(forged.status).toBe(400);
+    })).rejects.toThrow();
     const keys=await env.DB.prepare("SELECT credential_id FROM account_passkeys").all();
     expect(keys.results).toHaveLength(0);
   });
 
   test("anonymous login has a 5-minute challenge and rejects a forged assertion",async()=>{
     const {env}=await register();
-    const begin=await post("/api/v1/passkeys/authentication/options",{});
-    expect(begin.status).toBe(200);
-    const {challengeId,options}=await begin.json();
+    const {challengeId,options}=await passkeys(env).authenticationOptions(ORIGIN,"unit-test-ip");
     expect(options.userVerification).toBe("required");
     expect(options.allowCredentials).toEqual([]);
     const row=await env.DB.prepare("SELECT purpose, expires_at FROM passkey_challenges WHERE challenge_id=?")
@@ -66,10 +69,9 @@ describe("WebAuthn passkeys",()=>{
     expect(row.purpose).toBe("login");
     expect(row.expires_at).toBeGreaterThan(Date.now());
     expect(row.expires_at).toBeLessThanOrEqual(Date.now()+300000);
-    const forged=await post("/api/v1/passkeys/authentication/verify",{
+    await expect(passkeys(env).authenticationFinish(ORIGIN,{
       challengeId,response:{id:"fake",type:"public-key",rawId:"fake",
-        response:{clientDataJSON:"fake",authenticatorData:"fake",signature:"fake"}}
-    });
-    expect(forged.status).toBe(400);
+        response:{clientDataJSON:"fake",authenticatorData:"fake",signature:"fake"}},deviceName:"Test"
+    })).rejects.toThrow();
   });
 });
