@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { transform } from "esbuild";
 import { describe, expect, test } from "vitest";
 
 async function html() {
@@ -6,6 +7,12 @@ async function html() {
 }
 
 describe("accessible authentication and password recovery",()=>{
+  test("auth JavaScript parses as a standards-compliant browser module",async()=>{
+    const source=await readFile(new URL("../web/js/auth.js",import.meta.url),"utf8");
+    const result=await transform(source,{loader:"js",format:"esm",target:"es2022"});
+    expect(result.code).toContain("function showAuthView");
+  });
+
   test("login is the only initial auth form; register and forgot password are explicit views",async()=>{
     const page=await html();
     expect(page).toContain('id="auth-view-login"');
