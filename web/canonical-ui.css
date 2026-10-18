@@ -249,6 +249,77 @@ body.signed-in-mode {
   box-shadow: inset 3px 0 0 var(--success);
 }
 
+
+/* Calls are a separate screen so they remain visible from the chat list on mobile. */
+.call-banner:not([hidden]) {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1.5rem;
+  overflow-y: auto;
+  width: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: max(1.2rem, env(safe-area-inset-top)) 1.2rem max(1.2rem, env(safe-area-inset-bottom));
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface));
+  box-shadow: 0 22px 70px color-mix(in srgb, #000 20%, transparent);
+}
+
+.call-banner .call-copy {
+  max-width: 32rem;
+  text-align: center;
+}
+
+.call-banner .call-copy h2 { font-size: clamp(1.5rem, 4vw, 2.2rem); }
+.call-banner #call-peer { margin-top: 0.8rem; font-size: 1.35rem; font-weight: 750; }
+.call-banner #call-status { margin-top: 0.8rem; font-size: 1rem; line-height: 1.5; }
+
+.call-banner .call-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+  max-width: 33rem;
+  gap: 0.8rem;
+}
+
+.call-banner .call-actions button,
+.call-screen-navigation button {
+  min-height: 3rem;
+  padding: 0.7rem 1.2rem;
+}
+
+.call-screen-navigation {
+  position: absolute;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: 0.8rem;
+}
+
+.call-banner.is-minimized:not([hidden]) {
+  inset: max(0.4rem, env(safe-area-inset-top)) 0.5rem auto auto;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: min(24rem, calc(100% - 1rem));
+  min-height: auto;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.call-banner.is-minimized .call-copy { text-align: left; min-width: 0; }
+.call-banner.is-minimized .call-copy h2 { font-size: 0.9rem; }
+.call-banner.is-minimized #call-peer { margin: 0.2rem 0 0; font-size: 0.95rem; }
+.call-banner.is-minimized #call-status,
+.call-banner.is-minimized .call-actions { display: none; }
+.call-banner.is-minimized .call-screen-navigation { position: static; flex-shrink: 0; }
+.call-banner.is-minimized .call-screen-navigation button { padding-inline: 0.65rem; }
+
 /* Compact mode: one navigable row per message, inspired by the reference Telegram client. */
 html[data-message-view="compact"] .message-list {
   padding: 0;
@@ -320,9 +391,9 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
 
 .appearance-controls label { min-width: 0; }
 
-.settings-dialog { width: min(68rem, calc(100% - 1rem)); }
+.settings-dialog { width: min(44rem, calc(100% - 1rem)); }
 
-.settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.settings-grid { grid-template-columns: 1fr; }
 .settings-grid > .card:first-child { grid-column: 1 / -1; }
 
 .icon-button[data-icon="stop"]::before,
