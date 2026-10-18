@@ -140,7 +140,7 @@ async function startRecording(trigger) {
       return;
     }
 
-    const mimeType = chooseVoiceMimeType();
+    const mimeType = chooseVoiceMimeType(Boolean(security.key));
     if (!mimeType) {
       announce("Браузер не умеет записывать совместимый формат голосовых сообщений.");
       await playVoiceCue("error");
@@ -753,8 +753,13 @@ function clearOptionTimer() {
   optionTimer = null;
 }
 
-function chooseVoiceMimeType() {
-  return MIME_CANDIDATES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null;
+function chooseVoiceMimeType(protectedVoice = false) {
+  // iOS Safari's ManagedMediaSource is most reliable with fragmented MP4.
+  // Keep the established recording preference for ordinary, unprotected voice.
+  const candidates = protectedVoice
+    ? ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
+    : MIME_CANDIDATES;
+  return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null;
 }
 
 async function enforceRawCapture(stream) {
