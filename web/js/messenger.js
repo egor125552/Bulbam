@@ -477,6 +477,34 @@ async function sendCurrentMessage(event) {
 
 async function transmitPending(pending) {
   if (!account || !selectedChat || pending.conversationId !== selectedChat.conversationId) return;
+  const secure = getSecureChatState();
+  if (secure.blocked || secure.conversationId !== pending.conversationId || secure.accountId !== account.userId) {
+    announce("Сообщение осталось в черновике: ключ переписки пока недоступен.");
+    return;
+  }
+  try {
+    // Retrying a draft written before protection was enabled must never send it in the clear.
+    if (secure.key && !isEncryptedText(pending.wireText ?? pending.text)) {
+      pending.wireText = await encryptText(pending.text, secure.key, {
+        conversationId: pending.conversationId,
+        senderUserId: account.userId,
+        clientMessageId: pending.clientMessageId
+      });
+    }
+    if (!secure.key && isEncryptedText(pending.wireText ?? pending.text)) {
+      announce("Нельзя повторить отправку, пока ключ переписки недоступен.");
+      return;
+    }
+    if (!secure.key && messages.some((message) => isEncryptedText(message.text))) {
+      announce("Повторная отправка без ключа заблокирована.");
+      return;
+    }
+  } catch (error) {
+    announce("Не удалось защитить сообщение: " + error.message);
+    return;
+  }
+  if (!account || selectedChat?.conversationId !== pending.conversationId ||
+    getSecureChatState().key !== secure.key) return;
   pending.localState = "pending";
   renderMessages({ preserveVoicePlayback: true });
   try {
