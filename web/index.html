@@ -26,7 +26,7 @@
 
   <main id="main" tabindex="-1">
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
-      <h2 id="account-start-title" class="visually-hidden">Вход и регистрация</h2>
+      <h2 id="account-start-title" class="visually-hidden">Вход в Бульбам</h2>
 
       <div id="auth-connection-problem" class="card auth-card" hidden>
         <h3>Не получилось проверить вход</h3>
@@ -34,8 +34,8 @@
         <button id="auth-retry" type="button">Проверить вход ещё раз</button>
       </div>
 
-      <div class="card auth-card">
-        <h3>Войти</h3>
+      <div id="auth-view-login" class="card auth-card">
+        <h3 id="auth-login-heading" tabindex="-1">Вход в Бульбам</h3>
         <form id="login-form" class="form-stack">
           <label>
             Имя пользователя
@@ -47,10 +47,14 @@
           </label>
           <button type="submit">Войти</button>
         </form>
+        <div class="auth-links">
+          <button id="auth-forgot-button" type="button">Забыли пароль?</button>
+          <button id="auth-register-button" type="button">Зарегистрироваться</button>
+        </div>
       </div>
 
-      <div class="card auth-card">
-        <h3>Создать аккаунт</h3>
+      <div id="auth-view-register" class="card auth-card" hidden>
+        <h3 id="auth-register-heading" tabindex="-1">Регистрация в Бульбаме</h3>
         <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
         <form id="register-form" class="form-stack">
           <label>
@@ -69,10 +73,46 @@
             Код приглашения
             <input name="inviteCode" autocomplete="off" required maxlength="160">
           </label>
-          <button type="submit">Создать аккаунт</button>
+          <button type="submit">Зарегистрироваться и войти</button>
         </form>
+        <button id="auth-login-from-register" type="button">Уже есть аккаунт? Войти</button>
+      </div>
+
+      <div id="auth-view-recovery" class="card auth-card" hidden>
+        <h3 id="auth-recovery-heading" tabindex="-1">Восстановление аккаунта</h3>
+        <p>Выберите подходящий вариант. Для защиты аккаунта одного имени пользователя недостаточно.</p>
+        <h4>Способ 1. Резервный код</h4>
+        <form id="recovery-form" class="form-stack">
+          <label>Имя пользователя
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
+          </label>
+          <label>Резервный код восстановления
+            <input name="code" autocomplete="one-time-code" required placeholder="BRC-XXXXXX-XXXXXX-XXXXXX-XXXXXX">
+          </label>
+          <label>Новый пароль
+            <input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+          </label>
+          <label>Повторите новый пароль
+            <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+          </label>
+          <button type="submit">Восстановить и войти</button>
+        </form>
+        <h4>Способ 2. Другое устройство</h4>
+        <p>Если вы всё ещё вошли в Бульбам на другом устройстве, откройте там «Настройки», затем «Безопасность аккаунта», и смените пароль.</p>
+        <h4>Способ 3. Помощь администратора</h4>
+        <p>Если нет ни резервного кода, ни действующего сеанса, потребуется подтверждение личности администратором сервиса. Имя пользователя само по себе не даёт права на сброс пароля. Вход по почте пока недоступен: в Бульбаме нет подтверждённых адресов почты.</p>
+        <button id="auth-login-from-recovery" type="button">Вернуться ко входу</button>
       </div>
     </section>
+
+    <dialog id="recovery-codes-dialog" aria-labelledby="recovery-codes-title">
+      <h2 id="recovery-codes-title" tabindex="-1">Сохраните резервные коды</h2>
+      <p>Это одноразовые ключи от вашего аккаунта. Сохраните их в безопасном месте. После закрытия они больше не будут показаны.</p>
+      <label for="recovery-codes-text">Ваши восемь кодов</label>
+      <textarea id="recovery-codes-text" rows="10" readonly spellcheck="false"></textarea>
+      <button id="copy-recovery-codes" type="button">Скопировать коды</button>
+      <button id="close-recovery-codes" type="button">Я сохранил коды</button>
+    </dialog>
 
     <section id="signed-in" class="signed-in" aria-label="Мессенджер" hidden>
       <div class="messenger-shell">
@@ -206,6 +246,23 @@
               <div><dt>Имя пользователя</dt><dd id="account-username"></dd></div>
             </dl>
             <button id="logout" class="button-with-icon" data-icon="logout" type="button">Выйти</button>
+          </section>
+
+          <section class="card" aria-labelledby="account-security-title">
+            <h3 id="account-security-title">Безопасность аккаунта</h3>
+            <p>Восстановление пароля возможно с резервным кодом или с устройства, на котором вы уже вошли.</p>
+            <form id="change-password-form" class="form-stack">
+              <label>Новый пароль
+                <input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+              </label>
+              <label>Повторите пароль
+                <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+              </label>
+              <button type="submit">Сменить пароль</button>
+            </form>
+            <p class="hint">После смены пароля другие устройства выйдут из аккаунта. Старые резервные коды перестанут работать.</p>
+            <button id="new-recovery-codes" type="button">Создать новые резервные коды</button>
+            <p class="hint">Новый набор заменит предыдущие коды.</p>
           </section>
 
           <section class="card" aria-labelledby="notifications-title">
