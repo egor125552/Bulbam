@@ -107,10 +107,18 @@ export function setupSecureChat({ onKeyChanged } = {}) {
   element("secure-chat-generate")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     if (encryptionKey || keyIsLoading || loadFailed || !selectedConversationId) return;
+    if (document.querySelector("#voice-record-button")?.getAttribute("aria-pressed") === "true") {
+      setStatus("Сначала завершите или отмените текущую запись голосового.");
+      return;
+    }
+    const accountId = selectedAccountId;
+    const conversationId = selectedConversationId;
+    const serial = requestSerial;
     button.disabled = true;
     try {
       const secret = generateConversationSecret();
-      const key = await saveConversationKey(selectedAccountId, selectedConversationId, secret);
+      const key = await saveConversationKey(accountId, conversationId, secret);
+      if (serial !== requestSerial) return;
       encryptionKey = key;
       lastGeneratedSecret = secret;
       const output = element("secure-chat-key-output");
@@ -129,11 +137,19 @@ export function setupSecureChat({ onKeyChanged } = {}) {
   element("secure-chat-save")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     if (encryptionKey || keyIsLoading || loadFailed || !selectedConversationId) return;
+    if (document.querySelector("#voice-record-button")?.getAttribute("aria-pressed") === "true") {
+      setStatus("Сначала завершите или отмените текущую запись голосового.");
+      return;
+    }
+    const accountId = selectedAccountId;
+    const conversationId = selectedConversationId;
+    const serial = requestSerial;
     button.disabled = true;
     try {
       const input = element("secure-chat-key-input");
-      const key = await saveConversationKey(selectedAccountId, selectedConversationId, input.value);
+      const key = await saveConversationKey(accountId, conversationId, input.value);
       input.value = "";
+      if (serial !== requestSerial) return;
       encryptionKey = key;
       updatePresentation();
       setStatus("Ключ сохранён на этом устройстве. Можно читать и отправлять новые защищённые текстовые сообщения.");
