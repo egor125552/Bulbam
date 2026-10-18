@@ -83,6 +83,11 @@ export class IdentityService {
     return { account, ...issued };
   }
 
+  async loginWithPasskey(account: import("../domain/models").Account, deviceName: string) {
+    const issued = await this.issueSession(account.userId, deviceName, Date.now());
+    return { account, ...issued };
+  }
+
   async issueRecoveryCodes(userId: string): Promise<string[]> {
     const codes = Array.from({ length: 8 }, () => newRecoveryCode());
     const hashes = await Promise.all(codes.map(sha256Hex));
