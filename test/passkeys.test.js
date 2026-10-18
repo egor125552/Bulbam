@@ -7,7 +7,7 @@ beforeAll(async()=>server.listen());
 afterEach(async()=>server.reset());
 afterAll(async()=>server.close());
 async function post(path,body,cookie){
- return server.fetch(path,{method:"POST",headers:{"content-type":"application/json",...(cookie?{cookie}:{})},body:JSON.stringify(body)});
+ return server.fetch("https://bulbam-api.k69ysrndm7.workers.dev"+path,{method:"POST",headers:{"content-type":"application/json",...(cookie?{cookie}:{})},body:JSON.stringify(body)});
 }
 async function register() {
   await server.fetch("/api/ready");
