@@ -18,6 +18,10 @@ import {
 import { getVoiceBitrate } from "./voice-settings.js";
 import { VoiceUploadSocket } from "./voice-upload-socket.js";
 import { getSecureChatState } from "./secure-chat-ui.js";
+import {
+  encryptedVoiceMime, generateVoiceNonce, encryptVoicePart, encryptVoiceEnd,
+  VOICE_PLAIN_CHUNK_BYTES
+} from "./secure-voice.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
@@ -111,8 +115,8 @@ async function startRecording(trigger) {
   const chat = getSelectedChat();
   if (!account || !chat || current || starting) return;
   const security = getSecureChatState();
-  if (security.blocked || (security.key && security.conversationId === chat.conversationId)) {
-    announce("В защищённом режиме голосовые пока не поддерживаются. Запись не начата.");
+  if (security.blocked || security.conversationId !== chat.conversationId || security.accountId !== account.userId) {
+    announce("Запись не начата: не удалось проверить защиту переписки.");
     return;
   }
 
@@ -169,12 +173,15 @@ async function startRecording(trigger) {
     }
 
     localId = randomId();
+    const protectedMimeType = security.key ? encryptedVoiceMime(mimeType, generateVoiceNonce()) : null;
     const draft = {
       id: localId,
       accountId: expectedAccountId,
       conversationId: expectedConversationId,
       clientMessageId: randomId(),
-      mimeType,
+      mimeType: protectedMimeType ?? mimeType,
+      recordingMimeType: mimeType,
+      encrypted: Boolean(protectedMimeType),
       bitrateBps,
       startedAt: Date.now(),
       lastChunkAt: Date.now(),
@@ -218,6 +225,7 @@ async function startRecording(trigger) {
       uploadQueue: Promise.resolve(),
       uploadPromise: null,
       transport: null,
+      secureKey: security.key,
       finishing: false
     };
 
@@ -383,22 +391,61 @@ async function finishStoppedRecorder(state) {
   await refreshRecoverableDraft();
 }
 
+function encryptionContext(draft) {
+  return {
+    conversationId: draft.conversationId,
+    senderUserId: draft.accountId,
+    clientMessageId: draft.clientMessageId
+  };
+}
+
+function voiceDataChunkSize(draft) {
+  return draft.encrypted ? VOICE_PLAIN_CHUNK_BYTES : LOCAL_PART_SIZE;
+}
+
+function requireVoiceKey(draft) {
+  const security = getSecureChatState();
+  if (security.blocked || security.accountId !== draft.accountId || security.conversationId !== draft.conversationId) {
+    throw new Error("Нельзя отправить голосовое: не проверены аккаунт, чат или ключ.");
+  }
+  if (Boolean(draft.encrypted) !== Boolean(security.key)) {
+    throw new Error("Режим защиты поменялся. Нельзя отправлять голосовое без требуемого шифрования.");
+  }
+  return security.key;
+}
+
+async function voicePartPayload(draft, key, partNumber, totalPlainBytes) {
+  const chunkSize = voiceDataChunkSize(draft);
+  const dataParts = Math.ceil(totalPlainBytes / chunkSize);
+  if (draft.encrypted && partNumber === dataParts + 1) {
+    return new Blob([await encryptVoiceEnd(key, draft.mimeType, encryptionContext(draft),
+      partNumber, totalPlainBytes)], { type: "application/octet-stream" });
+  }
+  const startByte = (partNumber - 1) * chunkSize;
+  const body = await getVoicePartBlob(draft.id, startByte,
+    Math.min(chunkSize, totalPlainBytes - startByte), draft.recordingMimeType ?? draft.mimeType);
+  if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+  if (!draft.encrypted) return body;
+  const bytes = new Uint8Array(await body.arrayBuffer());
+  return new Blob([await encryptVoicePart(bytes, key, draft.mimeType,
+    encryptionContext(draft), partNumber)], { type: "application/octet-stream" });
+}
+
 async function sendDraftById(id, existingTransport = null) {
   const draft = await getVoiceDraft(id);
   if (!draft) return;
-  const security = getSecureChatState();
-  if (security.blocked || (security.key && security.conversationId === draft.conversationId)) {
-    announce("Голосовое не отправлено: в защищённом режиме запись не шифруется. Черновик сохранён.");
-    return;
-  }
   let transport = existingTransport;
   try {
-    const totalBytes = Number(draft.totalBytes ?? 0);
-    if (!totalBytes) throw new Error("запись пустая");
+    const key = requireVoiceKey(draft);
+    const totalPlainBytes = Number(draft.totalBytes ?? 0);
+    if (!totalPlainBytes) throw new Error("запись пустая");
 
     const upload = await ensureDraftUpload(draft);
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
-    const partCount = Math.ceil(totalBytes / partSize);
+    if (partSize !== LOCAL_PART_SIZE) throw new Error("Размер сетевых частей изменился.");
+    const dataParts = Math.ceil(totalPlainBytes / voiceDataChunkSize(draft));
+    const partCount = dataParts + (draft.encrypted ? 1 : 0);
+    const totalWireBytes = draft.encrypted ? totalPlainBytes + dataParts * 16 + 16 : totalPlainBytes;
     const parts = [...(upload.parts ?? [])];
 
     if (upload.state !== "ready") {
@@ -412,17 +459,11 @@ async function sendDraftById(id, existingTransport = null) {
       }
       parts.sort((left, right) => left.partNumber - right.partNumber);
 
-      for (let index = 0; index < partCount; index += 1) {
-        const partNumber = index + 1;
+      for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
         if (parts.some((part) => part.partNumber === partNumber)) continue;
-        const startByte = index * partSize;
-        const body = await getVoicePartBlob(
-          id,
-          startByte,
-          Math.min(partSize, totalBytes - startByte),
-          draft.mimeType
-        );
-        if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+        if (requireVoiceKey(draft) !== key) throw new Error("Ключ изменился во время передачи голосового.");
+        const body = await voicePartPayload(draft, key, partNumber, totalPlainBytes);
+        if (body.size > partSize) throw new Error("Слишком большая часть защищённого голосового.");
         const ack = await transport.sendPart(partNumber, body);
         parts.push({ partNumber, sizeBytes: ack.sizeBytes });
         parts.sort((left, right) => left.partNumber - right.partNumber);
@@ -432,10 +473,7 @@ async function sendDraftById(id, existingTransport = null) {
       }
     }
 
-    const latestSecurity = getSecureChatState();
-    if (latestSecurity.blocked || (latestSecurity.key && latestSecurity.conversationId === draft.conversationId)) {
-      throw new Error("публикация голосового запрещена при включённой защите текстов");
-    }
+    if (requireVoiceKey(draft) !== key) throw new Error("Ключ изменился до публикации голосового.");
 
     const result = await api(
       `/api/v1/chats/${draft.conversationId}/voice/uploads/${upload.sessionId}/complete`,
@@ -445,7 +483,7 @@ async function sendDraftById(id, existingTransport = null) {
           clientMessageId: draft.clientMessageId,
           durationMs: draft.durationMs ?? Math.max(1, draft.lastChunkAt - draft.startedAt),
           chunkCount: partCount,
-          sizeBytes: totalBytes
+          sizeBytes: totalWireBytes
         })
       }
     );
@@ -454,7 +492,7 @@ async function sendDraftById(id, existingTransport = null) {
     hideDraftPanel();
     acceptExternalMessage(result.message);
     await refreshChatsAfterExternalMessage();
-    announce("Голосовое сообщение отправлено.");
+    announce(draft.encrypted ? "Защищённое голосовое отправлено." : "Голосовое сообщение отправлено.");
   } catch (error) {
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
     announce(`Голосовое не отправлено: ${error.message}. Запись сохранена, можно повторить.`);
@@ -539,7 +577,8 @@ async function uploadReadyFullParts(state) {
     return;
   }
   const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
-  const fullPartCount = Math.floor(state.draft.totalBytes / partSize);
+  if (partSize !== LOCAL_PART_SIZE) return;
+  const fullPartCount = Math.floor(state.draft.totalBytes / voiceDataChunkSize(state.draft));
   if (!fullPartCount) return;
 
   try {
@@ -552,8 +591,10 @@ async function uploadReadyFullParts(state) {
 
     for (let partNumber = 1; partNumber <= fullPartCount; partNumber += 1) {
       if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
-      const start = (partNumber - 1) * partSize;
-      const body = await getVoicePartBlob(state.draft.id, start, partSize, state.draft.mimeType);
+      const security = getSecureChatState();
+      if (security.blocked || security.conversationId !== state.draft.conversationId ||
+          security.accountId !== state.draft.accountId || security.key !== state.secureKey) return;
+      const body = await voicePartPayload(state.draft, state.secureKey, partNumber, state.draft.totalBytes);
       if (body.size !== partSize) return;
       const ack = await state.transport.sendPart(partNumber, body);
       upload.parts.push({ partNumber, sizeBytes: ack.sizeBytes });
