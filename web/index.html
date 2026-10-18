@@ -40,7 +40,7 @@
         <form id="login-form" class="form-stack">
           <label>
             Имя пользователя
-            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
+            <input name="username" autocomplete="username webauthn" required minlength="3" maxlength="32">
           </label>
           <label>
             Пароль
@@ -48,6 +48,8 @@
           </label>
           <button type="submit">Войти</button>
         </form>
+        <button id="login-passkey" type="button">Войти с помощью ключа доступа</button>
+        <p class="hint">Если на устройстве есть ключ доступа, Safari может предложить его прямо в поле имени пользователя.</p>
         <div class="auth-links">
           <button id="auth-forgot-button" type="button">Забыли пароль?</button>
           <button id="auth-register-button" type="button">Зарегистрироваться</button>
@@ -98,9 +100,11 @@
           </label>
           <button type="submit">Восстановить и войти</button>
         </form>
-        <h4>Способ 2. Другое устройство</h4>
+        <h4>Способ 2. Ключ доступа</h4>
+        <p>Если вы уже создавали ключ доступа, вернитесь ко входу и выберите «Войти с помощью ключа доступа». Пароль и резервный код не нужны.</p>
+        <h4>Способ 3. Другое устройство</h4>
         <p>Если вы всё ещё вошли в Бульбам на другом устройстве, откройте там «Настройки», затем «Безопасность аккаунта», и смените пароль.</p>
-        <h4>Способ 3. Помощь администратора</h4>
+        <h4>Способ 4. Помощь администратора</h4>
         <p>Если нет ни резервного кода, ни действующего сеанса, потребуется подтверждение личности администратором сервиса. Имя пользователя само по себе не даёт права на сброс пароля. Вход по почте пока недоступен: в Бульбаме нет подтверждённых адресов почты.</p>
         <button id="auth-login-from-recovery" type="button">Вернуться ко входу</button>
       </div>
@@ -264,6 +268,16 @@
             <p class="hint">После смены пароля другие устройства выйдут из аккаунта. Старые резервные коды перестанут работать.</p>
             <button id="new-recovery-codes" type="button">Создать новые резервные коды</button>
             <p class="hint">Новый набор заменит предыдущие коды.</p>
+          </section>
+
+          <section class="card" aria-labelledby="passkeys-settings-title">
+            <h3 id="passkeys-settings-title">Ключи доступа</h3>
+            <p>Создайте ключ доступа для входа через Face ID, Touch ID или системное подтверждение. Он привязывается только к вашему аккаунту.</p>
+            <button id="create-passkey" type="button">Создать ключ доступа</button>
+            <p id="passkey-status" role="status" aria-live="polite"></p>
+            <h4>Ваши ключи доступа</h4>
+            <ul id="passkey-list" aria-label="Зарегистрированные ключи доступа"></ul>
+            <button id="refresh-passkeys" type="button">Обновить список ключей</button>
           </section>
 
           <section class="card" aria-labelledby="notifications-title">
