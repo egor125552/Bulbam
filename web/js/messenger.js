@@ -1,4 +1,6 @@
 import { api } from "./api.js";
+import { decryptText, encryptText, isEncryptedText } from "./secure-messages.js";
+import { getSecureChatState, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
@@ -24,6 +26,7 @@ let generation = 0;
 let jumpButton = null;
 
 export function setupMessenger() {
+  setupSecureChat({ onKeyChanged: () => renderMessages({ preserveVoicePlayback: true }) });
   jumpButton = document.querySelector("#jump-to-latest");
   jumpButton?.addEventListener("click", jumpToLatest);
   elements.messageList.addEventListener("scroll", () => {
@@ -67,6 +70,7 @@ export async function refreshChatsAfterExternalMessage() {
 
 async function switchAccount(nextAccount) {
   generation += 1;
+  void setSecureConversation(nextAccount, null);
   account = nextAccount;
   chats = [];
   selectedChat = null;
@@ -239,6 +243,7 @@ function renderChats() {
 
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
+  void setSecureConversation(account, chat);
   if (jumpButton) jumpButton.hidden = true;
   messages = [];
   resetVoicePlayers();
@@ -339,7 +344,29 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
       item.append(renderVoiceMessage(message, mine));
     } else {
       const body = document.createElement("p");
-      body.textContent = message.text;
+      if (isEncryptedText(message.text)) {
+        body.textContent = "Защищённое сообщение. Для чтения нужен ключ этой переписки.";
+        const current = getSecureChatState();
+        if (current.key && current.conversationId === selectedChat.conversationId) {
+          void decryptText(message.text, current.key, {
+            conversationId: message.conversationId,
+            senderUserId: message.senderUserId,
+            clientMessageId: message.clientMessageId
+          }).then((plaintext) => {
+            if (item.isConnected && selectedChat?.conversationId === message.conversationId) {
+              body.textContent = plaintext;
+            }
+          }).catch(() => {
+            if (item.isConnected) body.textContent = "Не удалось расшифровать. Проверьте ключ переписки.";
+          });
+        }
+      } else {
+        body.textContent = message.text;
+        if (getSecureChatState().key && !message.localState && message.kind === "text") {
+          item.classList.add("message-unprotected");
+          body.setAttribute("aria-label", "Без шифрования. " + message.text);
+        }
+      }
       item.append(body);
     }
 
@@ -407,14 +434,36 @@ async function sendCurrentMessage(event) {
   if (!account || !selectedChat) return;
   const text = elements.messageInput.value.replace(/\r\n?/g, "\n").trim();
   if (!text) return;
+  const secure = getSecureChatState();
+  if (secure.blocked || secure.conversationId !== selectedChat.conversationId) {
+    announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
+    return;
+  }
+  if (!secure.key && messages.some((message) => isEncryptedText(message.text))) {
+    announce("В переписке есть защищённые сообщения. Введите ключ перед отправкой, чтобы не отправить текст открыто.");
+    return;
+  }
+  const expectedChat = selectedChat.conversationId;
+  const clientMessageId = randomId();
+  let wireText = text;
+  try {
+    if (secure.key) wireText = await encryptText(text, secure.key, {
+      conversationId: expectedChat, senderUserId: account.userId, clientMessageId
+    });
+  } catch (error) {
+    announce("Сообщение не отправлено: " + error.message);
+    return;
+  }
+  if (selectedChat?.conversationId !== expectedChat || account?.userId !== secure.accountId) return;
 
   const pending = {
     messageId: `pending_${randomId()}`,
     conversationId: selectedChat.conversationId,
     senderUserId: account.userId,
-    clientMessageId: randomId(),
+    clientMessageId,
     kind: "text",
     text,
+    wireText,
     voice: null,
     createdAt: Date.now(),
     deliveredAt: null,
@@ -435,7 +484,7 @@ async function transmitPending(pending) {
       method: "POST",
       body: JSON.stringify({
         clientMessageId: pending.clientMessageId,
-        text: pending.text
+        text: pending.wireText ?? pending.text
       })
     });
     upsertServerMessage(result.message);
