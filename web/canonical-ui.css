@@ -102,14 +102,33 @@ body.signed-in-mode {
 
 .chat-filter::placeholder { color: var(--muted); }
 
+.chat-filter-controls { position: relative; }
+.chat-filter { width: 100%; padding-right: 5.3rem; }
+.chat-filter::-webkit-search-cancel-button { display: none; }
+.chat-filter-clear {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 2rem;
+  padding: 0.2rem 0.4rem;
+  border: 0;
+  border-radius: 0.4rem;
+  font-size: 0.75rem;
+  background: var(--surface);
+  color: var(--muted);
+}
+#chat-filter-empty { margin: 0.55rem 0.4rem 0.4rem; line-height: 1.4; }
+
+
 .chat-list {
   gap: 0.15rem;
   padding: 0.25rem 0.45rem 0.65rem;
 }
 
 .chat-item {
-  grid-template-columns: 2.65rem minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
+  grid-template-columns: 2.65rem minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   column-gap: 0.65rem;
   align-items: center;
   min-height: 4.65rem;
@@ -119,7 +138,7 @@ body.signed-in-mode {
 
 .chat-avatar {
   grid-column: 1;
-  grid-row: 1 / span 3;
+  grid-row: 1 / span 2;
   display: grid;
   place-items: center;
   width: 2.65rem;
@@ -138,8 +157,19 @@ body.signed-in-mode {
 }
 
 .chat-item > strong { grid-row: 1; }
-.chat-item > .chat-username { grid-row: 2; display: none; }
-.chat-item > .chat-preview { grid-row: 3; }
+.chat-item > .chat-username { display: none; }
+.chat-item > .chat-preview { grid-row: 2; grid-column: 2 / 4; }
+.chat-item > .chat-time {
+  grid-row: 1;
+  grid-column: 3;
+  align-self: center;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.chat-item > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-list-empty { margin: 1rem; color: var(--muted); line-height: 1.6; }
 
 .chat-item.is-current {
   background: color-mix(in srgb, var(--brand) 21%, var(--surface));
@@ -151,6 +181,7 @@ body.signed-in-mode {
 }
 
 .conversation-pane {
+  position: relative;
   background:
     radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--brand) 3.5%, transparent) 0 1px, transparent 1.5px) 0 0 / 26px 26px,
     color-mix(in srgb, var(--brand) 2.5%, var(--surface));
@@ -186,6 +217,45 @@ body.signed-in-mode {
   border: 0;
   box-shadow: 0 5px 18px color-mix(in srgb, #000 7%, transparent);
 }
+
+/* Date dividers and jump navigation remain readable with VoiceOver. */
+.message-day {
+  justify-self: center;
+  max-width: 100%;
+  margin: 0.75rem 0;
+  padding: 0.36rem 0.9rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 12%, var(--surface));
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-align: center;
+}
+.message-empty {
+  justify-self: center;
+  align-self: center;
+  width: min(26rem, 92%);
+  text-align: center;
+  line-height: 1.5;
+  box-shadow: none;
+  background: transparent;
+}
+.message-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 0; font-variant-numeric: tabular-nums; }
+.jump-to-latest {
+  position: absolute;
+  right: 1.25rem;
+  bottom: 5.5rem;
+  z-index: 4;
+  width: auto;
+  min-height: 2.7rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--brand-strong);
+  box-shadow: 0 5px 20px color-mix(in srgb, #000 14%, transparent);
+}
+#chat-start-empty { min-height: 2.7rem; }
 
 .message-mine {
   color: CanvasText;
