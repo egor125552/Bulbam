@@ -5,6 +5,7 @@ let selectedConversationId = null;
 let encryptionKey = null;
 let keyIsLoading = false;
 let loadFailed = false;
+let protectedHistorySeen = false;
 let updateMessages = null;
 let requestSerial = 0;
 let lastGeneratedSecret = "";
@@ -26,6 +27,7 @@ function updatePresentation() {
     label.hidden = !hasChat;
     label.textContent = active ? "Экспериментальная защита новых сообщений и голосовых включена" :
       keyIsLoading || loadFailed ? "Защита недоступна. Отправка временно остановлена" :
+        protectedHistorySeen ? "Для продолжения защищённой переписки нужен ключ" :
         "Обычные сообщения. Без сквозного шифрования";
   }
   const onboarding = element("secure-chat-onboarding");
@@ -41,6 +43,7 @@ function updatePresentation() {
   else if (keyIsLoading) setStatus("Проверяю наличие ключа на этом устройстве.");
   else if (loadFailed) setStatus("Не удалось проверить сохранённые ключи. Обычная отправка отключена во избежание ошибки.");
   else if (active) setStatus("Новые текстовые сообщения и голосовые шифруются на этом устройстве. Ключ хранится только здесь.");
+  else if (protectedHistorySeen) setStatus("В переписке есть защищённые сообщения. Введите ключ, чтобы продолжить общение.");
   else setStatus("Защита выключена. Создайте новый ключ или введите ключ собеседника.");
 }
 
@@ -49,8 +52,15 @@ export function getSecureChatState() {
     accountId: selectedAccountId,
     conversationId: selectedConversationId,
     key: encryptionKey,
-    blocked: keyIsLoading || loadFailed
+    blocked: keyIsLoading || loadFailed,
+    requiresKey: protectedHistorySeen && !encryptionKey
   };
+}
+
+export function requireProtectedConversationKey(accountId, conversationId, seen) {
+  if (selectedAccountId !== accountId || selectedConversationId !== conversationId) return;
+  if (seen) protectedHistorySeen = true;
+  updatePresentation();
 }
 
 export async function setSecureConversation(account, chat) {
@@ -60,6 +70,7 @@ export async function setSecureConversation(account, chat) {
   encryptionKey = null;
   keyIsLoading = Boolean(selectedAccountId && selectedConversationId);
   loadFailed = false;
+  protectedHistorySeen = false;
   clearGeneratedSecret();
   updatePresentation();
   if (!keyIsLoading) return;
