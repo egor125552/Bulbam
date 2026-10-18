@@ -94,7 +94,8 @@ export class IdentityService {
     username: string;
     code: string;
     newPassword: string;
-  }): Promise<void> {
+    deviceName: string;
+  }) {
     const hash = await sha256Hex(input.code.toUpperCase());
     const passwordHash = await hashPassword(input.newPassword);
     const changed = await this.repository.resetPasswordWithRecoveryCode({
@@ -104,6 +105,11 @@ export class IdentityService {
       throw new ApiError(400, "invalid_recovery_code",
         "Неверное имя пользователя или код восстановления. Проверьте данные и попробуйте снова.");
     }
+    const accountCredentials = await this.repository.findAccountCredentialsByUsername(input.username);
+    if (!accountCredentials) throw new Error("Recovered account was not found.");
+    const { passwordHash: _hash, ...account } = accountCredentials;
+    const issued = await this.issueSession(account.userId, input.deviceName, Date.now());
+    return { account, ...issued };
   }
 
   async changePasswordFromSession(
