@@ -184,6 +184,7 @@ async function loadChats({ quiet = false } = {}) {
 }
 
 function renderChats() {
+  const focusedChatId = document.activeElement?.closest?.(".chat-item")?.dataset.conversationId;
   elements.chatList.replaceChildren();
   if (!account) return;
 
@@ -199,6 +200,7 @@ function renderChats() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-item";
+    button.dataset.conversationId = chat.conversationId;
     if (selectedChat?.conversationId === chat.conversationId) {
       button.classList.add("is-current");
       button.setAttribute("aria-current", "page");
@@ -227,6 +229,11 @@ function renderChats() {
     button.setAttribute("aria-label", chatAccessibleLabel(chat, account.userId));
     button.addEventListener("click", () => void selectChat(chat, { focusHeading: true }));
     elements.chatList.append(button);
+  }
+  if (focusedChatId) {
+    const restored = [...elements.chatList.querySelectorAll(".chat-item")]
+      .find((button) => button.dataset.conversationId === focusedChatId);
+    restored?.focus({ preventScroll: true });
   }
 }
 
@@ -388,7 +395,11 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
 function jumpToLatest() {
   elements.messageList.scrollTop = elements.messageList.scrollHeight;
   if (jumpButton) jumpButton.hidden = true;
-  elements.messageList.lastElementChild?.focus?.({ preventScroll: true });
+  const latest = elements.messageList.querySelector(".message:last-child");
+  if (latest) {
+    latest.tabIndex = -1;
+    latest.focus({ preventScroll: true });
+  }
 }
 
 async function sendCurrentMessage(event) {
