@@ -21,10 +21,16 @@ function rememberUsername(account) {
   try { localStorage.setItem(ACCOUNT_HINT_KEY, account.username); } catch {}
 }
 
+function knownUsername() {
+  try {
+    const value = localStorage.getItem(ACCOUNT_HINT_KEY) ?? "";
+    return /^[a-z0-9_]{3,32}$/.test(value) ? value : null;
+  } catch { return null; }
+}
+
 function restoreUsernameHint() {
-  let username = "";
-  try { username = localStorage.getItem(ACCOUNT_HINT_KEY) ?? ""; } catch {}
-  if (!/^[a-z0-9_]{3,32}$/.test(username)) return;
+  const username = knownUsername();
+  if (!username) return;
   const loginInput = elements.loginForm.querySelector('[name="username"]');
   const recoveryInput = document.querySelector('#recovery-form [name="username"]');
   if (loginInput && !loginInput.value) loginInput.value = username;
@@ -108,8 +114,10 @@ export async function loadCurrentAccount({ quiet = false } = {}) {
       restoreUsernameHint();
       showAuthView("login");
       const hint = document.querySelector("#auth-session-note");
-      if (hint) hint.hidden = false;
-      if (!quiet) announce("Сеанс недействителен или срок его действия истёк. Войдите снова либо восстановите пароль.");
+      if (hint) hint.hidden = !knownUsername();
+      if (!quiet) announce(knownUsername()
+        ? "Сеанс недействителен или срок его действия истёк. Войдите снова либо восстановите пароль."
+        : "Для начала работы войдите в аккаунт или зарегистрируйтесь.");
       return;
     }
     // Network errors and 5xx responses are not proof that the user's session
