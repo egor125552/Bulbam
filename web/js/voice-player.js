@@ -183,7 +183,7 @@ function refreshController(controller, message, mine) {
   controller.pendingCleanupGeneration = 0;
   controller.message = message;
   controller.mine = mine;
-  controller.root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(message.voice.durationMs)}`);
+  controller.root.setAttribute("aria-label", `${controller.protectedMime ? "Защищённое" : "Обычное"} голосовое сообщение, ${formatTime(message.voice.durationMs)}`);
   controller.progress.max = String(Math.max(0.1, message.voice.durationMs / 1000));
   controller.speed.textContent = `${formatSpeed(playbackRate)} скорость`;
   controller.play.textContent = controller.audio.paused ? "Воспроизвести" : "Пауза";
