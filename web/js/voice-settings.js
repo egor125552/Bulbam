@@ -22,7 +22,7 @@ export function setupVoiceSettings() {
       if (!ALLOWED_BITRATES.has(next)) return;
       bitrateBps = next;
       localStorage.setItem(BITRATE_KEY, String(next));
-      announce(`Качество голосовых: ${next / 1000} килобита в секунду.`);
+      announce(`Качество голосовых: ${bitrateSelect.selectedOptions[0].textContent.trim()}.`);
     });
   }
   if (shareCheckbox) {
