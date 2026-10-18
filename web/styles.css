@@ -594,9 +594,40 @@ html[data-message-view="compact"] .message p {
 }
 
 .auth-layout {
-  width: min(54rem, 100%);
+  width: min(35rem, 100%);
   margin: 3vh auto 0;
 }
+
+.auth-links {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.auth-links button,
+#auth-login-from-register,
+#auth-login-from-recovery {
+  border: none;
+  color: var(--brand-strong);
+  text-decoration: underline;
+  background: transparent;
+}
+
+#auth-view-recovery h4 { margin-bottom: 0.35rem; }
+#auth-view-recovery p { margin-top: 0.35rem; }
+#recovery-codes-dialog {
+  width: min(34rem, calc(100% - 2rem));
+  max-height: 90dvh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: CanvasText;
+  background: var(--surface);
+}
+#recovery-codes-dialog::backdrop { background: color-mix(in srgb, #000 55%, transparent); }
+#recovery-codes-dialog button { margin: 0.5rem 0.5rem 0.2rem 0; }
+#recovery-codes-text { min-height: 13rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .card {
   padding: 1rem;

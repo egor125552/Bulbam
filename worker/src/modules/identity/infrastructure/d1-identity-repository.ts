@@ -306,6 +306,65 @@ export class D1IdentityRepository implements IdentityRepository {
     return (result.meta?.changes ?? 0) === 1;
   }
 
+  async replaceRecoveryCodes(userId: string, codeHashes: string[], now: number): Promise<void> {
+    await this.initialize();
+    if (codeHashes.length !== 8 || new Set(codeHashes).size !== 8 ||
+        codeHashes.some((hash) => !/^[0-9a-f]{64}$/.test(hash))) {
+      throw new Error("Invalid recovery code set.");
+    }
+    await this.db.batch([
+      this.db.prepare("DELETE FROM password_recovery_codes WHERE user_id = ?").bind(userId),
+      ...codeHashes.map((hash) => this.db.prepare(
+        "INSERT INTO password_recovery_codes (code_hash, user_id, issued_at) VALUES (?, ?, ?)"
+      ).bind(hash, userId, now))
+    ]);
+  }
+
+  async resetPasswordWithRecoveryCode(input: {
+    username: string;
+    codeHash: string;
+    passwordHash: string;
+    now: number;
+  }): Promise<boolean> {
+    await this.initialize();
+    // D1 batch is atomic. Look up the unused code for *each* statement before
+    // invalidating all codes in the final statement. Competing requests cannot
+    // reset a second time after the first transaction commits.
+    const owner = `SELECT a.user_id FROM password_recovery_codes rc
+      JOIN accounts a ON a.user_id = rc.user_id
+      WHERE rc.code_hash = ? AND a.username = ? COLLATE NOCASE
+        AND a.disabled_at IS NULL LIMIT 1`;
+    const results = await this.db.batch([
+      this.db.prepare(`UPDATE accounts SET password_hash = ?
+        WHERE user_id = (${owner}) AND disabled_at IS NULL`)
+        .bind(input.passwordHash, input.codeHash, input.username),
+      this.db.prepare(`UPDATE sessions SET revoked_at = ?
+        WHERE user_id = (${owner}) AND revoked_at IS NULL`)
+        .bind(input.now, input.codeHash, input.username),
+      this.db.prepare(`DELETE FROM password_recovery_codes WHERE user_id = (${owner})`)
+        .bind(input.codeHash, input.username)
+    ]);
+    return (results[0]?.meta?.changes ?? 0) === 1;
+  }
+
+  async changePasswordFromSession(input: {
+    userId: string;
+    sessionId: string;
+    passwordHash: string;
+    now: number;
+  }): Promise<void> {
+    await this.initialize();
+    const result = await this.db.batch([
+      this.db.prepare(`UPDATE accounts SET password_hash = ?
+        WHERE user_id = ? AND disabled_at IS NULL`).bind(input.passwordHash, input.userId),
+      this.db.prepare(`UPDATE sessions SET revoked_at = ?
+        WHERE user_id = ? AND session_id <> ? AND revoked_at IS NULL`)
+        .bind(input.now, input.userId, input.sessionId),
+      this.db.prepare("DELETE FROM password_recovery_codes WHERE user_id = ?").bind(input.userId)
+    ]);
+    if ((result[0]?.meta?.changes ?? 0) !== 1) throw new Error("Could not update account password.");
+  }
+
   async createInvite(input: {
     inviteId: string;
     codeHash: string;
