@@ -10,11 +10,13 @@ let visibleRecoveryCodes = [];
 
 function showAuthView(view) {
   if (!AUTH_VIEWS.includes(view)) return;
+  if (view !== "login") cancelPasskeyAutofill();
   for (const candidate of AUTH_VIEWS) {
     const panel = document.querySelector(`#auth-view-${candidate}`);
     if (panel) panel.hidden = candidate !== view;
   }
   document.querySelector(`#auth-${view}-heading`)?.focus();
+  if (view === "login" && !getCurrentAccount()) void startPasskeyAutofill();
 }
 
 function rememberUsername(account) {
@@ -126,7 +128,6 @@ export async function loadCurrentAccount({ quiet = false } = {}) {
       if (!quiet) announce(knownUsername()
         ? "Сеанс недействителен или срок его действия истёк. Войдите снова либо восстановите пароль."
         : "Для начала работы войдите в аккаунт или зарегистрируйтесь.");
-      void startPasskeyAutofill();
       return;
     }
     // Network errors and 5xx responses are not proof that the user's session
@@ -211,7 +212,6 @@ async function logout() {
     showSignedOut();
     showAuthView("login");
     announce("Вы вышли из аккаунта.");
-    void startPasskeyAutofill();
   } catch (error) {
     announce(`Не удалось выйти: ${error.message}`);
   } finally {
