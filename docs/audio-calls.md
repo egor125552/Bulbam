@@ -67,6 +67,14 @@ Like Lenovo Messenger's active-call restore, UserRealtime keeps a short-lived po
 
 A full page reload deliberately does **not** silently reopen the microphone. The web client shows **Восстановить звук**. After that explicit user action it reacquires the microphone, skips stale signaling already retained in CallRoom, and starts a fresh WebRTC negotiation. If the callee was the side that reloaded, it emits `resume`; the caller responds with a fresh ICE-restart offer. If the caller reloaded, it can directly create the fresh offer after the restore action.
 
+## Проверка качества связи
+
+Во время принятого аудиозвонка в панели разговора доступна кнопка **Проверить качество связи**. Проверка выполняется только по нажатию, не требует дополнительных разрешений и не отправляет данные на сервер.
+
+С помощью локальной статистики WebRTC браузер оценивает получаемый звук: процент потерь звуковых пакетов, колебания задержки и, если браузер сообщает значение, время отклика сети. Результат сообщается по-русски: хорошее, нестабильное, плохое качество либо недостаточно данных. Во время переподключения диагностический результат не выдаётся за здоровое соединение.
+
+Это показатели **приёма на данном устройстве**, а не объективное измерение звука, который слышит собеседник. Пока получено менее 20 звуковых пакетов, Бульбам не делает вывод о качестве. VoiceOver читает результат через отдельную вежливую область статуса. Статистика не сохраняется и не пересылается.
+
 ## Push and accessibility
 
 Incoming call Web Push points to `?chat=<conversationId>&call=<callId>`. After authentication the PWA can restore the CallRoom state and present **Ответить** / **Отклонить**. An already accepted call instead presents **Восстановить звук** so microphone access always follows an explicit user action.
