@@ -20,8 +20,32 @@
 - После сброса пароля отзывать прежние сеансы.
 - Поддерживать отдельный доступный VoiceOver интерфейс для проверки почты и задания пароля.
 
+## Работа без собственного домена: Brevo
+
+Покупка домена не нужна для первого этапа восстановления почтой.
+
+1. Зарегистрировать Brevo: https://app.brevo.com/
+2. Добавить адрес отправителя в **Settings → Senders, Domains & Dedicated IPs → Senders** и подтвердить кодом, пришедшим на обычную почту (например, Gmail).
+3. Учесть, что при неподтверждённом домене Brevo может подменять From на адрес под управлением Brevo, в частности `@t-sender-sib.com` для транзакционных писем. Это не означает взлом. Проверить реальную доставляемость и папку «Спам».
+4. Создать API-ключ в **Settings → SMTP & API → API Keys**, но **не помещать** ключ в GitHub, исходный код, браузер или чат. Хранить только в Cloudflare Worker Secret `BREVO_API_KEY`.
+5. Заполнить Worker переменные `BREVO_SENDER_EMAIL` (подтверждённый адрес отправителя) и `BREVO_SENDER_NAME=Бульбам`.
+6. Worker отправляет сообщения напрямую запросом `POST https://api.brevo.com/v3/smtp/email` с заголовком `api-key` на стороне сервера. Пример JSON: `{ "sender": {"email": "...", "name": "Бульбам"}, "to": [{"email": "..."}], "subject": "...", "textContent": "..." }`.
+7. Пока секреты и подтверждённый отправитель не настроены и отправка не проверена, функция «Восстановление по почте» должна быть **отключена**, а старые резервные коды доступны.
+8. Использовать рабочий URL приложения `https://bulbam-api.k69ysrndm7.workers.dev/` в ссылках подтверждения/сброса. Собственный веб-домен не нужен.
+9. В настройках пользователь сначала подтверждает личный адрес, затем он может применять письмо для сброса пароля.
+
+Источники:
+- https://help.brevo.com/hc/en-us/articles/208836149-Create-a-new-sender-From-name-and-From-email
+- https://help.brevo.com/hc/en-us/articles/14925263522578-Comply-with-Gmail-Yahoo-and-Microsoft-s-requirements-for-email-senders
+- https://developers.brevo.com/docs/send-a-transactional-email
+- https://help.brevo.com/hc/en-us/articles/209467485-Create-and-manage-your-API-keys
+
+## Альтернатива при появлении домена: Cloudflare Email Sending
+
+Cloudflare Email Sending пока не подходит, потому что ему требуется подключённый в Cloudflare DNS собственный домен.
+
 ## Инфраструктура Cloudflare
-Cloudflare Email Sending поддерживает Worker binding `EMAIL`, но требует настроенный и подтверждённый почтовый домен в Cloudflare DNS.
+При появлении домена Cloudflare Email Sending поддерживает Worker binding `EMAIL`, но требует настроенный и подтверждённый почтовый домен в Cloudflare DNS.
 Пример `wrangler.jsonc` (добавлять **после** настройки отправителя):
 ```json
 {
@@ -33,4 +57,4 @@ Cloudflare Email Sending поддерживает Worker binding `EMAIL`, но �
 Документация: https://developers.cloudflare.com/email-service/api/send-emails/workers-api/
 
 ## Статус
-Технический план; почтовый домен, отправитель и рабочая почтовая доставка пока не настроены. Не считать восстановление по email действующим до успешных интеграционных тестов.
+Технический план: для запуска без домена выбран Brevo. Отправитель, API-ключ и доставка ещё не настроены. Не считать восстановление по email действующим до успешных интеграционных тестов.
