@@ -70,6 +70,18 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_accounts_display_name_search ON accounts(display_name_search)",
       "CREATE INDEX IF NOT EXISTS idx_accounts_username_search ON accounts(username)"
     ]
+  },
+  {
+    version: 3,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS password_recovery_codes (
+        code_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES accounts(user_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_password_recovery_user ON password_recovery_codes(user_id)"
+    ]
   }
 ] as const;
 
