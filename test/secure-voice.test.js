@@ -3,7 +3,7 @@ import { beforeAll, afterAll, describe, expect, test } from "vitest";
 import { generateConversationSecret, importConversationSecret } from "../web/js/secure-messages.js";
 import {
   encryptedVoiceMime, parseEncryptedVoiceMime, generateVoiceNonce,
-  encryptVoicePart, encryptVoiceEnd, decryptVoicePart, decryptVoiceFile,
+  encryptVoicePart, decryptVoicePart, decryptVoiceFile,
   VOICE_PLAIN_CHUNK_BYTES, VOICE_CIPHER_CHUNK_BYTES
 } from "../web/js/secure-voice.js";
 
@@ -31,12 +31,11 @@ describe("chunked protected voice", () => {
     webcrypto.getRandomValues(plain.subarray(0, 65536));
     plain[plain.length - 1] = 123;
     const first = await encryptVoicePart(plain.subarray(0, VOICE_PLAIN_CHUNK_BYTES), key, metadata, context, 1);
-    const second = await encryptVoicePart(plain.subarray(VOICE_PLAIN_CHUNK_BYTES), key, metadata, context, 2);
+    const second = await encryptVoicePart(plain.subarray(VOICE_PLAIN_CHUNK_BYTES), key, metadata, context, 2, plain.byteLength);
     expect(first.byteLength).toBe(VOICE_CIPHER_CHUNK_BYTES);
     expect(second.byteLength).toBe(543 + 16);
     expect(first.subarray(0,32)).not.toEqual(plain.subarray(0,32));
-    const last = await encryptVoiceEnd(key, metadata, context, 3, plain.byteLength);
-    const wire = new Blob([first, second, last]);
+    const wire = new Blob([first, second]);
     const decoded = await decryptVoiceFile(wire, key, metadata, context);
     expect(new Uint8Array(await decoded.arrayBuffer())).toEqual(plain);
     const repeated = await encryptVoicePart(plain.subarray(0, VOICE_PLAIN_CHUNK_BYTES), key, metadata, context, 1);
@@ -47,7 +46,7 @@ describe("chunked protected voice", () => {
     const key = await importConversationSecret(generateConversationSecret());
     const other = await importConversationSecret(generateConversationSecret());
     const mime = encryptedVoiceMime("audio/mp4", generateVoiceNonce());
-    const encrypted = await encryptVoicePart(encoder.encode("secret sound"), key, mime, context, 1);
+    const encrypted = await encryptVoicePart(encoder.encode("secret sound"), key, mime, context, 1, 12);
     await expect(decryptVoicePart(encrypted, other, mime, context, 1)).rejects.toThrow();
     await expect(decryptVoicePart(encrypted, key, mime, {...context, conversationId:"other"}, 1)).rejects.toThrow();
     await expect(decryptVoicePart(encrypted, key, mime, context, 2)).rejects.toThrow();
