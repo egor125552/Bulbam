@@ -25,12 +25,14 @@ function invalid(): never {
 function encode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+  return btoa(binary).split("+").join("-").split("/").join("_").replace(/=+$/g, "");
 }
-function decode(value: string): Uint8Array {
+function decode(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) invalid();
   const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const result = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let i=0; i<binary.length; i++) result[i]=binary.charCodeAt(i);
+  return result;
 }
 function userHandle(userId: string): string {
   return encode(new TextEncoder().encode(userId));
