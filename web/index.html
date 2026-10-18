@@ -28,6 +28,12 @@
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
       <h2 id="account-start-title" class="visually-hidden">Вход и регистрация</h2>
 
+      <div id="auth-connection-problem" class="card auth-card" hidden>
+        <h3>Не получилось проверить вход</h3>
+        <p role="status">Бульбам не смог связаться с сервером. Это не означает, что ваш аккаунт удалён или что вы вышли из него.</p>
+        <button id="auth-retry" type="button">Проверить вход ещё раз</button>
+      </div>
+
       <div class="card auth-card">
         <h3>Войти</h3>
         <form id="login-form" class="form-stack">
