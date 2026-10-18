@@ -1,6 +1,7 @@
 import { api, deviceName } from "./api.js";
 import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
+import { setupPasskeys, startPasskeyAutofill, cancelPasskeyAutofill } from "./passkeys.js";
 import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut } from "./ui.js";
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
@@ -53,6 +54,13 @@ function showRecoveryCodes(codes) {
 }
 
 export function setupAuth() {
+  setupPasskeys(async (account, session) => {
+    clearAuthCheckProblem();
+    showSignedIn(account, session);
+    rememberUsername(account);
+    announce(`Вы вошли как ${account.displayName} с помощью ключа доступа.`);
+    await loadSessions({quiet:true});
+  });
   elements.registerForm.addEventListener("submit", register);
   elements.loginForm.addEventListener("submit", login);
   elements.logoutButton.addEventListener("click", logout);
@@ -118,6 +126,7 @@ export async function loadCurrentAccount({ quiet = false } = {}) {
       if (!quiet) announce(knownUsername()
         ? "Сеанс недействителен или срок его действия истёк. Войдите снова либо восстановите пароль."
         : "Для начала работы войдите в аккаунт или зарегистрируйтесь.");
+      void startPasskeyAutofill();
       return;
     }
     // Network errors and 5xx responses are not proof that the user's session
@@ -164,6 +173,7 @@ async function register(event) {
 
 async function login(event) {
   event.preventDefault();
+  cancelPasskeyAutofill();
   const button = elements.loginForm.querySelector("button[type=submit]");
   button.disabled = true;
   const data = new FormData(elements.loginForm);
@@ -201,6 +211,7 @@ async function logout() {
     showSignedOut();
     showAuthView("login");
     announce("Вы вышли из аккаунта.");
+    void startPasskeyAutofill();
   } catch (error) {
     announce(`Не удалось выйти: ${error.message}`);
   } finally {
