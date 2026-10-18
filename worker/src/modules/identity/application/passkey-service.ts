@@ -123,17 +123,23 @@ export class PasskeyService {
     if (!key || !key.id || !key.publicKey?.length) invalid();
     const now = Date.now();
     const name = String(input.name ?? "Ключ доступа").trim().slice(0, 80) || "Ключ доступа";
+    // Insert while the nonce is still unused, then atomically mark it used.
+    // D1 batch is transactional, so a second concurrent finish cannot insert
+    // another passkey using the same registration challenge.
     const results = await this.db.batch([
-      this.db.prepare(`UPDATE passkey_challenges SET used_at=?
-        WHERE challenge_id=? AND used_at IS NULL AND expires_at > ? AND purpose='register'
-          AND user_id=? AND session_id=?`
-      ).bind(now, input.challengeId, now, auth.account.userId, auth.session.sessionId),
       this.db.prepare(`INSERT OR IGNORE INTO account_passkeys
         (credential_id,user_id,public_key,counter,transports,name,created_at)
         SELECT ?,?,?,?,?,?,? WHERE EXISTS
-          (SELECT 1 FROM passkey_challenges WHERE challenge_id=? AND used_at=?)`
+          (SELECT 1 FROM passkey_challenges WHERE challenge_id=?
+            AND used_at IS NULL AND expires_at > ? AND purpose='register'
+            AND user_id=? AND session_id=?)`
       ).bind(key.id, auth.account.userId, encode(key.publicKey), key.counter,
-        JSON.stringify(key.transports ?? []), name, now, input.challengeId, now)
+        JSON.stringify(key.transports ?? []), name, now, input.challengeId, now,
+        auth.account.userId, auth.session.sessionId),
+      this.db.prepare(`UPDATE passkey_challenges SET used_at=?
+        WHERE challenge_id=? AND used_at IS NULL AND expires_at > ? AND purpose='register'
+          AND user_id=? AND session_id=?`
+      ).bind(now, input.challengeId, now, auth.account.userId, auth.session.sessionId)
     ]);
     if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) invalid();
     return {ok:true};
