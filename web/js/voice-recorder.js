@@ -20,7 +20,7 @@ import { VoiceUploadSocket } from "./voice-upload-socket.js";
 import { getSecureChatState } from "./secure-chat-ui.js";
 import {
   encryptedVoiceMime, generateVoiceNonce, encryptVoicePart,
-  VOICE_PLAIN_CHUNK_BYTES
+  VOICE_PLAIN_CHUNK_BYTES, MAX_PROTECTED_VOICE_BYTES
 } from "./secure-voice.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
@@ -115,7 +115,8 @@ async function startRecording(trigger) {
   const chat = getSelectedChat();
   if (!account || !chat || current || starting) return;
   const security = getSecureChatState();
-  if (security.blocked || security.conversationId !== chat.conversationId || security.accountId !== account.userId) {
+  if (security.blocked || security.requiresKey ||
+      security.conversationId !== chat.conversationId || security.accountId !== account.userId) {
     announce("Запись не начата: не удалось проверить защиту переписки.");
     return;
   }
@@ -301,6 +302,10 @@ function isCallActive() {
 }
 
 async function persistChunk(state, blob) {
+  if (state.draft.encrypted && state.draft.totalBytes + blob.size > MAX_PROTECTED_VOICE_BYTES) {
+    await interruptRecording("Защищённое голосовое слишком длинное. Максимум 32 МБ.");
+    return;
+  }
   const sequence = state.draft.sequence;
   state.draft.sequence += 1;
   state.draft.totalBytes += blob.size;
@@ -405,7 +410,8 @@ function voiceDataChunkSize(draft) {
 
 function requireVoiceKey(draft) {
   const security = getSecureChatState();
-  if (security.blocked || security.accountId !== draft.accountId || security.conversationId !== draft.conversationId) {
+  if (security.blocked || security.requiresKey ||
+      security.accountId !== draft.accountId || security.conversationId !== draft.conversationId) {
     throw new Error("Нельзя отправить голосовое: не проверены аккаунт, чат или ключ.");
   }
   if (Boolean(draft.encrypted) !== Boolean(security.key)) {
@@ -436,6 +442,9 @@ async function sendDraftById(id, existingTransport = null) {
     const key = requireVoiceKey(draft);
     const totalPlainBytes = Number(draft.totalBytes ?? 0);
     if (!totalPlainBytes) throw new Error("запись пустая");
+    if (draft.encrypted && totalPlainBytes > MAX_PROTECTED_VOICE_BYTES) {
+      throw new Error("Защищённое голосовое превышает 32 МБ.");
+    }
 
     const upload = await ensureDraftUpload(draft);
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
