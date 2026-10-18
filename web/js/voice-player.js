@@ -1,4 +1,6 @@
 import { announce, getCurrentAccount } from "./ui.js";
+import { getSecureChatState } from "./secure-chat-ui.js";
+import { decryptVoiceFile, parseEncryptedVoiceMime } from "./secure-voice.js";
 import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
 
 const SPEED_KEY = "bulbam.voice.playbackRate";
@@ -35,13 +37,15 @@ export function renderVoiceMessage(message, mine) {
   const voice = message.voice;
   const root = document.createElement("section");
   root.className = "voice-message";
-  root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(voice.durationMs)}`);
+  const protectedMime = parseEncryptedVoiceMime(voice.mimeType);
+  root.setAttribute("aria-label", `${protectedMime ? "Защищённое" : "Обычное"} голосовое сообщение, ${formatTime(voice.durationMs)}`);
 
   // Keep the actual media engine outside the message subtree. Messenger rerenders can
   // rebuild message cards without destroying a playing HTMLMediaElement on Safari.
   const audio = document.createElement("audio");
   audio.preload = "metadata";
-  audio.src = voice.localUrl || voiceUrl(message);
+  // Ciphertext must never be sent directly to the browser's media decoder.
+  if (!protectedMime) audio.src = voice.localUrl || voiceUrl(message);
   audio.hidden = true;
   audio.setAttribute("aria-hidden", "true");
   audio.tabIndex = -1;
@@ -97,6 +101,8 @@ export function renderVoiceMessage(message, mine) {
     buffering: false,
     objectUrl: null,
     preparedSource: false,
+    protectedMime: Boolean(protectedMime),
+    preparingProtected: null,
     pendingCleanupGeneration: 0,
     disposing: false
   };
@@ -266,7 +272,14 @@ function disposeController(controller) {
 
 async function togglePlayback(controller) {
   if (controller.audio.paused) {
-    await prepareCachedSource(controller);
+    try {
+      if (controller.protectedMime) await prepareProtectedSource(controller);
+      else await prepareCachedSource(controller);
+    } catch (error) {
+      announce(`Защищённое голосовое не открыто: ${error.message}`);
+      return;
+    }
+    if (controller.disposing) return;
     await pauseOtherPlayers(controller.message.messageId);
     const startMs = effectiveVoicePositionMs(
       controller.audio.currentTime,
@@ -279,6 +292,47 @@ async function togglePlayback(controller) {
     await controller.audio.play().catch((error) => announce(`Не удалось начать воспроизведение: ${error.message}`));
   } else {
     controller.audio.pause();
+  }
+}
+
+async function prepareProtectedSource(controller) {
+  if (controller.preparedSource) return;
+  if (controller.preparingProtected) return controller.preparingProtected;
+  const security = getSecureChatState();
+  const account = getCurrentAccount();
+  if (!account || security.blocked || !security.key ||
+      security.accountId !== account.userId ||
+      security.conversationId !== controller.message.conversationId) {
+    throw new Error("Для прослушивания нужен ключ этой переписки.");
+  }
+  const currentKey = security.key;
+  const currentAccountId = account.userId;
+  controller.preparingProtected = (async () => {
+    const response = await fetch(voiceUrl(controller.message), {
+      credentials: "same-origin", cache: "no-store"
+    });
+    if (!response.ok) throw new Error(`Не удалось загрузить аудио: HTTP ${response.status}.`);
+    const encrypted = await response.blob();
+    const decoded = await decryptVoiceFile(encrypted, currentKey,
+      controller.message.voice.mimeType, {
+        conversationId: controller.message.conversationId,
+        senderUserId: controller.message.senderUserId,
+        clientMessageId: controller.message.clientMessageId
+      });
+    const latest = getSecureChatState();
+    if (controller.disposing || getCurrentAccount()?.userId !== currentAccountId ||
+        latest.key !== currentKey || latest.conversationId !== controller.message.conversationId) {
+      throw new Error("Переписка или ключ изменились во время загрузки.");
+    }
+    const objectUrl = URL.createObjectURL(decoded);
+    controller.objectUrl = objectUrl;
+    controller.audio.src = objectUrl;
+    controller.preparedSource = true;
+  })();
+  try {
+    await controller.preparingProtected;
+  } finally {
+    controller.preparingProtected = null;
   }
 }
 
@@ -407,7 +461,7 @@ async function prefetchNextVoice(messageId) {
   const next = messageSequence[index + 1];
   if (next?.kind !== "voice") return;
   const controller = controllers.get(next.messageId);
-  if (!controller || controller.message.voice.localUrl) return;
+  if (!controller || controller.message.voice.localUrl || controller.protectedMime) return;
   try {
     const response = await fetch(voiceUrl(controller.message), {
       credentials: "same-origin",
@@ -420,7 +474,7 @@ async function prefetchNextVoice(messageId) {
 }
 
 async function cacheVoice(message) {
-  if (!window.caches || message.voice.localUrl) return;
+  if (!window.caches || message.voice.localUrl || parseEncryptedVoiceMime(message.voice.mimeType)) return;
   const account = getCurrentAccount();
   if (!account) return;
   try {
