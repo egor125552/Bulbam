@@ -52,7 +52,7 @@ export async function handleIdentityHttp(
     return withSessionCookie(json({ok:true,account:result.account,session:result.session}),
       result.token,result.session.expiresAt);
   }
-  const passkeyDelete = passkeys && url.pathname.match(/^\\/api\\/v1\\/passkeys\\/([A-Za-z0-9_-]{8,1024})$/);
+  const passkeyDelete = passkeys && url.pathname.match(/^\/api\/v1\/passkeys\/([A-Za-z0-9_-]{8,1024})$/);
   if (passkeys && passkeyDelete) {
     if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);
     const auth=await service.authenticate(sessionToken(request));
