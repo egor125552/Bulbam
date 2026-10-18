@@ -1,6 +1,7 @@
 import { announce, getCurrentAccount } from "./ui.js";
 import { getSecureChatState } from "./secure-chat-ui.js";
 import { decryptVoiceFile, parseEncryptedVoiceMime } from "./secure-voice.js";
+import { createProtectedVoiceStream } from "./secure-voice-stream.js";
 import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
 
 const SPEED_KEY = "bulbam.voice.playbackRate";
@@ -103,6 +104,8 @@ export function renderVoiceMessage(message, mine) {
     preparedSource: false,
     protectedMime: Boolean(protectedMime),
     preparingProtected: null,
+    protectedSession: null,
+    streamingUnsupported: false,
     pendingCleanupGeneration: 0,
     disposing: false
   };
@@ -266,15 +269,35 @@ function disposeController(controller) {
   clearTimeout(controller.remoteStaleTimer);
   controller.remoteStaleTimer = null;
   try { controller.audio.pause(); } catch {}
+  controller.protectedSession?.stop();
   controller.audio.remove();
   if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
 }
 
 async function togglePlayback(controller) {
   if (controller.audio.paused) {
+    if (controller.protectedMime && !controller.preparedSource && !controller.streamingUnsupported) {
+      try {
+        if (startStreamingProtectedVoice(controller)) {
+          // Invoke play() during the user's actual click. On Safari the browser
+          // may deny playback when it is deferred until after a network request.
+          void pauseOtherPlayers(controller.message.messageId);
+          const playing = controller.audio.play();
+          void playing?.catch((error) => {
+            if (!controller.disposing) announce(`Не удалось начать потоковое голосовое: ${error.message}`);
+          });
+          return;
+        }
+      } catch (error) {
+        announce(`Защищённое голосовое не открыто: ${error.message}`);
+        return;
+      }
+    }
     try {
-      if (controller.protectedMime) await prepareProtectedSource(controller);
-      else await prepareCachedSource(controller);
+      if (controller.protectedMime) {
+        announce("Потоковый режим недоступен для этого браузера или формата. Загружаю защищённое голосовое целиком.");
+        await prepareProtectedSource(controller);
+      } else await prepareCachedSource(controller);
     } catch (error) {
       announce(`Защищённое голосовое не открыто: ${error.message}`);
       return;
@@ -293,6 +316,54 @@ async function togglePlayback(controller) {
   } else {
     controller.audio.pause();
   }
+}
+
+function startStreamingProtectedVoice(controller) {
+  const security = getSecureChatState();
+  const account = getCurrentAccount();
+  if (!account || security.blocked || !security.key ||
+      security.accountId !== account.userId ||
+      security.conversationId !== controller.message.conversationId) {
+    throw new Error("Для прослушивания нужен ключ этой переписки.");
+  }
+  const expectedKey = security.key;
+  const expectedAccountId = account.userId;
+  const message = controller.message;
+  const session = createProtectedVoiceStream({
+    audio: controller.audio,
+    url: voiceUrl(message),
+    mimeType: message.voice.mimeType,
+    ciphertextBytes: message.voice.sizeBytes,
+    key: expectedKey,
+    context: {
+      conversationId: message.conversationId,
+      senderUserId: message.senderUserId,
+      clientMessageId: message.clientMessageId
+    },
+    isStillAuthorized: () => {
+      const active = getSecureChatState();
+      return !controller.disposing && getCurrentAccount()?.userId === expectedAccountId &&
+        active.conversationId === message.conversationId && active.key === expectedKey && !active.blocked;
+    }
+  });
+  if (!session) return false;
+  controller.protectedSession = session;
+  controller.objectUrl = session.objectUrl;
+  controller.preparedSource = true;
+  void session.done.catch((error) => {
+    if (controller.disposing) return;
+    announce(`Не удалось продолжить буферизацию защищённого голосового: ${error.message}`);
+    controller.streamingUnsupported = true;
+    try { controller.audio.pause(); } catch {}
+    session.stop();
+    controller.protectedSession = null;
+    controller.preparedSource = false;
+    controller.audio.removeAttribute("src");
+    controller.audio.load();
+    if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
+    controller.objectUrl = null;
+  });
+  return true;
 }
 
 async function prepareProtectedSource(controller) {
