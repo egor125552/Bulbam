@@ -127,7 +127,8 @@ function decorateMessages() {
     const author = item.querySelector(".message-author")?.textContent?.trim() || "Сообщение";
     const meta = item.querySelector(".message-meta")?.textContent?.trim() || "";
     const body = item.querySelector(".voice-message") ? "голосовое сообщение" : item.querySelector(":scope > p")?.textContent?.trim() || "сообщение";
-    const label = `${author}: ${body}. ${meta}`.trim();
+    const safety = item.classList.contains("message-unprotected") ? "Без шифрования. " : "";
+    const label = `${author}: ${safety}${body}. ${meta}`.trim();
     if (item.getAttribute("aria-label") !== label) item.setAttribute("aria-label", label);
   }
 }
