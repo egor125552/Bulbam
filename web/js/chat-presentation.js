@@ -45,6 +45,7 @@ export function chatPreview(lastMessage, ownUserId) {
   if (!lastMessage) return "Начните переписку";
   const prefix = lastMessage.senderUserId === ownUserId ? "Вы: " : "";
   if (lastMessage.kind === "voice") return prefix + "Голосовое сообщение";
+  if (typeof lastMessage.text === "string" && lastMessage.text.startsWith("bmsec1:")) return prefix + "Защищённое сообщение";
   const text = String(lastMessage.text ?? "").replace(/\s+/g, " ").trim();
   if (!text) return prefix + "Сообщение";
   return prefix + (text.length > 80 ? `${text.slice(0, 77)}…` : text);
