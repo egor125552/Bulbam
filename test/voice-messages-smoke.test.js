@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
+import { generateConversationSecret, importConversationSecret } from "../web/js/secure-messages.js";
+import {
+  encryptedVoiceMime, generateVoiceNonce, encryptVoicePart, decryptVoiceFile,
+  VOICE_PLAIN_CHUNK_BYTES
+} from "../web/js/secure-voice.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { createTestHarness } from "wrangler";
 
@@ -391,5 +396,71 @@ describe("voice messages foundation", () => {
       }
     );
     await expectStatus(fakeSelfListen, 404);
+  });
+});
+
+describe("encrypted voice through the actual storage and HTTP pipeline", () => {
+  test("uploads opaque authenticated chunks and decrypts only at the receiver", async () => {
+    const formerCrypto = globalThis.crypto;
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
+    try {
+      await seedInvite("BULBAM-SECUREVOICE-A-2026", "voice-e2ee-a-invite");
+      await seedInvite("BULBAM-SECUREVOICE-B-2026", "voice-e2ee-b-invite");
+      const alice = await register({ username: "secure_voice_a", displayName: "Алиса", inviteCode: "BULBAM-SECUREVOICE-A-2026" });
+      const bob = await register({ username: "secure_voice_b", displayName: "Борис", inviteCode: "BULBAM-SECUREVOICE-B-2026" });
+      const chat = await openChat(alice, bob);
+      const mime = encryptedVoiceMime("audio/webm;codecs=opus", generateVoiceNonce());
+      const key = await importConversationSecret(generateConversationSecret());
+      const context = {
+        conversationId: chat.conversationId,
+        senderUserId: alice.account.userId,
+        clientMessageId: "secure_voice_upload_2026"
+      };
+      const plaintext = new Uint8Array(VOICE_PLAIN_CHUNK_BYTES + 409);
+      plaintext.fill(17);
+      plaintext[VOICE_PLAIN_CHUNK_BYTES + 5] = 12;
+      const encryptedFirst = await encryptVoicePart(plaintext.subarray(0, VOICE_PLAIN_CHUNK_BYTES), key, mime, context, 1);
+      const encryptedTail = await encryptVoicePart(plaintext.subarray(VOICE_PLAIN_CHUNK_BYTES),
+        key, mime, context, 2, plaintext.byteLength);
+      const start = await api(`/api/v1/chats/${chat.conversationId}/voice/uploads`, alice.cookie, {
+        method: "POST", body: JSON.stringify({ mimeType: mime, bitrateBps: 64_000 })
+      });
+      await expectStatus(start, 201);
+      const upload = (await json(start)).upload;
+      expect(upload.mimeType).toBe(mime);
+      const first = await openVoiceUploadSocket(alice, chat, upload);
+      await sendVoicePart(first.socket, 1, encryptedFirst);
+      first.socket.close(1000, "reconnect");
+      const second = await openVoiceUploadSocket(alice, chat, upload);
+      expect(second.ready.receivedParts).toEqual([1]);
+      await sendVoicePart(second.socket, 2, encryptedTail);
+      second.socket.close(1000, "complete");
+      const wire = new Blob([encryptedFirst, encryptedTail]);
+      const completed = await api(`/api/v1/chats/${chat.conversationId}/voice/uploads/${upload.sessionId}/complete`,
+        alice.cookie, { method:"POST", body:JSON.stringify({
+          clientMessageId:context.clientMessageId, durationMs:12000,
+          chunkCount:2, sizeBytes:wire.size
+        }) });
+      await expectStatus(completed, 201);
+      const message = (await json(completed)).message;
+      expect(message.voice.mimeType).toBe(mime);
+      expect(message.voice.sizeBytes).toBe(wire.size);
+      const media = await api(`/api/v1/chats/${chat.conversationId}/messages/${message.messageId}/voice/audio`, bob.cookie);
+      await expectStatus(media, 200);
+      const received = new Blob([await media.arrayBuffer()]);
+      expect(new Uint8Array(await received.slice(0,32).arrayBuffer())).not.toEqual(plaintext.subarray(0,32));
+      expect(new Uint8Array(await received.arrayBuffer())).toEqual(new Uint8Array(await wire.arrayBuffer()));
+      const decrypted = await decryptVoiceFile(received, key, message.voice.mimeType, {
+        conversationId:message.conversationId,
+        senderUserId:message.senderUserId,
+        clientMessageId:message.clientMessageId
+      });
+      expect(new Uint8Array(await decrypted.arrayBuffer())).toEqual(plaintext);
+      expect(decrypted.type).toBe("audio/webm;codecs=opus");
+      const wrongKey = await importConversationSecret(generateConversationSecret());
+      await expect(decryptVoiceFile(received, wrongKey, mime, context)).rejects.toThrow();
+    } finally {
+      if (formerCrypto) Object.defineProperty(globalThis, "crypto", { configurable: true, value: formerCrypto });
+    }
   });
 });
