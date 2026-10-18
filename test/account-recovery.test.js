@@ -81,7 +81,7 @@ describe("account recovery",()=>{
 
   test("a still signed-in trusted device can rotate password and recovery codes",async()=>{
     const {data,session}=await register();
-    const rotated=await request("/api/v1/auth/recovery-codes",{},{cookie:session});
+    const rotated=await request("/api/v1/auth/recovery-codes",{},session);
     expect(rotated.status).toBe(200);
     const codes=(await rotated.json()).recoveryCodes;
     expect(codes).toHaveLength(8);
@@ -90,7 +90,7 @@ describe("account recovery",()=>{
       username:"recovery_owner",code:data.recoveryCodes[0],newPassword:NEW_PASSWORD
     });
     expect(oldReset.status).toBe(400);
-    const change=await request("/api/v1/auth/change-password",{newPassword:NEW_PASSWORD},{cookie:session});
+    const change=await request("/api/v1/auth/change-password",{newPassword:NEW_PASSWORD},session);
     expect(change.status).toBe(200);
     expect((await server.fetch("/api/v1/auth/me",{headers:{cookie:session}})).status).toBe(200);
     const reused=await request("/api/v1/auth/reset-with-recovery-code",{
