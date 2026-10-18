@@ -17,7 +17,7 @@ describe("human-readable chat previews", () => {
     expect(chatPreview({ kind: "voice", senderUserId: "other" }, "me")).toBe("Голосовое сообщение");
   });
   test("trims long text and mentions who wrote it", () => {
-    const preview = chatPreview({ kind: "text", senderUserId: "me", text: "  Привет\\n ещё раз  " }, "me");
+    const preview = chatPreview({ kind: "text", senderUserId: "me", text: "  Привет\n ещё раз  " }, "me");
     expect(preview).toBe("Вы: Привет ещё раз");
     expect(chatPreview(null, "me")).toBe("Начните переписку");
     expect(chatPreview({ kind: "text", senderUserId: "other", text: "а".repeat(160) }, "me").length).toBeLessThan(85);
