@@ -79,6 +79,15 @@
             </div>
           </div>
 
+          <div class="chat-filter-wrap">
+            <label class="visually-hidden" for="chat-filter">Поиск по чатам</label>
+            <div class="chat-filter-controls">
+              <input id="chat-filter" class="chat-filter" type="search" autocomplete="off" placeholder="Поиск по чатам">
+              <button id="chat-filter-clear" class="chat-filter-clear" type="button" aria-label="Очистить поиск" hidden>Очистить</button>
+            </div>
+            <p id="chat-filter-empty" class="hint" role="status" hidden>Ничего не найдено. Попробуйте другое имя или создайте новый чат.</p>
+          </div>
+
           <section id="user-search-panel" class="search-panel" aria-labelledby="search-users-title" hidden>
             <div class="section-heading">
               <h3 id="search-users-title">Новый чат</h3>
@@ -111,10 +120,12 @@
 
           <div id="conversation-empty" class="conversation-empty">
             <div class="empty-mark" aria-hidden="true">Б</div>
-            <p>Выберите чат, чтобы начать общение.</p>
+            <p>Выберите переписку или начните новую.</p>
+            <button id="chat-start-empty" type="button" class="button-with-icon" data-icon="compose">Новый чат</button>
           </div>
 
-          <ol id="message-list" class="message-list" aria-label="Сообщения"></ol>
+          <ol id="message-list" class="message-list" aria-label="Сообщения" aria-live="off"></ol>
+          <button id="jump-to-latest" class="jump-to-latest" type="button" hidden>К последним сообщениям</button>
 
           <form id="message-form" class="composer" hidden>
             <div id="voice-draft-panel" class="voice-draft-panel" hidden>
@@ -130,11 +141,12 @@
 
             <div class="composer-input-wrap">
               <label class="visually-hidden" for="message-input">Сообщение</label>
-              <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
+              <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Написать сообщение" enterkeyhint="send" aria-describedby="message-send-hint"></textarea>
               <span id="voice-recording-status" class="voice-recording-status" aria-live="off" hidden>Запись 0:00</span>
             </div>
             <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
+            <p id="message-send-hint" class="visually-hidden">Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
             <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
           </form>
         </section>
