@@ -432,6 +432,11 @@ async function sendDraftById(id, existingTransport = null) {
       }
     }
 
+    const latestSecurity = getSecureChatState();
+    if (latestSecurity.blocked || (latestSecurity.key && latestSecurity.conversationId === draft.conversationId)) {
+      throw new Error("публикация голосового запрещена при включённой защите текстов");
+    }
+
     const result = await api(
       `/api/v1/chats/${draft.conversationId}/voice/uploads/${upload.sessionId}/complete`,
       {
