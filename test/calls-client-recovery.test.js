@@ -91,6 +91,7 @@ class FakePeerConnection extends EventHub {
     this.closed = false;
     this.statsPackets = 100;
     this.receiver = { track: { kind: "audio" }, jitterBufferTarget: null };
+    this.receivedCandidates = [];
     FakePeerConnection.instances.push(this);
   }
 
@@ -110,7 +111,7 @@ class FakePeerConnection extends EventHub {
   async createAnswer() { return { type: "answer", sdp: "answer" }; }
   async setLocalDescription(description) { this.localDescription = description; }
   async setRemoteDescription(description) { this.remoteDescription = description; }
-  async addIceCandidate() {}
+  async addIceCandidate(candidate) { this.receivedCandidates.push(candidate); }
   getConfiguration() { return this.configuration; }
   setConfiguration(configuration) { this.configuration = configuration; }
   restartIce() { this.restartIceCalls += 1; }
@@ -179,6 +180,8 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
   const signalBodies = [];
   let signalSequence = 0;
   let iceFetches = 0;
+  let releaseFirstIce;
+  const firstIcePending = new Promise(resolve => { releaseFirstIce = resolve; });
   let serverStatus = "ringing";
 
   const call = {
@@ -226,6 +229,7 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
       payload = { call: { ...call } };
     } else if (path === "/api/v1/calls/ice") {
       iceFetches += 1;
+      if (iceFetches === 1) await firstIcePending;
       payload = { iceServers: [{ urls: [`turn:turn-${iceFetches}.test:3478`] }] };
     } else if (path.endsWith("/signals") && options.method === "POST") {
       const body = JSON.parse(options.body);
@@ -303,10 +307,55 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
     data: JSON.stringify({ type: "call.answered", callId: call.callId, answeredAt: Date.now() })
   });
   await flushAsync();
-
+  // Outgoing prewarming and the answer event race while TURN credentials load.
+  // Exactly one RTCPeerConnection is allowed, otherwise a stale offer wins at random.
+  expect(FakePeerConnection.instances).toHaveLength(0);
+  releaseFirstIce();
+  await flushAsync(140);
   expect(FakePeerConnection.instances).toHaveLength(1);
   const first = FakePeerConnection.instances[0];
   expect(signalBodies.filter((signal) => signal.kind === "offer")).toHaveLength(1);
+  const originalOffer = signalBodies.find((signal)=>signal.kind==="offer");
+  expect(originalOffer.payload.negotiationId).toMatch(/^[0-9a-f-]{36}$/);
+  FakeWebSocket.instances[0].emit("message",{data:JSON.stringify({
+    type:"call.signal",callId:call.callId,signal:{callId:call.callId,
+    senderUserId:"beta",sequence:999,kind:"ice",
+    payload:{candidate:"stale-candidate",negotiationId:"old-negotiation"}}
+  })});
+  await flushAsync();
+  expect(first.receivedCandidates).toEqual([]);
+  FakeWebSocket.instances[0].emit("message",{data:JSON.stringify({
+    type:"call.signal",callId:call.callId,signal:{callId:call.callId,
+    senderUserId:"beta",sequence:1000,kind:"answer",
+    payload:{type:"answer",sdp:"stale-sdp",negotiationId:"old-negotiation"}}
+  })});
+  await flushAsync();
+  expect(first.remoteDescription).toBeUndefined();
+  FakeWebSocket.instances[0].emit("message",{data:JSON.stringify({
+    type:"call.signal",callId:call.callId,signal:{callId:call.callId,
+    senderUserId:"beta",sequence:1001,kind:"answer",
+    payload:{type:"answer",sdp:"live-sdp",negotiationId:originalOffer.payload.negotiationId}}
+  })});
+  await flushAsync();
+  expect(first.remoteDescription?.sdp).toBe("live-sdp");
+
+  // Safari may block HTMLMediaElement.play even with WebRTC connected.
+  // The user gesture should start playback without creating another offer.
+  const player = elements.callRemoteAudio;
+  const oldPlay = player.play.bind(player);
+  player.play = vi.fn().mockRejectedValueOnce(Object.assign(new Error("autoplay"),{name:"NotAllowedError"}))
+    .mockResolvedValue(undefined);
+  first.dispatchEvent({type:"track",streams:[stream],track,receiver:first.receiver});
+  await flushAsync();
+  expect(elements.callResumeButton.hidden).toBe(false);
+  expect(elements.callResumeButton.textContent).toBe("Включить звук");
+  elements.callResumeButton.click();
+  await flushAsync();
+  expect(player.play).toHaveBeenCalledTimes(2);
+  expect(elements.callResumeButton.hidden).toBe(true);
+  expect(FakePeerConnection.instances).toHaveLength(1);
+  expect(signalBodies.filter(signal=>signal.kind==="offer")).toHaveLength(1);
+  player.play=oldPlay;
 
   first.emitConnection("connected");
   await flushAsync();
@@ -333,7 +382,7 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
 
   first.emitConnection("failed", "failed");
   await flushAsync();
-  await vi.advanceTimersByTimeAsync(7_100);
+  await vi.advanceTimersByTimeAsync(12_100);
   await flushAsync();
 
   expect(FakePeerConnection.instances.length).toBeGreaterThanOrEqual(2);
@@ -341,7 +390,13 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
   expect(first.closed).toBe(true);
   expect(signalBodies.filter((signal) => signal.kind === "offer").at(-1).payload.recoveryMode).toBe("rebuild");
 
-  second.emitConnection("connected", "connected");
+  // A slow ICE gathering phase must not force people to tap Resume ten times.
+  await vi.advanceTimersByTimeAsync(15_500);
+  await flushAsync();
+  expect(elements.callResumeButton.hidden).toBe(true);
+  expect(signalBodies.filter((signal)=>signal.kind==="offer").length).toBeGreaterThanOrEqual(3);
+  const latestPeer = FakePeerConnection.instances.at(-1);
+  latestPeer.emitConnection("connected", "connected");
   await flushAsync();
   expect(announcements).toContain("Связь восстановлена. Разговор продолжается.");
 
