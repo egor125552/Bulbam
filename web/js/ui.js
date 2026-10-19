@@ -20,6 +20,7 @@ export const elements = {
   sessionsRoot: document.querySelector("#sessions"),
   refreshSessionsButton: document.querySelector("#refresh-sessions"),
   inviteCard: document.querySelector("#invite-card"),
+  inviteSettingsLink: document.querySelector("#invite-settings-link"),
   inviteForm: document.querySelector("#invite-form"),
   newInvite: document.querySelector("#new-invite"),
   newInviteCode: document.querySelector("#new-invite-code"),
@@ -169,6 +170,7 @@ export function showSignedOut() {
   elements.signedOut.hidden = false;
   elements.signedIn.hidden = true;
   elements.inviteCard.hidden = true;
+  if (elements.inviteSettingsLink) elements.inviteSettingsLink.hidden = true;
   elements.sessionsRoot.replaceChildren();
   document.body.classList.remove("conversation-open");
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account: null } }));
@@ -190,7 +192,9 @@ export function showSignedIn(account, session) {
   document.querySelector("#account-username").textContent = `@${account.username}`;
   document.querySelector("#account-id").textContent = account.userId;
   document.querySelector("#account-role").textContent = account.role;
-  elements.inviteCard.hidden = !["owner", "admin"].includes(account.role);
+  const canInvite = ["owner", "admin"].includes(account.role);
+  elements.inviteCard.hidden = !canInvite;
+  if (elements.inviteSettingsLink) elements.inviteSettingsLink.hidden = !canInvite;
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account } }));
 }
 
