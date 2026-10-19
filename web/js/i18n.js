@@ -146,7 +146,7 @@ export function setLanguage(next){
   const manifest=document.querySelector('link[rel="manifest"]');
   if(manifest)manifest.href=next==="be"?"/manifest-be.webmanifest":"/manifest.webmanifest";
   void syncServiceWorkerLocale(next);
-  for(const select of [document.querySelector("#settings-language"),document.querySelector("#welcome-language")]){
+  for(const select of [document.querySelector("#settings-language"),document.querySelector("#welcome-language"),document.querySelector("#auth-language")]){
     if(select)select.value=next;
   }
   translateSubtree(document.body);
@@ -161,7 +161,7 @@ function syncServiceWorkerLocale(locale){
 export function setupI18n(){
   let saved="ru";
   try{saved=localStorage.getItem(KEY)??"ru";}catch{}
-  for(const id of ["settings-language","welcome-language"]){
+  for(const id of ["settings-language","welcome-language","auth-language"]){
     document.querySelector("#"+id)?.addEventListener("change",event=>setLanguage(event.target.value));
   }
   setLanguage(saved);

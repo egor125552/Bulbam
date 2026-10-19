@@ -1,3 +1,4 @@
+import { translateText } from "./i18n.js";
 import { api, deviceName } from "./api.js";
 import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
@@ -6,6 +7,24 @@ import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut } fr
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
 const ACCOUNT_HINT_KEY = "bulbam.account.lastUsername";
+const USERNAME_GUIDANCE = "Имя пользователя: от 3 до 32 латинских букв, цифр или знаков подчёркивания. Например, egor125.";
+
+function validateRegistrationUsername() {
+  const input=elements.registerForm.querySelector('[name="username"]');
+  const error=document.querySelector("#register-username-error");
+  const username=String(input?.value??"").trim().replace(/^@/,"").toLowerCase();
+  if(/^[a-z0-9_]{3,32}$/.test(username)){
+    input?.removeAttribute("aria-invalid");
+    if(error){error.hidden=true;error.textContent="";}
+    return username;
+  }
+  if(input)input.setAttribute("aria-invalid","true");
+  if(error){error.textContent=translateText(USERNAME_GUIDANCE);error.hidden=false;}
+  announce(USERNAME_GUIDANCE);
+  input?.focus();
+  return null;
+}
+
 let visibleRecoveryCodes = [];
 
 function showAuthView(view) {
@@ -65,7 +84,17 @@ export function setupAuth() {
     announce(`Вы вошли как ${account.displayName} с помощью ключа доступа.`);
     await loadSessions({quiet:true});
   });
+  window.addEventListener("bulbam:language-changed",()=>{
+    const error=document.querySelector("#register-username-error");
+    if(error && !error.hidden)error.textContent=translateText(USERNAME_GUIDANCE);
+  });
   elements.registerForm.addEventListener("submit", register);
+  elements.registerForm.querySelector('[name="username"]')?.addEventListener("input",()=>{
+    const input=elements.registerForm.querySelector('[name="username"]');
+    input.removeAttribute("aria-invalid");
+    const error=document.querySelector("#register-username-error");
+    if(error){error.hidden=true;error.textContent="";}
+  });
   elements.loginForm.addEventListener("submit", login);
   elements.logoutButton.addEventListener("click", logout);
   document.querySelector("#auth-retry")?.addEventListener("click", () => void loadCurrentAccount());
@@ -144,6 +173,8 @@ export async function loadCurrentAccount({ quiet = false } = {}) {
 
 async function register(event) {
   event.preventDefault();
+  const username=validateRegistrationUsername();
+  if(username===null)return;
   const button = elements.registerForm.querySelector("button[type=submit]");
   button.disabled = true;
   const data = new FormData(elements.registerForm);
@@ -153,7 +184,7 @@ async function register(event) {
     const result = await api("/api/v1/auth/register", {
       method: "POST",
       body: JSON.stringify({
-        username: data.get("username"),
+        username,
         displayName: data.get("displayName"),
         password: data.get("password"),
         inviteCode: data.get("inviteCode"),

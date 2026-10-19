@@ -13,7 +13,7 @@ export function normalizeUsername(raw: string): string {
   if (!/^[a-z0-9_]{3,32}$/.test(username)) {
     badRequest(
       "invalid_username",
-      "Username должен содержать 3–32 латинских символа, цифры или подчёркивание."
+      "Имя пользователя: от 3 до 32 латинских букв, цифр или знаков подчёркивания. Например, egor125."
     );
   }
   return username;
