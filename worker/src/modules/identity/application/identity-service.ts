@@ -8,7 +8,7 @@ import {
 } from "../../../core/crypto";
 import { ApiError, conflict, forbidden, unauthorized } from "../../../core/errors";
 import type { AuthenticatedSession, PublicAccount, Session } from "../domain/models";
-import { validateUserSearchQuery } from "../domain/validation";
+import { validateDisplayName, validateUserSearchQuery } from "../domain/validation";
 import type { IdentityRepository } from "../ports/identity-repository";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -122,6 +122,13 @@ export class IdentityService {
       console.error("[IdentityService] post-recovery backup codes failed", error);
     }
     return { account, ...issued, recoveryCodes };
+  }
+
+  async updateDisplayName(authenticated: AuthenticatedSession, requestedName: string) {
+    const displayName=validateDisplayName(requestedName);
+    const changed=await this.repository.updateDisplayName(authenticated.account.userId,displayName);
+    if(!changed)throw new ApiError(404,"account_not_found","Аккаунт не найден.");
+    return {...authenticated.account,displayName};
   }
 
   async changePasswordFromSession(

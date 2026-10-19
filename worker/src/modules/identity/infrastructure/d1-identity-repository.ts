@@ -35,6 +35,14 @@ export class D1IdentityRepository implements IdentityRepository {
     return row ? mapAccountCredentials(row) : null;
   }
 
+  async updateDisplayName(userId: string, displayName: string): Promise<boolean> {
+    await this.initialize();
+    const result=await this.db.prepare(
+      "UPDATE accounts SET display_name=?, display_name_search=? WHERE user_id=? AND disabled_at IS NULL"
+    ).bind(displayName,normalizeDisplayNameForSearch(displayName),userId).run();
+    return (result.meta?.changes??0)===1;
+  }
+
   async findPublicAccountById(userId: string): Promise<PublicAccount | null> {
     await this.initialize();
     const row = await this.db

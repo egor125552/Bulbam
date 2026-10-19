@@ -174,6 +174,13 @@ export function showSignedOut() {
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account: null } }));
 }
 
+export function updateAccountProfile(account){
+  if(!currentAccount || currentAccount.userId!==account?.userId)return;
+  currentAccount={...currentAccount,displayName:account.displayName};
+  document.querySelector("#account-display-name").textContent=account.displayName;
+  window.dispatchEvent(new CustomEvent("bulbam:profile-updated",{detail:{account:currentAccount}}));
+}
+
 export function showSignedIn(account, session) {
   currentAccount = account;
   currentSession = session;

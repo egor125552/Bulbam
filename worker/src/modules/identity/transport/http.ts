@@ -155,6 +155,16 @@ export async function handleIdentityHttp(
     return json({ ok: true, note: "Другие устройства отключены. Создайте новые резервные коды." });
   }
 
+  if (url.pathname === "/api/v1/auth/profile") {
+    if(request.method!=="PATCH")return methodNotAllowed(["PATCH"]);
+    const authenticated=await service.authenticate(sessionToken(request));
+    const body=await readJsonObject(request);
+    if(typeof body.displayName!=="string")
+      throw new ApiError(400,"invalid_display_name","Введите отображаемое имя.");
+    const account=await service.updateDisplayName(authenticated,body.displayName);
+    return json({ok:true,account});
+  }
+
   if (url.pathname === "/api/v1/auth/me") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const authenticated = await service.authenticate(sessionToken(request));
