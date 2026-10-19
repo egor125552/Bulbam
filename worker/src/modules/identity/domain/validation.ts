@@ -9,11 +9,13 @@ function requiredString(body: Record<string, unknown>, key: string): string {
 }
 
 export function normalizeUsername(raw: string): string {
-  const username = raw.trim().replace(/^@/, "").toLowerCase();
-  if (!/^[a-z0-9_]{3,32}$/.test(username)) {
+  const username = raw.normalize("NFKC").trim().replace(/^@/, "").toLowerCase();
+  // Latin and Cyrillic letters (including беларускія і/ў), numbers and "_".
+  // Other scripts, whitespace, zero-width characters and punctuation are rejected.
+  if (!/^[a-z0-9_\p{Script=Cyrillic}]{3,32}$/u.test(username)) {
     badRequest(
       "invalid_username",
-      "Имя пользователя: от 3 до 32 латинских букв, цифр или знаков подчёркивания. Например, egor125."
+       "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, егор125."
     );
   }
   return username;
@@ -65,7 +67,9 @@ export function validateInviteCode(raw: string): string {
 export function registrationInput(body: Record<string, unknown>) {
   return {
     username: normalizeUsername(requiredString(body, "username")),
-    displayName: validateDisplayName(requiredString(body, "displayName")),
+    // Old clients may supply a display name; new clients can skip this step.
+    displayName: validateDisplayName(typeof body.displayName === "string" && body.displayName.trim()
+      ? body.displayName : normalizeUsername(requiredString(body, "username"))),
     password: validatePassword(requiredString(body, "password")),
     inviteCode: validateInviteCode(requiredString(body, "inviteCode")),
     deviceName: validateDeviceName(typeof body.deviceName === "string" ? body.deviceName : undefined)

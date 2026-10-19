@@ -3,17 +3,21 @@ import { api, deviceName } from "./api.js";
 import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
 import { setupPasskeys, startPasskeyAutofill, cancelPasskeyAutofill } from "./passkeys.js";
-import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut } from "./ui.js";
+import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut, updateAccountProfile } from "./ui.js";
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
 const ACCOUNT_HINT_KEY = "bulbam.account.lastUsername";
-const USERNAME_GUIDANCE = "Имя пользователя: от 3 до 32 латинских букв, цифр или знаков подчёркивания. Например, egor125.";
+const USERNAME_GUIDANCE = "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, егор125.";
+const USERNAME_PATTERN=/^[a-z0-9_\p{Script=Cyrillic}]{3,32}$/u;
+function canonicalUsername(raw){
+  return String(raw??"").normalize("NFKC").trim().replace(/^@/,"").toLowerCase();
+}
 
 function validateRegistrationUsername() {
   const input=elements.registerForm.querySelector('[name="username"]');
   const error=document.querySelector("#register-username-error");
-  const username=String(input?.value??"").trim().replace(/^@/,"").toLowerCase();
-  if(/^[a-z0-9_]{3,32}$/.test(username)){
+  const username=canonicalUsername(input?.value);
+  if(USERNAME_PATTERN.test(username)){
     input?.removeAttribute("aria-invalid");
     if(error){error.hidden=true;error.textContent="";}
     return username;
@@ -46,7 +50,7 @@ function rememberUsername(account) {
 function knownUsername() {
   try {
     const value = localStorage.getItem(ACCOUNT_HINT_KEY) ?? "";
-    return /^[a-z0-9_]{3,32}$/.test(value) ? value : null;
+    return USERNAME_PATTERN.test(value) ? value : null;
   } catch { return null; }
 }
 
@@ -89,6 +93,7 @@ export function setupAuth() {
     if(error && !error.hidden)error.textContent=translateText(USERNAME_GUIDANCE);
   });
   elements.registerForm.addEventListener("submit", register);
+  setupDisplayNameForms();
   elements.registerForm.querySelector('[name="username"]')?.addEventListener("input",()=>{
     const input=elements.registerForm.querySelector('[name="username"]');
     input.removeAttribute("aria-invalid");
@@ -171,6 +176,69 @@ export async function loadCurrentAccount({ quiet = false } = {}) {
   }
 }
 
+function showOptionalNameSetup(){
+  const dialog=document.querySelector("#profile-first-setup-dialog");
+  if(!dialog || !getCurrentAccount() || dialog.open)return;
+  const blocker=[...document.querySelectorAll("dialog[open]")].find(other=>other!==dialog);
+  if(blocker){
+    blocker.addEventListener("close",()=>queueMicrotask(showOptionalNameSetup),{once:true});
+    return;
+  }
+  dialog.showModal();
+  document.querySelector("#profile-first-setup-title")?.focus();
+}
+
+function scheduleOptionalNameSetup(recoveryCodes){
+  if(Array.isArray(recoveryCodes) && recoveryCodes.length){
+    const dialog=document.querySelector("#recovery-codes-dialog");
+    if(dialog){
+      dialog.addEventListener("close",()=>queueMicrotask(showOptionalNameSetup),{once:true});
+      return;
+    }
+  }
+  queueMicrotask(showOptionalNameSetup);
+}
+
+async function saveDisplayName(event){
+  event.preventDefault();
+  const form=event.currentTarget;
+  const button=form.querySelector("button[type=submit]");
+  const first=form.id==="profile-first-setup-form";
+  const status=document.querySelector(first?"#profile-first-setup-status":"#profile-settings-status");
+  const name=String(new FormData(form).get("displayName")??"").trim();
+  if(!name && first){
+    document.querySelector("#profile-first-setup-dialog")?.close();
+    return;
+  }
+  button.disabled=true;
+  try{
+    const result=await api("/api/v1/auth/profile",{
+      method:"PATCH",body:JSON.stringify({displayName:name})
+    });
+    updateAccountProfile(result.account);
+    const settingsInput=document.querySelector("#profile-settings-display-name");
+    if(settingsInput)settingsInput.value=result.account.displayName;
+    if(status)status.textContent="Отображаемое имя сохранено.";
+    announce("Отображаемое имя сохранено.");
+    if(first)document.querySelector("#profile-first-setup-dialog")?.close();
+  }catch(error){
+    if(status)status.textContent="Не удалось сохранить имя: "+error.message;
+    announce("Не удалось сохранить имя: "+error.message);
+  }finally{button.disabled=false;}
+}
+function setupDisplayNameForms(){
+  for(const id of ["profile-first-setup-form","profile-settings-form"])
+    document.querySelector("#"+id)?.addEventListener("submit",saveDisplayName);
+  document.querySelector("#profile-first-setup-skip")?.addEventListener("click",()=>{
+    document.querySelector("#profile-first-setup-dialog")?.close();
+    announce("Вы можете выбрать отображаемое имя позже в настройках.");
+  });
+  window.addEventListener("bulbam:account-changed",event=>{
+    const input=document.querySelector("#profile-settings-display-name");
+    if(input)input.value=event.detail?.account?.displayName??"";
+  });
+}
+
 async function register(event) {
   event.preventDefault();
   const username=validateRegistrationUsername();
@@ -185,7 +253,6 @@ async function register(event) {
       method: "POST",
       body: JSON.stringify({
         username,
-        displayName: data.get("displayName"),
         password: data.get("password"),
         inviteCode: data.get("inviteCode"),
         deviceName: deviceName()
@@ -196,6 +263,7 @@ async function register(event) {
     showSignedIn(result.account, result.session);
     rememberUsername(result.account);
     announce(`Аккаунт ${result.account.displayName} создан. Вы уже вошли в Бульбам.`);
+    scheduleOptionalNameSetup(result.recoveryCodes);
     showRecoveryCodes(result.recoveryCodes);
     await loadSessions({ quiet: true });
   } catch (error) {
