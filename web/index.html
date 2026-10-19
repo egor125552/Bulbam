@@ -32,6 +32,13 @@
     </section>
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
       <h2 id="account-start-title" class="visually-hidden">Вход в Бульбам</h2>
+      <div class="card auth-card">
+        <label for="auth-language">Язык интерфейса</label>
+        <select id="auth-language">
+          <option value="ru">Русский</option>
+          <option value="be">Беларуская</option>
+        </select>
+      </div>
 
       <div id="auth-connection-problem" class="card auth-card" hidden>
         <h3>Не получилось проверить вход</h3>
@@ -67,8 +74,10 @@
         <form id="register-form" class="form-stack">
           <label>
             Имя пользователя
-            <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="egor">
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="egor125" aria-describedby="register-username-help register-username-error">
           </label>
+          <p id="register-username-help" class="hint">Имя пользователя: от 3 до 32 латинских букв, цифр или знаков подчёркивания. Например, egor125.</p>
+          <p id="register-username-error" role="alert" aria-live="assertive" hidden></p>
           <label>
             Отображаемое имя
             <input name="displayName" autocomplete="name" required maxlength="64" placeholder="Егор">
