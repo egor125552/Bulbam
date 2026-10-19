@@ -1,3 +1,4 @@
+import { recordingStartAnnouncement } from "./accessibility-options.js";
 import { api } from "./api.js";
 import { announce, getCurrentAccount } from "./ui.js";
 import {
@@ -258,9 +259,7 @@ async function startRecording(trigger) {
     // Поэтому после Stop короткому голосовому остаётся передать только сами байты.
     void prewarmUpload(state);
     setRecordingUi(true, draft.startedAt);
-    announce(trigger === "option"
-      ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
-      : "Запись голосового началась. Нажми кнопку ещё раз, чтобы отправить.");
+    announce(recordingStartAnnouncement(trigger));
   } finally {
     if (stream) stream.getTracks().forEach((track) => track.stop());
     if (localId) await deleteVoiceDraft(localId).catch(() => undefined);

@@ -964,3 +964,34 @@ html[data-message-view="compact"] .message p {
     padding: 0.8rem;
   }
 }
+
+
+/* Settings are discrete screens, not an endless scroll of cards. */
+.settings-dialog {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  border: 0;
+}
+.settings-category-list { display: grid; align-content: start; gap: .7rem; padding: 1rem; }
+.settings-category-list h3 { margin: 0 0 .4rem; }
+.settings-category-button { padding: .85rem 1rem; text-align: left; min-height: 2.8rem; }
+.settings-screens { padding: 1rem; }
+.settings-screen { display: grid; gap: 1rem; align-content: start; max-width: 42rem; margin: auto; }
+.settings-screen > .card { width: 100%; }
+.settings-screen > h3 { margin-top: 0; }
+#settings-back { margin-top: .35rem; }
+.settings-category-list[hidden], .settings-screens[hidden],
+.settings-screen[hidden], #settings-back[hidden], .settings-category-button[hidden] {
+  display: none !important;
+}
+
+
+/* Compact guidance applies across the product. Never hide live errors. */
+html[data-detailed-help="off"] .hint:not([role="status"]):not([role="alert"]):not([data-essential-hint]) { display: none !important; }
+.settings-simple-options { display: grid; gap: .4rem; margin: .35rem 0 .8rem; }
+.settings-simple-options button { text-align: left; min-height: 2.75rem; }
+.settings-simple-options button[aria-pressed="true"] { border: 2px solid var(--brand-strong); font-weight: 700; }
+.settings-simple-options[hidden], select[hidden] { display: none !important; }

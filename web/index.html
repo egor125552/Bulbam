@@ -63,7 +63,7 @@
 
       <div id="auth-view-register" class="card auth-card" hidden>
         <h3 id="auth-register-heading" tabindex="-1">Регистрация в Бульбаме</h3>
-        <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
+        <p class="hint" data-essential-hint>Для регистрации нужен одноразовый код приглашения.</p>
         <form id="register-form" class="form-stack">
           <label>
             Имя пользователя
@@ -288,6 +288,19 @@
         </div>
 
         <div class="settings-grid">
+          <section class="card" aria-labelledby="accessibility-settings-title">
+            <h3 id="accessibility-settings-title">Специальные возможности</h3>
+            <label class="switch-row">
+              <input id="settings-detailed-help" type="checkbox" checked>
+              Подробные подсказки во всём Бульбаме
+            </label>
+            <p class="hint">Если выключить, Бульбам скроет длинные пояснения и сократит повторяющиеся голосовые подсказки. Важные сообщения об ошибках и безопасности останутся.</p>
+            <label class="switch-row">
+              <input id="settings-simple-controls" type="checkbox">
+              Простые кнопки без раскрывающихся списков
+            </label>
+            <p class="hint">Выбор настроек будет выполняться обычными кнопками, которые доступны двойным касанием VoiceOver.</p>
+          </section>
           <section class="card" aria-labelledby="appearance-title">
             <h3 id="appearance-title">Интерфейс</h3>
             <label for="settings-language">Язык интерфейса</label>
@@ -324,9 +337,9 @@
               </label>
               <button type="submit">Сменить пароль</button>
             </form>
-            <p class="hint">После смены пароля другие устройства выйдут из аккаунта. Старые резервные коды перестанут работать.</p>
+            <p class="hint" data-essential-hint>После смены пароля другие устройства выйдут из аккаунта. Старые резервные коды перестанут работать.</p>
             <button id="new-recovery-codes" type="button">Создать новые резервные коды</button>
-            <p class="hint">Новый набор заменит предыдущие коды.</p>
+            <p class="hint" data-essential-hint>Новый набор заменит предыдущие коды.</p>
           </section>
 
           <section id="admin-recovery-queue" class="card" aria-labelledby="admin-recovery-queue-title" hidden>
