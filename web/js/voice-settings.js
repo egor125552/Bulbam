@@ -3,7 +3,8 @@ import { announce } from "./ui.js";
 
 const BITRATE_KEY = "bulbam.voice.bitrate";
 const SHARE_KEY_PREFIX = "bulbam.voice.shareListening.";
-const ALLOWED_BITRATES = new Set([24000, 32000, 48000, 64000, 96000]);
+const BITRATES = [24000, 32000, 48000, 64000, 96000];
+const ALLOWED_BITRATES = new Set(BITRATES);
 
 let bitrateBps = readBitrate();
 let shareListening = true;
@@ -18,13 +19,18 @@ export function setupVoiceSettings() {
   if (bitrateSelect) {
     bitrateSelect.value = String(bitrateBps);
     bitrateSelect.addEventListener("change", () => {
-      const next = Number(bitrateSelect.value);
-      if (!ALLOWED_BITRATES.has(next)) return;
-      bitrateBps = next;
-      localStorage.setItem(BITRATE_KEY, String(next));
-      announce(`Качество голосовых: ${bitrateSelect.selectedOptions[0].textContent.trim()}.`);
+      applyBitrate(Number(bitrateSelect.value));
     });
   }
+  const quickQuality = document.querySelector("#voice-quality-cycle");
+  quickQuality?.addEventListener("click", () => {
+    const index = BITRATES.indexOf(bitrateBps);
+    applyBitrate(BITRATES[(index + 1) % BITRATES.length]);
+  });
+  window.addEventListener("bulbam:voice-recording-changed", event => {
+    if (quickQuality) quickQuality.disabled = Boolean(event.detail?.recording);
+  });
+  renderQuickQuality();
   if (shareCheckbox) {
     shareCheckbox.checked = true;
     shareCheckbox.disabled = true;
@@ -53,6 +59,24 @@ export function setupVoiceSettings() {
     }
     void loadShareSetting(currentAccountId, generation);
   });
+}
+
+function applyBitrate(next) {
+  if (!ALLOWED_BITRATES.has(next)) return;
+  bitrateBps = next;
+  if (bitrateSelect) bitrateSelect.value = String(next);
+  localStorage.setItem(BITRATE_KEY, String(next));
+  renderQuickQuality();
+  const label = bitrateSelect?.selectedOptions?.[0]?.textContent.trim() ?? String(next);
+  announce(`Качество голосовых: ${label}.`);
+}
+function renderQuickQuality() {
+  const button=document.querySelector("#voice-quality-cycle");
+  if (!button) return;
+  const option=bitrateSelect?.querySelector(`option[value="${bitrateBps}"]`);
+  const label=option?.textContent.trim() ?? String(bitrateBps);
+  button.textContent=`Качество записи: ${label}`;
+  button.setAttribute("aria-label",`Качество записи: ${label}. Нажмите, чтобы переключить.`);
 }
 
 export function getVoiceBitrate() {

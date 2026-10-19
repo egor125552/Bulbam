@@ -10,6 +10,7 @@ import {
 } from "./audio-profile-core.js";
 
 const STORAGE_KEY = "bulbam.callAudioProfile";
+const PROFILE_IDS=["normal","clean","studio","music"];
 let selectedProfileId = readStoredProfile();
 
 export function setupAudioProfiles() {
@@ -19,9 +20,16 @@ export function setupAudioProfiles() {
   renderProfileDescription();
   renderIdleStatus();
 
+  document.querySelector("#call-audio-cycle")?.addEventListener("click", () => {
+    const current = PROFILE_IDS.indexOf(selectedProfileId);
+    elements.audioProfileSelect.value = PROFILE_IDS[(current + 1) % PROFILE_IDS.length];
+    elements.audioProfileSelect.dispatchEvent(new Event("change", { bubbles:true }));
+  });
+  updateQuickCallMode();
   elements.audioProfileSelect.addEventListener("change", () => {
     selectedProfileId = normalizeAudioProfile(elements.audioProfileSelect.value);
     localStorage.setItem(STORAGE_KEY, selectedProfileId);
+    updateQuickCallMode();
     renderProfileDescription();
     renderIdleStatus();
     const profile = getAudioProfile(selectedProfileId);
@@ -34,6 +42,14 @@ export function setupAudioProfiles() {
   elements.audioProfileTestButton?.addEventListener("click", () => {
     void testMicrophoneProfile();
   });
+}
+
+function updateQuickCallMode() {
+  const button=document.querySelector("#call-audio-cycle");
+  if (!button) return;
+  const profile=getSelectedAudioProfile();
+  button.textContent=`Микрофон: ${profile.label}`;
+  button.setAttribute("aria-label",`Режим микрофона: ${profile.label}. Нажмите, чтобы переключить.`);
 }
 
 export function getSelectedAudioProfile() {
