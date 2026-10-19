@@ -33,6 +33,14 @@ export async function handleMessagingHttp(
     return json({ ok: true, ...result });
   }
 
+  const readMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/receipts\/read$/i);
+  if (readMatch) {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const actor = await authenticate(request);
+    const result = await service.markRead(actor, readMatch[1], await readJsonObject(request));
+    return json({ ok: true, ...result });
+  }
+
   const messagesMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages$/i);
   if (messagesMatch) {
     const actor = await authenticate(request);

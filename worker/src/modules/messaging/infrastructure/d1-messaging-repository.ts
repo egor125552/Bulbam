@@ -25,6 +25,13 @@ const MESSAGE_COLUMNS = `
     ORDER BY r.delivered_at DESC
     LIMIT 1
   ) AS delivered_at,
+  (
+    SELECT r.read_at
+    FROM message_receipts r
+    WHERE r.message_id = m.message_id
+    ORDER BY r.read_at DESC
+    LIMIT 1
+  ) AS read_at,
   v.object_key,
   v.duration_ms,
   v.mime_type,
@@ -248,6 +255,56 @@ export class D1MessagingRepository implements MessagingRepository {
     }));
   }
 
+  async markMessagesRead(
+    conversationId: string,
+    recipientUserId: string,
+    messageIds: string[],
+    now: number
+  ): Promise<DeliveryReceiptUpdate[]> {
+    await this.initialize();
+    if (!messageIds.length) return [];
+
+    const placeholders = messageIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(`
+        SELECT ${MESSAGE_COLUMNS}
+        FROM messages m
+        ${MESSAGE_JOINS}
+        WHERE m.conversation_id = ?
+          AND m.message_id IN (${placeholders})
+          AND m.sender_user_id <> ?
+      `)
+      .bind(conversationId, ...messageIds, recipientUserId)
+      .all<Row>();
+
+    const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
+    const pending = messages.filter((message) => message.readAt === null);
+    if (pending.length) {
+      await this.db.batch(
+        pending.map((message) =>
+          this.db
+            .prepare(`
+              INSERT INTO message_receipts (message_id, recipient_user_id, delivered_at, read_at)
+              VALUES (?, ?, ?, ?)
+              ON CONFLICT(message_id, recipient_user_id) DO UPDATE SET
+                delivered_at = COALESCE(message_receipts.delivered_at, excluded.delivered_at),
+                read_at = COALESCE(message_receipts.read_at, excluded.read_at)
+            `)
+            .bind(message.messageId, recipientUserId, message.deliveredAt ?? now, now)
+        )
+      );
+    }
+
+    return messages.map((message) => ({
+      changed: message.readAt === null,
+      message: {
+        ...message,
+        deliveredAt: message.deliveredAt ?? now,
+        readAt: message.readAt ?? now
+      }
+    }));
+  }
+
   async findLatestMessage(conversationId: string): Promise<StoredMessage | null> {
     await this.initialize();
     const row = await this.db
@@ -453,7 +510,8 @@ function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
         }
       : null,
     createdAt: Number(row.created_at),
-    deliveredAt: row.delivered_at == null ? null : Number(row.delivered_at)
+    deliveredAt: row.delivered_at == null ? null : Number(row.delivered_at),
+    readAt: row.read_at == null ? null : Number(row.read_at)
   };
 }
 

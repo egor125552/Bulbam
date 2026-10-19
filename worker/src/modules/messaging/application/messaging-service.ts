@@ -75,7 +75,8 @@ export class MessagingService {
       text: input.text,
       voice: null,
       createdAt: Date.now(),
-      deliveredAt: null
+      deliveredAt: null,
+      readAt: null
     };
     return this.persistAndPublish(actor, conversation, message);
   }
@@ -96,7 +97,8 @@ export class MessagingService {
       text: "Голосовое сообщение",
       voice: { ...prepared.voice, progress: null },
       createdAt: Date.now(),
-      deliveredAt: null
+      deliveredAt: null,
+      readAt: null
     };
     return this.persistAndPublish(actor, conversation, message);
   }
@@ -147,6 +149,50 @@ export class MessagingService {
       receipts: updates.map(({ message }) => ({
         messageId: message.messageId,
         deliveredAt: message.deliveredAt
+      }))
+    };
+  }
+
+  async markRead(
+    actor: MessagingActor,
+    rawConversationId: string,
+    body: Record<string, unknown>
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    await this.requireConversation(conversationId, actor.userId);
+    const messageIds = validateDeliveryReceiptInput(body);
+    const updates = await this.repository.markMessagesRead(
+      conversationId, actor.userId, messageIds, Date.now()
+    );
+
+    if (updates.length !== messageIds.length) {
+      badRequest("invalid_read_receipt", "Прочтение можно подтвердить только для полученных сообщений этого диалога.");
+    }
+
+    const changedBySender = new Map<string, typeof updates>();
+    for (const update of updates) {
+      if (!update.changed) continue;
+      const list = changedBySender.get(update.message.senderUserId) ?? [];
+      list.push(update);
+      changedBySender.set(update.message.senderUserId, list);
+    }
+    for (const [senderUserId, changed] of changedBySender) {
+      await this.realtime.publishToUsers([senderUserId], {
+        type: "messages.read",
+        conversationId,
+        receipts: changed.map(({ message }) => ({
+          messageId: message.messageId,
+          clientMessageId: message.clientMessageId,
+          deliveredAt: message.deliveredAt,
+          readAt: message.readAt
+        }))
+      });
+    }
+    return {
+      receipts: updates.map(({ message }) => ({
+        messageId: message.messageId,
+        deliveredAt: message.deliveredAt,
+        readAt: message.readAt
       }))
     };
   }

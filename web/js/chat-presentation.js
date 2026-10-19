@@ -52,12 +52,21 @@ export function chatPreview(lastMessage, ownUserId) {
   return prefix + (text.length > 80 ? `${text.slice(0, 77)}…` : text);
 }
 
+
+export function messageDeliveryState(message, ownUserId) {
+  if (!message || message.senderUserId !== ownUserId) return "";
+  if (message.readAt) return translateText("прочитано");
+  if (message.deliveredAt) return translateText("доставлено");
+  return translateText("отправлено");
+}
+
 export function chatAccessibleLabel(chat, ownUserId, now = new Date()) {
   const name = chat.peer?.displayName || translateText("Собеседник");
   const username = chat.peer?.username ? `@${chat.peer.username}` : "";
   const preview = chatPreview(chat.lastMessage, ownUserId);
   const time = chatTimeLabel(chat.lastMessage?.createdAt ?? chat.lastMessageAt, now);
-  return [name, username, preview, time, translateText("Открыть чат")].filter(Boolean).join(". ");
+  const state = messageDeliveryState(chat.lastMessage, ownUserId);
+  return [name, username, preview, state, time, translateText("Открыть чат")].filter(Boolean).join(". ");
 }
 
 export function isNearBottom(element, tolerance = 90) {

@@ -1,6 +1,6 @@
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
-import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
+import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -234,7 +234,8 @@ function renderChats() {
     const preview = document.createElement("span");
     preview.className = "chat-preview";
     preview.dataset.userContent = "true";
-    preview.textContent = chatPreview(chat.lastMessage, account.userId);
+    const deliveryState = messageDeliveryState(chat.lastMessage, account.userId);
+    preview.textContent = [chatPreview(chat.lastMessage, account.userId), deliveryState].filter(Boolean).join(" · ");
 
     const time = document.createElement("time");
     time.className = "chat-time";
@@ -403,7 +404,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
       : message.localState === "failed"
         ? "не отправлено"
         : mine
-          ? message.deliveredAt ? "доставлено" : "отправлено"
+          ? message.readAt ? "прочитано" : message.deliveredAt ? "доставлено" : "отправлено"
           : "";
     if (state) {
       const stateLabel = document.createElement("span");
@@ -502,7 +503,8 @@ function upsertServerMessage(message) {
   const merged = {
     ...(existing ?? {}),
     ...message,
-    deliveredAt: message.deliveredAt ?? existing?.deliveredAt ?? null
+    deliveredAt: message.deliveredAt ?? existing?.deliveredAt ?? null,
+    readAt: message.readAt ?? existing?.readAt ?? null
   };
   delete merged.localState;
   messages = messages.filter(
@@ -516,25 +518,20 @@ async function acknowledgeIncomingMessages(conversationId, candidates) {
   if (!account) return;
   const accountId = account.userId;
   const currentGeneration = generation;
-  const messageIds = [...new Set(
-    candidates
-      .filter((message) => message.senderUserId !== accountId && !message.deliveredAt)
-      .map((message) => message.messageId)
-  )];
-  if (!messageIds.length) return;
-
+  const incoming = candidates.filter((message) => message.senderUserId !== accountId);
+  const isOpenAndVisible = selectedChat?.conversationId === conversationId && document.visibilityState === "visible";
+  const readIds = isOpenAndVisible ? [...new Set(incoming.filter((message) => !message.readAt).map((message) => message.messageId))] : [];
+  const deliveredIds = [...new Set(incoming.filter((message) => !message.deliveredAt && !readIds.includes(message.messageId)).map((message) => message.messageId))];
   try {
-    await api(`/api/v1/chats/${conversationId}/receipts/delivered`, {
-      method: "POST",
-      body: JSON.stringify({ messageIds })
-    });
+    if (deliveredIds.length) {
+      await api(`/api/v1/chats/${conversationId}/receipts/delivered`, { method: "POST", body: JSON.stringify({ messageIds: deliveredIds }) });
+    }
+    if (readIds.length) {
+      await api(`/api/v1/chats/${conversationId}/receipts/read`, { method: "POST", body: JSON.stringify({ messageIds: readIds }) });
+    }
   } catch {
     if (generation !== currentGeneration || account?.userId !== accountId) return;
-    setTimeout(() => {
-      if (generation === currentGeneration && account?.userId === accountId) {
-        void acknowledgeIncomingMessages(conversationId, candidates);
-      }
-    }, 2000);
+    setTimeout(() => { if (generation === currentGeneration && account?.userId === accountId) void acknowledgeIncomingMessages(conversationId, candidates); }, 2000);
   }
 }
 
@@ -562,7 +559,7 @@ function connectRealtime() {
     }
     if (payload?.type === "message.created" && payload.message) {
       handleRealtimeMessage(payload);
-    } else if (payload?.type === "messages.delivered" && Array.isArray(payload.receipts)) {
+    } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {
       handleDeliveredReceipts(payload);
     } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {
       handleVoiceProgress(payload);
@@ -605,10 +602,9 @@ function handleDeliveredReceipts(payload) {
       );
       if (!message) continue;
       const nextDeliveredAt = receipt.deliveredAt ?? message.deliveredAt;
-      if (nextDeliveredAt && nextDeliveredAt !== message.deliveredAt) {
-        message.deliveredAt = nextDeliveredAt;
-        changed = true;
-      }
+      const nextReadAt = receipt.readAt ?? message.readAt;
+      if (nextDeliveredAt && nextDeliveredAt !== message.deliveredAt) { message.deliveredAt = nextDeliveredAt; changed = true; }
+      if (nextReadAt && nextReadAt !== message.readAt) { message.readAt = nextReadAt; changed = true; }
     }
     if (changed) renderMessages({ preserveVoicePlayback: true });
   }
@@ -620,6 +616,8 @@ function handleDeliveredReceipts(payload) {
         candidate.clientMessageId === chat.lastMessage.clientMessageId
     );
     if (receipt?.deliveredAt) chat.lastMessage.deliveredAt = receipt.deliveredAt;
+    if (receipt?.readAt) chat.lastMessage.readAt = receipt.readAt;
+    if (receipt) renderChats();
   }
 }
 

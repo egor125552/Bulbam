@@ -33,6 +33,7 @@ export interface StoredMessage {
   voice: VoiceAttachment | null;
   createdAt: number;
   deliveredAt: number | null;
+  readAt: number | null;
 }
 
 export interface DeliveryReceiptUpdate {

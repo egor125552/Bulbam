@@ -3,6 +3,7 @@ import {
   chatPreview,
   chatAccessibleLabel,
   chatTimeLabel,
+  messageDeliveryState,
   dayLabel,
   dayKey,
   isNearBottom,
@@ -22,14 +23,17 @@ describe("human-readable chat previews", () => {
     expect(chatPreview(null, "me")).toBe("Начните переписку");
     expect(chatPreview({ kind: "text", senderUserId: "other", text: "а".repeat(160) }, "me").length).toBeLessThan(85);
   });
-  test("builds a meaningful button name and does not invent read receipts", () => {
-    const chat = {
-      peer: { displayName: "Ева", username: "eva" },
-      lastMessage: { kind: "voice", senderUserId: "other", createdAt: now.getTime() }
-    };
-    expect(chatAccessibleLabel(chat, "me", now)).toContain("Ева");
-    expect(chatAccessibleLabel(chat, "me", now)).toContain("Голосовое сообщение");
-    expect(chatAccessibleLabel(chat, "me", now)).not.toContain("прочитано");
+  test("shows sent, delivered and read state for the last outgoing message", () => {
+    const base = { peer: { displayName: "Ева", username: "eva" }, lastMessage: { kind: "voice", senderUserId: "me", createdAt: now.getTime(), deliveredAt: null, readAt: null } };
+    expect(messageDeliveryState(base.lastMessage, "me")).toBe("отправлено");
+    expect(chatAccessibleLabel(base, "me", now)).toContain("отправлено");
+    const delivered = { ...base, lastMessage: { ...base.lastMessage, deliveredAt: now.getTime() } };
+    expect(messageDeliveryState(delivered.lastMessage, "me")).toBe("доставлено");
+    expect(chatAccessibleLabel(delivered, "me", now)).toContain("доставлено");
+    const read = { ...delivered, lastMessage: { ...delivered.lastMessage, readAt: now.getTime() } };
+    expect(messageDeliveryState(read.lastMessage, "me")).toBe("прочитано");
+    expect(chatAccessibleLabel(read, "me", now)).toContain("прочитано");
+    expect(messageDeliveryState({ ...read.lastMessage, senderUserId: "other" }, "me")).toBe("");
   });
 });
 

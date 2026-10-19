@@ -23,6 +23,12 @@ export interface MessagingRepository {
     messageIds: string[],
     now: number
   ): Promise<DeliveryReceiptUpdate[]>;
+  markMessagesRead(
+    conversationId: string,
+    recipientUserId: string,
+    messageIds: string[],
+    now: number
+  ): Promise<DeliveryReceiptUpdate[]>;
   findLatestMessage(conversationId: string): Promise<StoredMessage | null>;
   findMessageForUser(conversationId: string, messageId: string, userId: string): Promise<StoredMessage | null>;
   updateVoiceListening(
