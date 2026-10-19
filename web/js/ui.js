@@ -119,7 +119,7 @@ export function setupInterface() {
         button.classList.add("icon-button");
         button.dataset.icon = "forward";
         button.setAttribute("aria-label", text);
-      } else if (/скорость$/i.test(text)) {
+      } else if ((/скорость$/i.test(text) || /хуткасць/i.test(text))) {
         button.classList.add("button-with-icon");
         button.dataset.icon = "speed";
       }

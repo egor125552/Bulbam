@@ -1,7 +1,8 @@
+import { language, translateText } from "./i18n.js";
+
 // Presentation-only helpers. Chats, message delivery and server state remain separate.
-const shortDate = new Intl.DateTimeFormat("ru", { day: "numeric", month: "short" });
-const fullDate = new Intl.DateTimeFormat("ru", { day: "numeric", month: "long", year: "numeric" });
-const clock = new Intl.DateTimeFormat("ru", { hour: "2-digit", minute: "2-digit" });
+function dateLocale(){ return language()==="be"?"be-BY":"ru-RU"; }
+function dateFormat(options){return new Intl.DateTimeFormat(dateLocale(),options);}
 
 function validDate(value) {
   const date = new Date(value);
@@ -21,41 +22,41 @@ function isYesterday(date, now) {
 
 export function dayLabel(value, now = new Date()) {
   const date = validDate(value);
-  if (!date) return "Дата неизвестна";
-  if (dayKey(date) === dayKey(now)) return "Сегодня";
-  if (isYesterday(date, now)) return "Вчера";
-  return fullDate.format(date);
+  if (!date) return translateText("Дата неизвестна");
+  if (dayKey(date) === dayKey(now)) return translateText("Сегодня");
+  if (isYesterday(date, now)) return translateText("Вчера");
+  return dateFormat({day:"numeric",month:"long",year:"numeric"}).format(date);
 }
 
 export function chatTimeLabel(value, now = new Date()) {
   const date = validDate(value);
   if (!date) return "";
-  if (dayKey(date) === dayKey(now)) return clock.format(date);
-  if (isYesterday(date, now)) return "вчера";
-  if (date.getFullYear() === now.getFullYear()) return shortDate.format(date);
-  return new Intl.DateTimeFormat("ru", { day: "numeric", month: "numeric", year: "2-digit" }).format(date);
+  if (dayKey(date) === dayKey(now)) return dateFormat({hour:"2-digit",minute:"2-digit"}).format(date);
+  if (isYesterday(date, now)) return translateText("вчера");
+  if (date.getFullYear() === now.getFullYear()) return dateFormat({day:"numeric",month:"short"}).format(date);
+  return dateFormat({day:"numeric",month:"numeric",year:"2-digit"}).format(date);
 }
 
 export function messageTime(value) {
   const date = validDate(value);
-  return date ? clock.format(date) : "";
+  return date ? dateFormat({hour:"2-digit",minute:"2-digit"}).format(date) : "";
 }
 
 export function chatPreview(lastMessage, ownUserId) {
-  if (!lastMessage) return "Начните переписку";
+  if (!lastMessage) return translateText("Начните переписку");
   const prefix = lastMessage.senderUserId === ownUserId ? "Вы: " : "";
-  if (lastMessage.kind === "voice") return prefix + "Голосовое сообщение";
+  if (lastMessage.kind === "voice") return prefix + translateText("Голосовое сообщение");
   const text = String(lastMessage.text ?? "").replace(/\s+/g, " ").trim();
-  if (!text) return prefix + "Сообщение";
+  if (!text) return prefix + translateText("Сообщение");
   return prefix + (text.length > 80 ? `${text.slice(0, 77)}…` : text);
 }
 
 export function chatAccessibleLabel(chat, ownUserId, now = new Date()) {
-  const name = chat.peer?.displayName || "Собеседник";
+  const name = chat.peer?.displayName || translateText("Собеседник");
   const username = chat.peer?.username ? `@${chat.peer.username}` : "";
   const preview = chatPreview(chat.lastMessage, ownUserId);
   const time = chatTimeLabel(chat.lastMessage?.createdAt ?? chat.lastMessageAt, now);
-  return [name, username, preview, time, "Открыть чат"].filter(Boolean).join(". ");
+  return [name, username, preview, time, translateText("Открыть чат")].filter(Boolean).join(". ");
 }
 
 export function isNearBottom(element, tolerance = 90) {

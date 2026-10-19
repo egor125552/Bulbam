@@ -1,3 +1,4 @@
+import { language, translateText } from "./i18n.js";
 const responseObservers = new Set();
 
 export async function api(path, options = {}) {
@@ -7,6 +8,7 @@ export async function api(path, options = {}) {
     ...options,
     headers: {
       accept: "application/json",
+      "accept-language": language() === "be" ? "be" : "ru",
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.headers || {})
     }
@@ -20,7 +22,7 @@ export async function api(path, options = {}) {
   }
 
   if (!response.ok) {
-    const error = new Error(payload?.error?.message || `Ошибка HTTP ${response.status}`);
+    const error = new Error(translateText(payload?.error?.message || `Ошибка HTTP ${response.status}`));
     error.code = payload?.error?.code || "request_failed";
     error.status = response.status;
     throw error;
