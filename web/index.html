@@ -25,6 +25,11 @@
   </header>
 
   <main id="main" tabindex="-1">
+    <section id="startup-failure" class="card auth-card" aria-labelledby="startup-failure-title" hidden>
+      <h2 id="startup-failure-title">Не удалось загрузить Бульбам</h2>
+      <p id="startup-failure-message" role="alert" aria-live="assertive">Ошибка запуска. Аккаунт и сообщения не удалены.</p>
+      <button id="startup-retry" type="button">Повторить загрузку</button>
+    </section>
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
       <h2 id="account-start-title" class="visually-hidden">Вход в Бульбам</h2>
 
@@ -424,13 +429,59 @@
     <p id="live-status" class="visually-hidden" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
   </main>
 
+  <script>
+    // A classic script guards startup even when a module cannot be downloaded or parsed.
+    // On slow or broken networks the page must never stay on its initial loading text.
+    (() => {
+      let initialized = false;
+      const panel = document.querySelector("#startup-failure");
+      const message = document.querySelector("#startup-failure-message");
+      const live = document.querySelector("#live-status");
+      const watchdog = setTimeout(() => fail(new Error("startup_timeout")), 15000);
+      function fail(error) {
+        if (initialized) return;
+        console.error("[Bulbam] Startup was interrupted", error);
+        const detail = error?.message && error.message !== "startup_timeout"
+          ? `Ошибка: ${String(error.message).slice(0, 160)}. ` : "";
+        const explanation = "Бульбам не смог завершить загрузку. " + detail +
+          "Аккаунт и чаты не удалены. Нажмите «Повторить загрузку».";
+        message.textContent = explanation;
+        live.textContent = explanation;
+        panel.hidden = false;
+        if (document.querySelector("#signed-in")?.hidden) {
+          document.querySelector("#signed-out").hidden = false;
+        }
+      }
+      window.bulbamBootReady = () => {
+        initialized = true;
+        clearTimeout(watchdog);
+        panel.hidden = true;
+      };
+      window.bulbamBootFailed = (error) => {
+        clearTimeout(watchdog);
+        fail(error);
+      };
+      document.querySelector("#startup-retry")?.addEventListener("click", () => {
+        const url = new URL(location.href);
+        url.searchParams.set("reload", String(Date.now()));
+        location.replace(url.href);
+      });
+    })();
+  </script>
   <script type="module">
-    import { setupInterface } from "/js/ui.js";
-    import { setupCanonicalInterface } from "/js/canonical-interface.js";
-    setupInterface();
-    setupCanonicalInterface();
-    document.querySelector("#logout")?.addEventListener("click", () => document.querySelector("#settings-dialog")?.close?.());
-    await import("/app.js");
+    try {
+      const [{ setupInterface }, { setupCanonicalInterface }] = await Promise.all([
+        import("/js/ui.js"), import("/js/canonical-interface.js")
+      ]);
+      setupInterface();
+      setupCanonicalInterface();
+      document.querySelector("#logout")?.addEventListener("click", () =>
+        document.querySelector("#settings-dialog")?.close?.());
+      await import("/app.js?v=20261019-startup-fix-1");
+      window.bulbamBootReady();
+    } catch (error) {
+      window.bulbamBootFailed(error);
+    }
   </script>
 </body>
 </html>
