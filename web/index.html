@@ -338,6 +338,7 @@
             <dl class="details-list compact-details">
               <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
               <div><dt>Имя пользователя</dt><dd id="account-username"></dd></div>
+              <div><dt>Статус активности</dt><dd>Настраивается ниже</dd></div>
             </dl>
             <form id="profile-settings-form" class="form-stack">
               <label for="profile-settings-display-name">Отображаемое имя</label>
@@ -346,6 +347,16 @@
               <p id="profile-settings-status" role="status" aria-live="polite"></p>
             </form>
             <button id="logout" class="button-with-icon" data-icon="logout" type="button">Выйти</button>
+          </section>
+
+          <section class="card" aria-labelledby="presence-settings-title">
+            <h3 id="presence-settings-title">Кто видит, когда вы в сети</h3>
+            <label class="switch-row">
+              <input id="presence-share" type="checkbox" checked>
+              Показывать собеседникам статус «В сети» и последнюю активность
+            </label>
+            <p class="hint">Ваш статус видят только люди, с которыми у вас уже есть чат. Можно выключить в любой момент. Когда приложение закрыто, статус изменится автоматически.</p>
+            <p id="presence-settings-status" role="status" aria-live="polite"></p>
           </section>
 
           <section class="card" aria-labelledby="account-security-title">

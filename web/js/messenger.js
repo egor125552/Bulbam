@@ -23,6 +23,7 @@ let heartbeatTimer = null;
 let pollTimer = null;
 let generation = 0;
 let jumpButton = null;
+let presenceByUserId = new Map();
 
 export function setupMessenger() {
   jumpButton = document.querySelector("#jump-to-latest");
@@ -45,6 +46,10 @@ export function setupMessenger() {
 
   window.addEventListener("bulbam:account-changed", (event) => {
     void switchAccount(event.detail?.account ?? null);
+  });
+  window.addEventListener("bulbam:presence-updated", event => {
+    presenceByUserId = new Map((event.detail?.users ?? []).map(user=>[user.userId,user]));
+    updatePeerPresence();
   });
   window.addEventListener("bulbam:language-changed", () => {
     if(!account)return;
@@ -78,6 +83,7 @@ async function switchAccount(nextAccount) {
   generation += 1;
   account = nextAccount;
   chats = [];
+  presenceByUserId.clear();
   selectedChat = null;
   messages = [];
   resetVoicePlayers();
@@ -239,8 +245,12 @@ function renderChats() {
       time.dateTime = new Date(lastMessageAt).toISOString();
     }
 
-    button.append(name, time, username, preview);
-    button.setAttribute("aria-label", chatAccessibleLabel(chat, account.userId));
+    const presence=document.createElement("span");
+    presence.className="chat-presence";
+    presence.dataset.presenceUserId=chat.peer.userId;
+    presence.textContent=presenceLabel(chat.peer.userId);
+    button.append(name, time, username, presence, preview);
+    button.setAttribute("aria-label", peerChatLabel(chat));
     button.addEventListener("click", () => void selectChat(chat, { focusHeading: true }));
     elements.chatList.append(button);
   }
@@ -297,10 +307,32 @@ function renderConversation() {
   }
 
   elements.conversationTitle.textContent = chat.peer.displayName;
-  elements.conversationPeer.textContent = `@${chat.peer.username}`;
+  elements.conversationPeer.textContent = `@${chat.peer.username} · ${presenceLabel(chat.peer.userId)}`;
   elements.conversationEmpty.hidden = true;
   elements.messageForm.hidden = false;
   renderMessages();
+}
+
+function presenceLabel(userId) {
+  return presenceByUserId.get(userId)?.label ?? translateText("Статус неизвестен");
+}
+
+function peerChatLabel(chat) {
+  return chatAccessibleLabel(chat, account?.userId) + ". " + presenceLabel(chat.peer.userId);
+}
+
+function updatePeerPresence() {
+  if (!account)return;
+  for (const chat of chats) {
+    const button=[...elements.chatList.querySelectorAll(".chat-item")]
+      .find(element=>element.dataset.conversationId===chat.conversationId);
+    if (!button)continue;
+    const span=button.querySelector(".chat-presence");
+    if(span)span.textContent=presenceLabel(chat.peer.userId);
+    button.setAttribute("aria-label",peerChatLabel(chat));
+  }
+  if(selectedChat)
+    elements.conversationPeer.textContent=`@${selectedChat.peer.username} · ${presenceLabel(selectedChat.peer.userId)}`;
 }
 
 function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false } = {}) {

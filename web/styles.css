@@ -257,6 +257,12 @@ main {
 .chat-username {
   font-size: 0.83rem;
 }
+.chat-presence {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.chat-presence:empty { display: none; }
 
 .search-panel {
   display: grid;
