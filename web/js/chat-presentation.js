@@ -5,6 +5,7 @@ function dateLocale(){ return language()==="be"?"be-BY":"ru-RU"; }
 function dateFormat(options){return new Intl.DateTimeFormat(dateLocale(),options);}
 
 function validDate(value) {
+  if (value === null || value === undefined || value === "") return null;
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : null;
 }

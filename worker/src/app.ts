@@ -18,6 +18,7 @@ import { PushNotificationService } from "./modules/notifications/application/pus
 import { D1PushRepository } from "./modules/notifications/infrastructure/d1-push-repository";
 import { handlePushHttp } from "./modules/notifications/transport/http";
 import { DurableObjectRealtime } from "./modules/realtime/public";
+import { PresenceService, handlePresenceHttp } from "./modules/presence/presence-service";
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
@@ -163,6 +164,10 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
     if (identity && push && authenticate) {
       const pushResponse = await handlePushHttp(request, url, push, authenticate);
       if (pushResponse) return pushResponse;
+    }
+    if (env.DB && authenticate) {
+      const presenceResponse=await handlePresenceHttp(request,url,new PresenceService(env.DB),authenticate);
+      if(presenceResponse)return presenceResponse;
     }
     if (identity && calls && authenticate) {
       const callResponse = await handleCallHttp(request, url, calls, authenticate);

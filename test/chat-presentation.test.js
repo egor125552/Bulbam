@@ -34,6 +34,12 @@ describe("human-readable chat previews", () => {
 });
 
 describe("message presentation", () => {
+  test("does not invent a 1970 timestamp when a new chat has no messages", () => {
+    expect(chatTimeLabel(null, now)).toBe("");
+    expect(chatTimeLabel(undefined, now)).toBe("");
+    expect(messageTime(null)).toBe("");
+    expect(dayKey(null)).toBe("");
+  });
   test("formats today, yesterday and older chat activity", () => {
     expect(chatTimeLabel(new Date("2026-10-18T10:20:00").getTime(), now)).toMatch(/10:20/);
     expect(chatTimeLabel(new Date("2026-10-17T18:20:00").getTime(), now)).toBe("вчера");
