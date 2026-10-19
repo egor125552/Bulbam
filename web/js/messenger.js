@@ -1,3 +1,4 @@
+import { translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
@@ -44,6 +45,14 @@ export function setupMessenger() {
 
   window.addEventListener("bulbam:account-changed", (event) => {
     void switchAccount(event.detail?.account ?? null);
+  });
+  window.addEventListener("bulbam:language-changed", () => {
+    if(!account)return;
+    // Regenerate dates, accessible chat previews and delivery statuses without
+    // translating user-generated messages. Preserve audio and keyboard focus.
+    renderChats();
+    if(selectedChat)renderMessages({preserveVoicePlayback:true});
+    else renderConversation();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !account) return;
@@ -130,7 +139,7 @@ function renderUserResults(users) {
   elements.userSearchResults.replaceChildren();
   if (!users.length) {
     const item = document.createElement("li");
-    item.textContent = "Никого не найдено.";
+    item.textContent = translateText("Никого не найдено.");
     elements.userSearchResults.append(item);
     return;
   }
@@ -142,8 +151,10 @@ function renderUserResults(users) {
     button.className = "user-result";
 
     const name = document.createElement("strong");
+    name.dataset.userContent = "true";
     name.textContent = user.displayName;
     const username = document.createElement("span");
+    username.dataset.userContent = "true";
     username.textContent = `@${user.username}`;
     button.append(name, username);
     button.setAttribute("aria-label", `${user.displayName}, @${user.username}. Открыть чат`);
@@ -191,7 +202,7 @@ function renderChats() {
   if (!chats.length) {
     const empty = document.createElement("p");
     empty.className = "chat-list-empty";
-    empty.textContent = "Здесь будут ваши переписки. Нажмите «Новый чат», чтобы найти человека.";
+    empty.textContent = translateText("Здесь будут ваши переписки. Нажмите «Новый чат», чтобы найти человека.");
     elements.chatList.append(empty);
     return;
   }
@@ -207,13 +218,16 @@ function renderChats() {
     }
 
     const name = document.createElement("strong");
+    name.dataset.userContent = "true";
     name.textContent = chat.peer.displayName;
     const username = document.createElement("span");
     username.className = "chat-username";
+    username.dataset.userContent = "true";
     username.textContent = `@${chat.peer.username}`;
 
     const preview = document.createElement("span");
     preview.className = "chat-preview";
+    preview.dataset.userContent = "true";
     preview.textContent = chatPreview(chat.lastMessage, account.userId);
 
     const time = document.createElement("time");
@@ -275,8 +289,8 @@ function renderConversation() {
   resetVoicePlayers();
   elements.messageList.replaceChildren();
   if (!account || !chat) {
-    elements.conversationTitle.textContent = "Выберите чат";
-    elements.conversationPeer.textContent = "Найди человека или открой существующий диалог.";
+    elements.conversationTitle.textContent = translateText("Выберите чат");
+    elements.conversationPeer.textContent = translateText("Найди человека или открой существующий диалог.");
     elements.conversationEmpty.hidden = false;
     elements.messageForm.hidden = true;
     return;
@@ -304,7 +318,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
   if (!messages.length) {
     const item = document.createElement("li");
     item.className = "message-empty";
-    item.textContent = "Здесь пока нет сообщений. Напишите что-нибудь или запишите голосовое.";
+    item.textContent = translateText("Здесь пока нет сообщений. Напишите что-нибудь или запишите голосовое.");
     list.append(item);
     if (jumpButton) jumpButton.hidden = true;
     return;
@@ -339,6 +353,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
       item.append(renderVoiceMessage(message, mine));
     } else {
       const body = document.createElement("p");
+      body.dataset.userContent = "true";
       body.textContent = message.text;
       item.append(body);
     }
@@ -360,7 +375,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
           : "";
     if (state) {
       const stateLabel = document.createElement("span");
-      stateLabel.textContent = ` · ${state}`;
+      stateLabel.textContent = ` · ${translateText(state)}`;
       meta.append(stateLabel);
     }
     item.append(meta);
@@ -369,7 +384,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "retry-message";
-      retry.textContent = "Повторить отправку";
+      retry.textContent = translateText("Повторить отправку");
       retry.addEventListener("click", () => void transmitPending(message));
       item.append(retry);
     }

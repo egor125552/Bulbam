@@ -1,4 +1,5 @@
 import { announce, elements } from "./ui.js";
+import { originalText } from "./i18n.js";
 import { normalizeFontScale, normalizeMessageView, normalizeTheme } from "./interface-preferences.js";
 
 const KEYS = {
@@ -81,14 +82,14 @@ function syncComposer() {
   const recording = button?.getAttribute("aria-pressed") === "true";
   document.body.classList.toggle("voice-recording", recording);
   setIcon(button, recording ? "stop" : "mic");
-  const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
+  const muted = originalText(elements.callMuteButton?.textContent.trim()??"").startsWith("Включить");
   setIcon(elements.callMuteButton, muted ? "mic-off" : "mic");
 }
 
 function decorateVoiceButtons() {
   for (const button of document.querySelectorAll(".voice-actions button")) {
-    const text = button.textContent.trim();
-    if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
+    const text = originalText(button.textContent.trim());
+    if (originalText(button.getAttribute("aria-label")??"").includes("Воспроизвести или поставить")) {
       button.classList.add("icon-button");
       setIcon(button, text === "Пауза" ? "pause" : "play");
     } else if (text === "Назад на 15 секунд") {
@@ -97,7 +98,7 @@ function decorateVoiceButtons() {
     } else if (text === "Вперёд на 15 секунд") {
       button.classList.add("icon-button");
       setIcon(button, "forward");
-    } else if (/скорость$/i.test(text)) {
+    } else if ((/скорость$/i.test(text) || /хуткасць/i.test(text))) {
       button.classList.add("button-with-icon");
       setIcon(button, "speed");
     }
