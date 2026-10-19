@@ -108,6 +108,14 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     }, 120);
   }
 
+  async notifyAdminRecoveryRequest(recipientUserId:string):Promise<void> {
+    await this.notifyAll(recipientUserId,{
+      kind:"admin-recovery",title:"Бульбам: запрос восстановления",
+      body:"Новая заявка. Прежде чем одобрить, проверьте личность пользователя.",
+      tag:"admin-recovery",icon:"/icon.svg",data:{url:"/?reviewRecovery=1"}
+    },3600);
+  }
+
   private async notifyWhenBackground(
     recipientUserId: string,
     payload: Record<string, unknown>,

@@ -1,3 +1,6 @@
+import { setupI18n } from "./js/i18n.js";
+import { setupWelcome } from "./js/welcome.js";
+import { setupAdminRecovery } from "./js/admin-recovery.js";
 import { loadCurrentAccount, setupAuth } from "./js/auth.js";
 import { setupAudioProfiles } from "./js/audio-profiles.js";
 import { setupFinishedCallPanelCleanup } from "./js/call-finished-panel.js";
@@ -15,8 +18,11 @@ import { setupVoiceRecorder } from "./js/voice-recorder.js";
 import { setupVoiceSettings } from "./js/voice-settings.js";
 import { setupVoiceWebKitTimelineFix } from "./js/voice-webkit-timeline.js";
 
+setupI18n();
 setupHealth();
 setupAuth();
+setupAdminRecovery();
+setupWelcome();
 setupSessions();
 setupInvites();
 setupMessenger();

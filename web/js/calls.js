@@ -5,7 +5,7 @@ import {
   requestCallMicrophone,
   tuneAudioSender
 } from "./audio-profiles.js";
-import { announce, elements } from "./ui.js";
+import { announce, elements, getCurrentSession } from "./ui.js";
 
 let account = null;
 let currentCall = null;
@@ -50,6 +50,8 @@ export function setupCalls() {
   elements.callAnswerButton.addEventListener("click", () => void answerCall());
   elements.callDeclineButton.addEventListener("click", () => void declineCall());
   elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
+  elements.callHandoffButton.addEventListener("click", () => void handoffCall());
+  document.querySelector("#call-discover")?.addEventListener("click",()=>void discoverActiveCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
   elements.callMuteButton.addEventListener("click", toggleMute);
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
@@ -242,6 +244,46 @@ async function resumeRecoveredCall() {
   }
 }
 
+async function discoverActiveCall() {
+  try{
+    const result=await api("/api/v1/calls/active");
+    if(!result.call || result.call.status!=="accepted") {
+      announce("На ваших устройствах нет активного разговора.");
+      return;
+    }
+    if(currentCall?.callId===result.call.callId && !recoveryPending){
+      announce("Звонок уже работает на этом устройстве.");
+      return;
+    }
+    if(currentCall && currentCall.callId!==result.call.callId){
+      announce("Сначала завершите или закройте предыдущий звонок.");
+      return;
+    }
+    currentCall=result.call;
+    recoveryPending=true;
+    showRecoveredCall("Активный звонок найден. Можно перенести его на это устройство.");
+    announce("Активный звонок найден. Выберите перенос на это устройство.");
+  }catch(error){announce("Не удалось проверить активный звонок: "+error.message);}
+}
+
+async function handoffCall() {
+  if(!currentCall || currentCall.status!=="accepted" || !recoveryPending)return;
+  const button=elements.callHandoffButton;
+  button.disabled=true;
+  try {
+    if(!localStream)localStream=await requestMicrophone();
+    // Source keeps the call alive until this authenticated device claims it.
+    const result=await api(callPath("/handoff"),{method:"POST"});
+    currentCall=result.call;
+    elements.callHandoffButton.hidden=true;
+    announce("Перенос Бульбам Пераход подтверждён. Подключаю звук.");
+    await resumeRecoveredCall();
+  }catch(error) {
+    setCallStatus("Перенос не выполнен: "+error.message);
+    announce("Не удалось перенести звонок: "+error.message);
+  }finally{button.disabled=false;}
+}
+
 async function declineCall() {
   if (!currentCall) return;
   elements.callDeclineButton.disabled = true;
@@ -328,6 +370,10 @@ function closeCallRealtime() {
 
 async function handleCallEvent(event) {
   if (!account || !event || typeof event !== "object") return;
+  if (event.type === "admin.recovery.request") {
+    window.dispatchEvent(new Event("bulbam:admin-recovery-request"));
+    return;
+  }
 
   if (event.type === "call.active" && event.call) {
     if (currentCall) return;
@@ -371,6 +417,16 @@ async function handleCallEvent(event) {
   }
 
   if (!currentCall || event.callId !== currentCall.callId) return;
+
+  if (event.type === "call.handoff") {
+    if (event.actorUserId === account.userId && event.newSessionId!==getCurrentSession()?.sessionId) {
+      finishCall("Звонок перенесён на другое ваше устройство.");
+      announce("Звонок продолжен на другом устройстве.");
+    } else if (event.actorUserId !== account.userId) {
+      setCallStatus("Собеседник переносит звонок. Сохраняю соединение…");
+    }
+    return;
+  }
 
   if (event.type === "call.answered") {
     currentCall.status = "accepted";
@@ -912,6 +968,12 @@ async function pollCallState() {
       return;
     }
 
+    if (latest.status==="accepted" && currentCall.sessionOwnerId
+      && latest.sessionOwnerId && latest.sessionOwnerId!==getCurrentSession()?.sessionId
+      && !recoveryPending) {
+      finishCall("Звонок перенесён на другое ваше устройство.");
+      return;
+    }
     currentCall = { ...currentCall, ...latest };
     if (latest.status === "declined") finishCall("Собеседник отклонил звонок.");
     else if (latest.status === "ended") finishCall("Звонок завершён.");
@@ -985,6 +1047,7 @@ function showIncoming(call) {
   elements.callAnswerButton.hidden = false;
   elements.callDeclineButton.hidden = false;
   elements.callResumeButton.hidden = true;
+  elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
   syncCallButton();
@@ -1000,6 +1063,7 @@ function showOutgoing(call) {
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
   elements.callResumeButton.hidden = true;
+  elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
@@ -1015,6 +1079,7 @@ function showConnectedControls(status) {
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
   elements.callResumeButton.hidden = true;
+  elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
@@ -1030,7 +1095,10 @@ function showRecoveredCall(status) {
   setCallStatus(status);
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
-  elements.callResumeButton.hidden = false;
+  const moved = currentCall.status==="accepted" &&
+    currentCall.sessionOwnerId && currentCall.sessionOwnerId!==getCurrentSession()?.sessionId;
+  elements.callResumeButton.hidden = Boolean(moved);
+  elements.callHandoffButton.hidden = !moved;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = false;
   syncCallButton();
@@ -1055,6 +1123,7 @@ function renderFinished(message) {
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
   elements.callResumeButton.hidden = true;
+  elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
   elements.callDismissButton.focus();
@@ -1068,6 +1137,7 @@ function renderIdle() {
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
   elements.callResumeButton.hidden = true;
+  elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = true;
   elements.callEndButton.hidden = true;
 }
