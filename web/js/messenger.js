@@ -304,9 +304,11 @@ function renderConversation() {
     elements.conversationPeer.textContent = translateText("Найди человека или открой существующий диалог.");
     elements.conversationEmpty.hidden = false;
     elements.messageForm.hidden = true;
+    delete elements.messageForm.dataset.conversationId;
     return;
   }
 
+  elements.messageForm.dataset.conversationId = chat.conversationId;
   elements.conversationTitle.textContent = chat.peer.displayName;
   elements.conversationPeer.textContent = `@${chat.peer.username} · ${presenceLabel(chat.peer.userId)}`;
   elements.conversationEmpty.hidden = true;

@@ -535,7 +535,7 @@
       setupCanonicalInterface();
       document.querySelector("#logout")?.addEventListener("click", () =>
         document.querySelector("#settings-dialog")?.close?.());
-      await import("/app.js?v=20261019-startup-fix-1");
+      await import("/app.js?v=20261019-settings-call-fix-1");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

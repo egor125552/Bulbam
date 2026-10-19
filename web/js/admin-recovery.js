@@ -1,3 +1,4 @@
+import { openSettingsScreen } from "./settings-screens.js";
 import { api, deviceName } from "./api.js";
 import { announce, getCurrentAccount, showSignedIn } from "./ui.js";
 import { loadSessions } from "./sessions.js";
@@ -194,7 +195,7 @@ export function setupAdminRecovery(){
     if(!["owner","admin"].includes(getCurrentAccount()?.role))return;
     const url=new URL(location.href);
     if(url.searchParams.get("reviewRecovery")!=="1")return;
-    document.querySelector("#settings-dialog")?.showModal?.();
+    openSettingsScreen("security");
     document.querySelector("#admin-recovery-queue-title")?.focus();
     url.searchParams.delete("reviewRecovery");
     history.replaceState(null,"",url.pathname+url.search+url.hash);

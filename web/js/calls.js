@@ -359,9 +359,16 @@ async function timeoutRinging() {
 
 async function selectedChatFromUi() {
   if (elements.messageForm.hidden) return null;
+
+  const conversationId = elements.messageForm.dataset?.conversationId;
+  if (conversationId) return { conversationId };
+
+  // Compatibility fallback for tests and old cached markup. Presence text may follow
+  // the username, so never treat the whole visible line as the username.
   const peerText = elements.conversationPeer.textContent.trim();
-  if (!peerText.startsWith("@")) return null;
-  const username = peerText.slice(1);
+  const username = peerText.match(/^@([^·\s]+)/u)?.[1] ?? "";
+  if (!username) return null;
+
   const result = await api("/api/v1/chats");
   return (result.chats ?? []).find((chat) => chat.peer?.username === username) ?? null;
 }
@@ -1341,7 +1348,8 @@ function setCallStatus(text) {
 function syncCallButton() {
   const chatSelected = Boolean(account) &&
     !elements.messageForm.hidden &&
-    elements.conversationPeer.textContent.trim().startsWith("@");
+    Boolean(elements.messageForm.dataset?.conversationId ||
+      elements.conversationPeer.textContent.trim().startsWith("@"));
   elements.callStartButton.hidden = !chatSelected || Boolean(currentCall);
 }
 

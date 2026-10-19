@@ -539,3 +539,14 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
     text-align: left;
   }
 }
+
+/* Real settings screens use the whole settings surface on every viewport. */
+#settings-dialog.settings-dialog {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+#settings-dialog .settings-grid { grid-template-columns: 1fr; }

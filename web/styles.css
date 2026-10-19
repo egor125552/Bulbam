@@ -1005,3 +1005,36 @@ html[data-message-view="compact"] .message p {
 }
 
 html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !important; }
+
+/* Settings are discrete screens, not an endless scroll of cards. */
+.settings-category-list {
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  padding: 1rem;
+}
+.settings-category-list h3 { margin: 0 0 0.4rem; }
+.settings-category-button {
+  min-height: 2.8rem;
+  padding: 0.85rem 1rem;
+  text-align: left;
+}
+.settings-screens { padding: 1rem; }
+.settings-screen {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+  width: min(100%, 42rem);
+  margin: 0 auto;
+}
+.settings-screen > .card { width: 100%; }
+.settings-screen > h3 { margin-top: 0; }
+#settings-back { margin-top: 0.35rem; }
+.settings-section-navigation[hidden],
+.settings-category-list[hidden],
+.settings-screens[hidden],
+.settings-screen[hidden],
+#settings-back[hidden],
+.settings-category-button[hidden] {
+  display: none !important;
+}

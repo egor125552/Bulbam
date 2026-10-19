@@ -12,7 +12,7 @@ describe('fail-safe startup UI for iOS and other browsers',()=>{
   expect(html).toContain('window.bulbamBootFailed(error)');
   expect(html).toContain('window.bulbamBootReady()');
   expect(html).toContain('startup_timeout');
-  expect(html).toContain('import("/app.js?v=20261019-startup-fix-1")');
+  expect(html).toMatch(/import\("\/app\.js\?v=[^"]+"\)/);
  });
  test('does not clear browser sessions as a recovery action',()=>{
   expect(html).not.toContain('localStorage.clear()');

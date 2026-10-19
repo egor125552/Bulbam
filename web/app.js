@@ -1,5 +1,6 @@
 import { setupI18n } from "./js/i18n.js";
 import { setupDetailedHelp } from "./js/accessibility-help.js";
+import { setupSettingsScreens } from "./js/settings-screens.js";
 import { setupWelcome } from "./js/welcome.js";
 import { setupAdminRecovery } from "./js/admin-recovery.js";
 import { loadCurrentAccount, setupAuth } from "./js/auth.js";
@@ -22,6 +23,7 @@ import { setupVoiceWebKitTimelineFix } from "./js/voice-webkit-timeline.js";
 
 setupI18n();
 setupDetailedHelp();
+setupSettingsScreens();
 setupHealth();
 setupAuth();
 setupAdminRecovery();
