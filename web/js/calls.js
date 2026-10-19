@@ -1,3 +1,5 @@
+import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
+import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
 import { api } from "./api.js";
 import {
@@ -56,7 +58,10 @@ const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 const ICE_CANDIDATE_POOL_SIZE = 4;
 
 export function setupCalls() {
-  elements.callStartButton.addEventListener("click", () => void startCall());
+  elements.callStartButton.addEventListener("click", () => {
+    prepareRingback();
+    void startCall();
+  });
   elements.callAnswerButton.addEventListener("click", () => void answerCall());
   elements.callDeclineButton.addEventListener("click", () => void declineCall());
   elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
@@ -178,6 +183,7 @@ async function startCall() {
     offerStarted = false;
     recoveryPending = false;
     showOutgoing(currentCall);
+    startRingback();
     void prewarmOutgoingPeerConnection();
     startCallPolling();
     ringTimeout = setTimeout(() => void timeoutRinging(), 60_000);
@@ -461,6 +467,7 @@ async function handleCallEvent(event) {
   }
 
   if (event.type === "call.answered") {
+    stopRingback();
     currentCall.status = "accepted";
     currentCall.answeredAt = event.answeredAt ?? Date.now();
     clearTimeout(ringTimeout);
@@ -1094,6 +1101,7 @@ async function pollCallState() {
     if (!latest) return;
 
     if (latest.status === "accepted" && currentCall.status === "ringing") {
+      stopRingback();
       currentCall = latest;
       clearTimeout(ringTimeout);
       ringTimeout = null;
@@ -1193,6 +1201,7 @@ function showIncoming(call) {
   elements.callResumeButton.hidden = true;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = true;
+  if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = true;
   syncCallButton();
   elements.callAnswerButton.focus();
@@ -1209,6 +1218,7 @@ function showOutgoing(call) {
   elements.callResumeButton.hidden = true;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
+  if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
   elements.callEndButton.focus();
@@ -1225,6 +1235,7 @@ function showConnectedControls(status) {
   elements.callResumeButton.hidden = !remotePlaybackBlocked;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
+  if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
   if (focusMoved) elements.callEndButton.focus();
@@ -1244,6 +1255,7 @@ function showRecoveredCall(status) {
   elements.callResumeButton.hidden = Boolean(moved);
   elements.callHandoffButton.hidden = !moved;
   elements.callMuteButton.hidden = true;
+  if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = false;
   syncCallButton();
 }
@@ -1269,6 +1281,7 @@ function renderFinished(message) {
   elements.callResumeButton.hidden = true;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = true;
+  if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = true;
   elements.callDismissButton.focus();
 }
@@ -1283,6 +1296,7 @@ function renderIdle() {
   elements.callResumeButton.hidden = true;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = true;
+  if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = true;
 }
 
@@ -1340,6 +1354,7 @@ function toggleMute() {
 }
 
 function cleanupMedia() {
+  stopRingback();
   clearTimeout(ringTimeout);
   ringTimeout = null;
   stopCallPolling();
@@ -1417,8 +1432,5 @@ function resetCallRuntime() {
 }
 
 function friendlyMediaError(error) {
-  if (error?.name === "NotAllowedError") return "нет разрешения на микрофон";
-  if (error?.name === "NotFoundError") return "микрофон не найден";
-  if (error?.name === "OverconstrainedError") return "устройство не поддерживает выбранные параметры";
-  return error?.message ?? "неизвестная ошибка";
+  return explainMicrophoneError(error);
 }

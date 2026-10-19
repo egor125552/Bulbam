@@ -78,6 +78,7 @@
           </label>
           <p id="register-username-help" class="hint">Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, егор125.</p>
           <p id="register-username-error" role="alert" aria-live="assertive" hidden></p>
+          <p class="hint">Символ @ можно поставить только перед именем пользователя, но при регистрации он не нужен. Внутри логина @ ставить нельзя.</p>
           <p class="hint">Отображаемое имя можно выбрать после регистрации или пропустить. Позже его можно изменить в настройках.</p>
           <label>
             Пароль
@@ -268,6 +269,8 @@
             </div>
             <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
+            <button id="voice-pause-button" class="button-with-icon" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-quality-cycle" type="button" class="button-with-icon" aria-label="Переключить качество голосовых сообщений">Качество голосового</button>
             <p id="message-send-hint" class="visually-hidden">Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
             <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
           </form>
@@ -290,6 +293,7 @@
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
@@ -305,6 +309,14 @@
           <button id="settings-close" class="icon-button" data-icon="close" type="button" aria-label="Закрыть настройки">Закрыть</button>
         </div>
 
+        <nav class="settings-section-navigation" aria-label="Быстрый переход к настройкам">
+          <a href="#appearance-title">Интерфейс</a>
+          <a href="#accessibility-title">Специальные возможности</a>
+          <a href="#voice-settings-title">Голосовые</a>
+          <a href="#call-audio-title">Звонки</a>
+          <a href="#account-security-title">Безопасность</a>
+          <a href="#sessions-title">Устройства</a>
+        </nav>
         <div class="settings-grid">
           <section class="card" aria-labelledby="appearance-title">
             <h3 id="appearance-title">Интерфейс</h3>
@@ -378,6 +390,15 @@
             <button id="push-disable" class="button-with-icon" data-icon="bell-off" type="button" hidden>Отключить уведомления</button>
           </section>
 
+          <section class="card" aria-labelledby="accessibility-title">
+            <h3 id="accessibility-title">Специальные возможности</h3>
+            <label class="switch-row">
+              <input id="voice-detailed-help" type="checkbox" checked>
+              Подробные подсказки для начинающих
+            </label>
+            <p class="hint">Если выключить, VoiceOver будет получать короткие сообщения о записи. Команды остаются доступны в справке.</p>
+          </section>
+
           <section class="card" aria-labelledby="voice-settings-title">
             <h3 id="voice-settings-title">Голосовые сообщения</h3>
             <label for="voice-bitrate">Качество голосовых сообщений</label>
@@ -407,6 +428,7 @@
             <button id="call-discover" type="button">Найти активный звонок на других устройствах</button>
             <p id="audio-profile-description" class="hint"></p>
             <p id="audio-profile-status">Выберите режим и проверьте микрофон.</p>
+            <p class="hint">Разрешение на микрофон задаёт браузер. Если доступ запрещён, измените его в настройках сайта или Safari. Бульбам не может нажать системное «Разрешить» вместо пользователя.</p>
             <button id="audio-profile-test" class="button-with-icon" data-icon="mic" type="button">Проверить микрофон</button>
           </section>
 
@@ -414,7 +436,7 @@
             <h3 id="sessions-title">Устройства</h3>
             <p class="hint">Здесь можно завершить вход на любом устройстве.</p>
             <div id="sessions"></div>
-            <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить устройства</button>
+            <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить список устройств</button>
           </section>
 
           <section id="invite-card" class="card" aria-labelledby="invite-title" hidden>

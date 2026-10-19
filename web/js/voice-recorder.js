@@ -1,3 +1,4 @@
+import { explainMicrophoneError } from "./microphone-permissions.js";
 import { api } from "./api.js";
 import { announce, getCurrentAccount } from "./ui.js";
 import {
@@ -17,14 +18,19 @@ import {
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
 import { VoiceUploadSocket } from "./voice-upload-socket.js";
+import { createRecordingClock } from "./voice-recording-clock.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
+const DETAIL_HELP_KEY = "bulbam.accessibility.detailedRecordingHelp";
 const MIME_CANDIDATES = /android/i.test(navigator.userAgent)
   ? ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
   : ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
 
 let recordButton = null;
+let pauseButton = null;
+let detailedHelpCheckbox = null;
+let detailedHelp = true;
 let draftPanel = null;
 let draftStatus = null;
 let draftSendButton = null;
@@ -40,6 +46,19 @@ let optionHeld = false;
 
 export function setupVoiceRecorder() {
   recordButton = document.querySelector("#voice-record-button");
+  pauseButton = document.querySelector("#voice-pause-button");
+  detailedHelpCheckbox = document.querySelector("#voice-detailed-help");
+  try { detailedHelp = localStorage.getItem(DETAIL_HELP_KEY) !== "false"; } catch {}
+  if (detailedHelpCheckbox) {
+    detailedHelpCheckbox.checked = detailedHelp;
+    detailedHelpCheckbox.addEventListener("change", () => {
+      detailedHelp = detailedHelpCheckbox.checked;
+      try { localStorage.setItem(DETAIL_HELP_KEY, String(detailedHelp)); } catch {}
+      syncRecordingHelp();
+      announce(detailedHelp ? "Подробные подсказки включены." : "Короткие подсказки включены.");
+    });
+  }
+  syncRecordingHelp();
   draftPanel = document.querySelector("#voice-draft-panel");
   draftStatus = document.querySelector("#voice-draft-status");
   draftSendButton = document.querySelector("#voice-draft-send");
@@ -49,6 +68,7 @@ export function setupVoiceRecorder() {
     void prepareVoiceCues();
     void toggleButtonRecording();
   });
+  pauseButton?.addEventListener("click", () => togglePauseRecording());
   draftSendButton?.addEventListener("click", () => void sendRecoverableDraft());
   draftDeleteButton?.addEventListener("click", () => void deleteRecoverableDraft());
 
@@ -140,6 +160,7 @@ async function startRecording(trigger) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          channelCount: { ideal: 1 },
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false
@@ -147,7 +168,7 @@ async function startRecording(trigger) {
       });
       await enforceRawCapture(stream);
     } catch (error) {
-      announce(`Не удалось включить микрофон: ${error.message}`);
+      announce(`Не удалось включить микрофон: ${explainMicrophoneError(error)}`);
       await playVoiceCue("error");
       stream?.getTracks().forEach((track) => track.stop());
       stream = null;
@@ -212,7 +233,8 @@ async function startRecording(trigger) {
       uploadQueue: Promise.resolve(),
       uploadPromise: null,
       transport: null,
-      finishing: false
+      finishing: false,
+      clock: createRecordingClock(draft.startedAt)
     };
 
     recorder.addEventListener("dataavailable", (event) => {
@@ -258,9 +280,12 @@ async function startRecording(trigger) {
     // Поэтому после Stop короткому голосовому остаётся передать только сами байты.
     void prewarmUpload(state);
     setRecordingUi(true, draft.startedAt);
-    announce(trigger === "option"
-      ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
-      : "Запись голосового началась. Нажми кнопку ещё раз, чтобы отправить.");
+    if (trigger === "button") retainRecordFocus();
+    announce(detailedHelp
+      ? (trigger === "option"
+          ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
+          : "Запись голосового началась. Ещё раз нажмите «Отправить голосовое» для отправки, либо «Пауза записи».")
+      : "Идёт запись.");
   } finally {
     if (stream) stream.getTracks().forEach((track) => track.stop());
     if (localId) await deleteVoiceDraft(localId).catch(() => undefined);
@@ -308,6 +333,54 @@ async function persistChunk(state, blob) {
   }
 }
 
+function syncRecordingHelp() {
+  if (!recordButton) return;
+  if (detailedHelp) recordButton.setAttribute("aria-describedby", "voice-record-hint");
+  else recordButton.removeAttribute("aria-describedby");
+}
+
+function retainRecordFocus() {
+  // Keep VoiceOver focused on the actual button after an async permission dialog
+  // and label change, rather than sending the cursor back to the chat list.
+  if (recordButton && !recordButton.hidden && document.activeElement !== recordButton) {
+    recordButton.focus({ preventScroll: true });
+  }
+}
+
+function togglePauseRecording() {
+  const state = current;
+  if (!state || state.finishing || state.trigger !== "button") return;
+  if (typeof state.recorder.pause !== "function" || typeof state.recorder.resume !== "function") return;
+  try {
+    if (state.clock.paused) {
+      state.recorder.resume();
+      state.clock.resume();
+      announce("Запись голосового продолжена.");
+    } else {
+      state.recorder.pause();
+      state.clock.pause();
+      announce("Запись голосового на паузе.");
+    }
+    syncPauseUi();
+  } catch (error) {
+    announce("Не удалось поставить запись на паузу: " + (error?.message ?? "ошибка микрофона"));
+  }
+}
+
+function syncPauseUi() {
+  if (!pauseButton) return;
+  const state = current;
+  const available = Boolean(state && !state.finishing && state.trigger === "button" &&
+    typeof state.recorder.pause === "function" && typeof state.recorder.resume === "function");
+  pauseButton.hidden = !available;
+  if (!available) return;
+  const paused = state.clock.paused;
+  pauseButton.textContent = paused ? "Продолжить запись" : "Пауза записи";
+  pauseButton.setAttribute("aria-label", paused ? "Продолжить запись голосового" : "Приостановить запись голосового");
+  pauseButton.setAttribute("aria-pressed", String(paused));
+  if (recordingStatus && paused) recordingStatus.textContent = "Запись на паузе";
+}
+
 async function stopAndSend() {
   const state = current;
   if (!state || state.finishing) return;
@@ -346,7 +419,7 @@ async function finishStoppedRecorder(state) {
   await state.dataQueue.catch(() => undefined);
   await state.uploadQueue.catch(() => undefined);
   if (state.uploadPromise) await state.uploadPromise.catch(() => undefined);
-  const durationMs = Math.max(1, state.draft.lastChunkAt - state.draft.startedAt);
+  const durationMs = Math.max(1, state.clock.elapsed());
   const mode = state.stopMode ?? "interrupted";
   if (current === state) current = null;
 
@@ -622,23 +695,28 @@ function setStartingUi(active) {
     return;
   }
   if (!current) setRecordingUi(false);
+  syncPauseUi();
 }
 
 function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date.now()) {
   if (!recordButton) return;
+  syncPauseUi();
   recordButton.textContent = recording ? "Отправить голосовое" : "Записать голосовое";
   recordButton.setAttribute("aria-pressed", String(recording));
   recordButton.setAttribute("aria-label", recording
     ? "Остановить и отправить голосовое. Запись идёт."
     : "Записать голосовое");
   document.body.classList.toggle("voice-recording", recording);
+  window.dispatchEvent(new CustomEvent("bulbam:voice-recording-changed", { detail: {recording} }));
   clearInterval(recordingTimer);
   recordingTimer = null;
   if (!recordingStatus) return;
   recordingStatus.hidden = !recording;
   if (!recording) return;
   const update = () => {
-    recordingStatus.textContent = `Запись ${formatClock(Date.now() - startedAt)}`;
+    recordingStatus.textContent = current?.clock?.paused
+      ? "Запись на паузе"
+      : `Запись ${formatClock(current?.clock?.elapsed() ?? Date.now() - startedAt)}`;
   };
   update();
   recordingTimer = setInterval(update, 1000);
@@ -698,6 +776,7 @@ async function enforceRawCapture(stream) {
   // дорожке. Если ОС/браузер всё равно оставляет её включённой, запись разрешена:
   // Bulbam не добавляет собственный DSP, но web-приложение не может обещать raw hardware capture.
   await track.applyConstraints({
+    channelCount: 1,
     echoCancellation: false,
     noiseSuppression: false,
     autoGainControl: false

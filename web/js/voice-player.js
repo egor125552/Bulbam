@@ -1,3 +1,4 @@
+import { explainVoicePlaybackError } from "./voice-playback-diagnostics.js";
 import { announce, getCurrentAccount } from "./ui.js";
 import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
 
@@ -164,7 +165,16 @@ export function renderVoiceMessage(message, mine) {
   audio.addEventListener("error", () => {
     if (controller.disposing) return;
     stopHeartbeat(controller);
-    announce("Не удалось воспроизвести голосовое сообщение.");
+    const reason=explainVoicePlaybackError(audio.error?.code);
+    // Cached data may be damaged or truncated. The next user tap retries
+    // against the authoritative server, never deleting the original message.
+    if (controller.objectUrl) {
+      try { URL.revokeObjectURL(controller.objectUrl); } catch {}
+      controller.objectUrl=null;
+      controller.audio.src=controller.message.voice.localUrl || voiceUrl(controller.message);
+      controller.preparedSource=true;
+    }
+    announce(reason);
   });
 
   return root;
