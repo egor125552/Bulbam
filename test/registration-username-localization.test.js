@@ -13,14 +13,14 @@ describe('registration invalid username guidance',()=>{
    const parsed=await response.json();
    expect(parsed.error.code).toBe('invalid_username');
    expect(parsed.error.message).toMatch(/беларускіх/);
-   expect(parsed.error.message).toMatch(/егор125/);
+   expect(parsed.error.message).toMatch(/карыстальнік1/);
    expect(parsed.error.message).not.toMatch(/Username|латинских/);
   }finally{await server.close();}
  });
  test('client can translate username guidance and keep a Latin example',()=>{
-  const guidance='Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, егор125.';
+  const guidance='Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1.';
   expect(be[guidance]).toMatch(/беларускіх/);
-  expect(be[guidance]).toContain('егор125');
+  expect(be[guidance]).toContain('карыстальнік1');
   expect(translateServerText(guidance)).toBe(be[guidance]);
  });
 });

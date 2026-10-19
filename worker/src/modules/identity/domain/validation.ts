@@ -15,7 +15,7 @@ export function normalizeUsername(raw: string): string {
   if (!/^[a-z0-9_\p{Script=Cyrillic}]{3,32}$/u.test(username)) {
     badRequest(
       "invalid_username",
-       "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, егор125."
+       "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1."
     );
   }
   return username;

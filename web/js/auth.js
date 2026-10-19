@@ -7,7 +7,7 @@ import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut, upd
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
 const ACCOUNT_HINT_KEY = "bulbam.account.lastUsername";
-const USERNAME_GUIDANCE = "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, егор125.";
+const USERNAME_GUIDANCE = "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1.";
 const USERNAME_PATTERN=/^[a-z0-9_\p{Script=Cyrillic}]{3,32}$/u;
 function canonicalUsername(raw){
   return String(raw??"").normalize("NFKC").trim().replace(/^@/,"").toLowerCase();
