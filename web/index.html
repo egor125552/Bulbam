@@ -271,8 +271,8 @@
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
             <button id="voice-pause-button" class="button-with-icon" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
             <button id="voice-quality-cycle" type="button" class="button-with-icon" aria-label="Переключить качество голосовых сообщений">Качество голосового</button>
-            <p id="message-send-hint" class="visually-hidden">Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
-            <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
+            <p id="message-send-hint" class="visually-hidden" data-detailed-help>Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
+            <p id="voice-record-hint" class="visually-hidden" data-detailed-help>Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
           </form>
         </section>
       </div>
@@ -407,7 +407,7 @@
               <input id="voice-detailed-help" type="checkbox" checked>
               Подробные подсказки для начинающих
             </label>
-            <p class="hint">Если выключить, VoiceOver будет получать короткие сообщения о записи. Команды остаются доступны в справке.</p>
+            <p class="hint">Если выключить, Бульбам скроет дополнительные пояснения и будет озвучивать действия короче. Важные статусы и ошибки останутся.</p>
           </section>
 
           <section class="card" aria-labelledby="voice-settings-title">

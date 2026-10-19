@@ -1,4 +1,5 @@
 import { explainMicrophoneError } from "./microphone-permissions.js";
+import { isDetailedHelpEnabled } from "./accessibility-help.js";
 import { api } from "./api.js";
 import { announce, getCurrentAccount } from "./ui.js";
 import {
@@ -22,14 +23,12 @@ import { createRecordingClock } from "./voice-recording-clock.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
-const DETAIL_HELP_KEY = "bulbam.accessibility.detailedRecordingHelp";
 const MIME_CANDIDATES = /android/i.test(navigator.userAgent)
   ? ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
   : ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
 
 let recordButton = null;
 let pauseButton = null;
-let detailedHelpCheckbox = null;
 let detailedHelp = true;
 let draftPanel = null;
 let draftStatus = null;
@@ -47,17 +46,11 @@ let optionHeld = false;
 export function setupVoiceRecorder() {
   recordButton = document.querySelector("#voice-record-button");
   pauseButton = document.querySelector("#voice-pause-button");
-  detailedHelpCheckbox = document.querySelector("#voice-detailed-help");
-  try { detailedHelp = localStorage.getItem(DETAIL_HELP_KEY) !== "false"; } catch {}
-  if (detailedHelpCheckbox) {
-    detailedHelpCheckbox.checked = detailedHelp;
-    detailedHelpCheckbox.addEventListener("change", () => {
-      detailedHelp = detailedHelpCheckbox.checked;
-      try { localStorage.setItem(DETAIL_HELP_KEY, String(detailedHelp)); } catch {}
-      syncRecordingHelp();
-      announce(detailedHelp ? "Подробные подсказки включены." : "Короткие подсказки включены.");
-    });
-  }
+  detailedHelp = isDetailedHelpEnabled();
+  window.addEventListener("bulbam:detailed-help-changed", (event) => {
+    detailedHelp = event.detail?.enabled !== false;
+    syncRecordingHelp();
+  });
   syncRecordingHelp();
   draftPanel = document.querySelector("#voice-draft-panel");
   draftStatus = document.querySelector("#voice-draft-status");

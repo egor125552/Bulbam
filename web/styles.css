@@ -1003,3 +1003,5 @@ html[data-message-view="compact"] .message p {
     padding: 0.8rem;
   }
 }
+
+html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !important; }
