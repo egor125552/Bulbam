@@ -111,7 +111,7 @@ Bulbam is still under active development.
 
 The following features are not yet complete and should not be presented as finished:
 
-- server-side read state and complete multi-device read semantics;
+- полная синхронизация состояния прочтения между несколькими устройствами одного пользователя;
 - media and voice messages;
 - groups and channels;
 - blocking, reporting, and the full trust-and-safety layer;
