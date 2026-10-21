@@ -109,15 +109,22 @@ export async function launchBulbamTestHost() {
     baseURL: "http://127.0.0.1:" + port,
     cookie,
     async issueSession() {
-      const response=await harness.fetch("/api/v1/auth/login", {
-        method:"POST",headers:{"content-type":"application/json"},
-        body:JSON.stringify({username:"accesspilot_owner",password:TEST_PASSWORD,
-          deviceName:"AccessPilot isolated replay"})
-      });
-      if(!response.ok)throw new Error("Test session recreation failed: "+response.status);
-      const value=(response.headers.get("set-cookie")||"").match(/bulbam_session=([^;]+)/)?.[1];
-      if(!value)throw new Error("Test session cookie missing");
-      return value;
+      // The autonomous crawler may submit a password-change form. Restore
+      // the disposable account with the generic fixture values that its
+      // input generator uses, without mapping any application buttons.
+      const candidates=[TEST_PASSWORD,"AccessPilot-Temporary-Password-2026!",
+        "AccessPilot-Isolated-2026!"];
+      for(const password of candidates){
+        const response=await harness.fetch("/api/v1/auth/login",{
+          method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({username:"accesspilot_owner",password,
+            deviceName:"AccessPilot isolated replay"})
+        });
+        if(!response.ok)continue;
+        const value=(response.headers.get("set-cookie")||"").match(/bulbam_session=([^;]+)/)?.[1];
+        if(value)return value;
+      }
+      throw new Error("Unable to restore disposable test account after credentials changed");
     },
     account: initPayload.account,
     peerCookie,
