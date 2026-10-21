@@ -59,11 +59,12 @@ try{
         await page.waitForFunction(()=>!document.getElementById("signed-in")?.hidden,{timeout:7000}).catch(()=>{});
       }
     }
+    const exhaustive=process.env.ACCESSPILOT_EXHAUSTIVE==="1";
     const result=await crawlBrowser({
       page,reset,name:signedIn?"Вход выполнен":"Экран входа",
-      maxStates:Number(process.env.ACCESSPILOT_MAX_STATES||55),
-      maxActions:Number(process.env.ACCESSPILOT_MAX_ACTIONS||150),
-      maxDepth:5
+      maxStates:Number(process.env.ACCESSPILOT_MAX_STATES||(exhaustive?200:55)),
+      maxActions:Number(process.env.ACCESSPILOT_MAX_ACTIONS||(exhaustive?1200:150)),
+      maxDepth:exhaustive?12:5
     });
     result.errors=errors;
     addOrigins(result);
