@@ -39,6 +39,8 @@ try{
     await page.route("**/*",route=>route.request().url().startsWith(host.baseURL)?route.continue():route.abort());
     const errors=[];
     page.on("pageerror",error=>errors.push(error.message));
+    // Accept only prompts produced inside the disposable isolated test worker.
+    page.on("dialog",dialog=>dialog.accept("AccessPilot test").catch(()=>{}));
     async function reset(){
       await page.goto(host.baseURL,{waitUntil:"domcontentloaded",timeout:8000});
       await page.waitForFunction(() => {

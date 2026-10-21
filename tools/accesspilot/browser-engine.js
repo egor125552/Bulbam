@@ -94,6 +94,48 @@ export async function inspectBrowser(page) {
   }, TARGETS);
 }
 
+async function fillNearbyForm(page, locator) {
+  // Generic, semantic form preparation. The caller provides no per-button
+  // script. Only submit controls trigger auto-population.
+  const id=await locator.evaluate(element=>{
+    const submit=(element.tagName==='BUTTON'||element.tagName==='INPUT')
+      && (element.type||'submit')==='submit';
+    return submit ? (element.form?.id||null) : null;
+  }).catch(()=>null);
+  if(!id)return 0;
+  const fields=page.locator('#'+CSS_ESCAPE(id)).locator('input:not([type="hidden"]),textarea,select');
+  let count=0;
+  for(let n=0;n<await fields.count();n++){
+    const field=fields.nth(n);
+    if(!await field.isVisible().catch(()=>false))continue;
+    const info=await field.evaluate(el=>({
+      tag:el.tagName,type:el.type||'',name:el.name||'',autocomplete:el.autocomplete||'',
+      required:!!el.required,value:String(el.value||''),checked:!!el.checked,
+      min:el.min||'',max:el.max||'',minlength:el.minLength||0
+    }));
+    if(info.tag==='SELECT'){
+      if(info.value)continue;
+      const options=await field.locator('option').evaluateAll(nodes=>nodes.map(node=>node.value));
+      const option=options.find(Boolean);if(option){await field.selectOption(option);count++;}continue;
+    }
+    if(['submit','button','reset','file'].includes(info.type))continue;
+    if(['checkbox','radio'].includes(info.type)){
+      if(info.required&&!info.checked){await field.check();count++;}continue;
+    }
+    if(info.value)continue;
+    let value=info.type==='password'?'AccessPilot-Temporary-Password-2026!':
+      info.type==='email'?'pilot@example.test':info.type==='url'?'https://example.test':
+      info.type==='tel'?'+15550001000':info.type==='number'?(info.min||'3'):
+      info.autocomplete.includes('username')?'accesspilot_tester':
+      info.type==='search'?'pilot':'AccessPilot test input';
+    if(info.minlength>value.length)value=value.padEnd(info.minlength,'x');
+    await field.fill(value,{timeout:1300});
+    count++;
+  }
+  return count;
+}
+function CSS_ESCAPE(text){return text.replace(/[^a-zA-Z0-9_-]/g,x=>'\\'+x);}
+
 export async function clickBrowser(page, target) {
   const loc=page.locator(target.selector).first();
   if (target.disabled) return { ok:false, reason:'disabled' };
@@ -114,6 +156,7 @@ export async function clickBrowser(page, target) {
       await loc.fill(value,{timeout:1300});
       if(target.inputType==='search')await page.waitForTimeout(270);
     } else {
+      await fillNearbyForm(page,loc);
       await loc.click({timeout:1300});
     }
     await page.waitForTimeout(110);
