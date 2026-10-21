@@ -10,6 +10,7 @@
     "check:web": "for f in web/app.js web/sw.js web/js/*.js; do node --check \"$f\" || exit 1; done",
     "check:worker": "wrangler deploy --dry-run",
     "test": "vitest run",
+    "test:accessibility": "node tools/accesspilot/run.js",
     "test:registration": "vitest run test/registration-smoke.test.js --reporter=verbose",
     "test:messaging": "vitest run test/messaging-smoke.test.js --reporter=verbose",
     "test:voice": "vitest run test/voice-messages-smoke.test.js --reporter=verbose",
