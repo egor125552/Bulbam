@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { launchHeadless } from "./browser-launch.js";
-import { mkdirSync,writeFileSync,readFileSync } from "node:fs";
+import { mkdirSync,writeFileSync,readFileSync,existsSync,unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { launchBulbamTestHost } from "./browser-host.js";
-import { crawlBrowser } from "./browser-engine.js";
+import { crawlBrowser } from "./crawler.js";
 import { installSourceTracking } from "./browser-instrumentation.js";
 const host=await launchBulbamTestHost();
 let browser;
@@ -28,7 +28,8 @@ function addOrigins(result){
 }
 try{
   browser=await launchHeadless();
-  for(const signedIn of [false,true]){
+  const requested=(process.env.ACCESSPILOT_SCENARIOS||"signed-out,signed-in").split(",");
+  for(const signedIn of [false,true].filter(value=>requested.includes(value?"signed-in":"signed-out"))){
     const mobile=process.env.ACCESSPILOT_MOBILE==="1";
     const context=await browser.newContext({serviceWorkers:"block",permissions:[],
       ...(mobile?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{})});
@@ -60,13 +61,28 @@ try{
       }
     }
     const exhaustive=process.env.ACCESSPILOT_EXHAUSTIVE==="1";
+    const checkpointPath=resolve("accesspilot-report",`checkpoint-${mobile?"mobile":"desktop"}-${signedIn?"signed-in":"signed-out"}.json`);
+    const initialState=process.env.ACCESSPILOT_RESUME==="1"&&existsSync(checkpointPath)
+      ? JSON.parse(readFileSync(checkpointPath,"utf8")):null;
+    const batch=Number(process.env.ACCESSPILOT_BATCH_ACTIONS||0);
+    const actionCap=batch?(initialState?.actions.length||0)+batch
+      :Number(process.env.ACCESSPILOT_MAX_ACTIONS||(exhaustive?1200:150));
     const result=await crawlBrowser({
       page,reset,name:signedIn?"Вход выполнен":"Экран входа",
       maxStates:Number(process.env.ACCESSPILOT_MAX_STATES||(exhaustive?200:55)),
-      maxActions:Number(process.env.ACCESSPILOT_MAX_ACTIONS||(exhaustive?1200:150)),
-      maxDepth:exhaustive?12:5
+      maxActions:actionCap,
+      initialState,
+      onCheckpoint:checkpoint=>{
+        mkdirSync("accesspilot-report",{recursive:true});
+        writeFileSync(checkpointPath,JSON.stringify(checkpoint));
+      },
+      maxDepth:exhaustive?12:5,
+      onProgress:({name,states,actions,pending,findings})=>{
+        console.log(JSON.stringify({phase:'progress',name,states,actions,pending,findings}));
+      }
     });
     result.errors=errors;
+    if(!result.summary.truncated&&existsSync(checkpointPath))unlinkSync(checkpointPath);
     addOrigins(result);
     reports.push(result);
     console.log(result.name,result.summary, result.findings.slice(0,15));
