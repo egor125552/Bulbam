@@ -10,7 +10,8 @@
     "check:web": "for f in web/app.js web/sw.js web/js/*.js; do node --check \"$f\" || exit 1; done",
     "check:worker": "wrangler deploy --dry-run",
     "test": "vitest run",
-    "test:accessibility": "node tools/accesspilot/run.js",
+    "test:accessibility": "node tools/accesspilot/run-browser.js",
+    "test:accessibility:virtual": "node tools/accesspilot/run.js",
     "test:registration": "vitest run test/registration-smoke.test.js --reporter=verbose",
     "test:messaging": "vitest run test/messaging-smoke.test.js --reporter=verbose",
     "test:voice": "vitest run test/voice-messages-smoke.test.js --reporter=verbose",
@@ -25,6 +26,7 @@
     "@types/web-push": "^3.6.4",
     "fake-indexeddb": "^6.2.5",
     "linkedom": "^0.18.13",
+    "playwright": "^1.64.1",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0",
     "wrangler": "^4.0.0"
