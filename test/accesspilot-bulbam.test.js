@@ -24,6 +24,12 @@ describe("Bulbam virtual accessibility integration", () => {
         event: "click", file: "web/js/settings-screens.js"
       }));
       expect(report.summary.inspectedOnly).toBeGreaterThan(15);
+      const toggles = report.actions.filter(item => item.element === "#new-chat-button");
+      expect(toggles).toContainEqual(expect.objectContaining({
+        screen: "Главный экран: новый чат",
+        focus: expect.objectContaining({ id: "new-chat-button", visible: true })
+      }));
+      expect(report.findings.filter(item => item.code === "focus-on-hidden-element")).toEqual([]);
     } finally {
       adapter.close();
     }

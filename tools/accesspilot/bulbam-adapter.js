@@ -32,7 +32,8 @@ function staticLocation(element) {
   return { file: "web/index.html", line: 1 + markup.slice(0, matches[0].index).split("\n").length - 1 };
 }
 
-export async function createBulbamAdapter() {
+export async function createBulbamAdapter({ mode = "signed-in" } = {}) {
+  if (!["signed-in", "signed-out", "composer"].includes(mode)) throw new Error("Unknown virtual scenario: " + mode);
   const { window, document } = parseHTML(markup);
   const beforeGlobals = new Map();
   // This fixture exercises navigation handlers, not asynchronous DOM
@@ -54,6 +55,12 @@ export async function createBulbamAdapter() {
 
   const registered = new WeakMap();
   const created = new WeakMap();
+  let lastFocus = null;
+  const originalFocus = window.HTMLElement.prototype.focus;
+  window.HTMLElement.prototype.focus = function (...args) {
+    lastFocus = this;
+    return originalFocus?.apply(this, args);
+  };
   const originalListen = window.HTMLElement.prototype.addEventListener;
   const originalCreate = document.createElement.bind(document);
   window.HTMLElement.prototype.addEventListener = function (eventName, handler, options) {
@@ -90,8 +97,8 @@ export async function createBulbamAdapter() {
       this.dispatchEvent(new window.Event("close"));
     };
   }
-  document.getElementById("signed-out").hidden = true;
-  document.getElementById("signed-in").hidden = false;
+  document.getElementById("signed-out").hidden = mode !== "signed-out";
+  document.getElementById("signed-in").hidden = mode === "signed-out";
   // Synthetic owner state enables inspection of the invitations section,
   // without an account, real tokens, network or production data.
   document.getElementById("invite-card").hidden = false;
@@ -99,6 +106,12 @@ export async function createBulbamAdapter() {
   const { setupInterface } = await import("../../web/js/ui.js");
   setupSettingsScreens();
   setupInterface();
+  // Attach existing handlers. All network and data-changing controls stay
+  // outside the safe activation allowlist below.
+  const { setupAuth } = await import("../../web/js/auth.js");
+  const { setupMessenger } = await import("../../web/js/messenger.js");
+  setupAuth();
+  setupMessenger();
 
   const locate = el => ({
     markup: staticLocation(el),
@@ -109,18 +122,36 @@ export async function createBulbamAdapter() {
   });
   const isNavigation = el => {
     if (el.disabled) return false;
-    return ["settings-button", "settings-close", "settings-back"].includes(el.id)
+    return ["settings-button", "settings-close", "settings-back",
+      "new-chat-button", "auth-register-button", "auth-forgot-button",
+      "auth-login-from-register", "auth-login-from-recovery"].includes(el.id)
       || el.hasAttribute("data-open-settings")
       || el.hasAttribute("data-settings-subpage");
   };
   const controls = () => describeElements(document, { locate, isNavigation });
 
+  // A deterministic initial state, without a live account or server.
+  const startState = () => {
+    document.getElementById("message-form").hidden = mode !== "composer";
+    document.getElementById("conversation-empty").hidden = mode === "composer";
+  };
+  startState();
   return {
-    environment: "Бульбам: виртуальный DOM (linkedom) + настоящие функции экранов настроек",
-    scope: "Главный экран, настройки, категории и вложенные страницы. Без сети, звонков, отправки и реального VoiceOver.",
+    environment: "Бульбам: виртуальный DOM (linkedom) + настоящие обработчики интерфейса",
+    scope: "Сценарий: " + mode + ". Без реального браузера, сети, звонков, отправки и VoiceOver.",
     async reset() {
       dialog.close();
       resetSettingsScreen();
+      document.getElementById("signed-out").hidden = mode !== "signed-out";
+      document.getElementById("signed-in").hidden = mode === "signed-out";
+      for (const id of ["login", "register", "recovery"]) {
+        document.getElementById("auth-view-" + id).hidden = id !== "login";
+      }
+      document.getElementById("user-search-panel").hidden = true;
+      document.getElementById("new-chat-button").setAttribute("aria-expanded", "false");
+      document.getElementById("message-form").hidden = mode !== "composer";
+      document.getElementById("conversation-empty").hidden = mode === "composer";
+      lastFocus = null;
       await Promise.resolve();
     },
     async inspect() {
@@ -129,9 +160,19 @@ export async function createBulbamAdapter() {
       const heading = document.getElementById("settings-title").textContent.trim();
       const category = [...document.querySelectorAll("[data-settings-screen]")]
         .find(el => isVisible(el))?.getAttribute("data-settings-screen") ?? null;
-      const name = !opened ? "Главный экран" : category ? "Настройки: " + heading : "Настройки: категории";
+      const auth = mode === "signed-out" && ["login", "register", "recovery"]
+        .find(id => !document.getElementById("auth-view-" + id).hidden);
+      const search = !document.getElementById("user-search-panel").hidden;
+      const name = opened ? (category ? "Настройки: " + heading : "Настройки: категории")
+        : auth ? "Вход и аккаунт: " + auth
+        : search ? "Главный экран: новый чат"
+        : mode === "composer" ? "Переписка: ввод сообщения" : "Главный экран";
       const signature = JSON.stringify([opened, category, entries.map(el => [el.key, el.name, el.state])]);
-      return { name, signature, elements: entries };
+      const focused = lastFocus && isVisible(lastFocus) ? {
+        name: lastFocus.getAttribute("aria-label") || lastFocus.textContent.trim().slice(0, 80),
+        id: lastFocus.id || null, visible: true
+      } : lastFocus ? { id: lastFocus.id || null, visible: false } : null;
+      return { name, signature, elements: entries, focused };
     },
     async activate(key) {
       const el = findControl(document, key);
@@ -149,6 +190,7 @@ export async function createBulbamAdapter() {
     },
     close() {
       window.HTMLElement.prototype.addEventListener = originalListen;
+      window.HTMLElement.prototype.focus = originalFocus;
       document.createElement = originalCreate;
       for (const [key, descriptor] of beforeGlobals) {
         if (descriptor) Object.defineProperty(globalThis, key, descriptor);

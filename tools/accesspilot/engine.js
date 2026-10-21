@@ -58,10 +58,20 @@ export async function explore(adapter, { maxDepth = 4, maxStates = 40, maxAction
       const result = await adapter.activate(target.key);
       const after = await adapter.inspect();
       const changed = before.signature !== after.signature;
+      if (result.ok && changed && after.focused?.visible === false) {
+        findings.push({ severity: "error", code: "focus-on-hidden-element",
+          screen: stateName, element: target.key, source: target.source,
+          message: "После перехода фокус остался на скрытом элементе: " + (after.focused.id || "без id") });
+      }
+      if (result.ok && !changed) {
+        findings.push({ severity: "warning", code: "navigation-without-state-change",
+          screen: stateName, element: target.key, source: target.source,
+          message: "Нажатие элемента навигации не изменило доступный экран." });
+      }
       actions.push({
         screen: stateName, path, element: target.key, name: target.name,
         source: target.source, attempted: true, ok: result.ok,
-        reason: result.reason ?? null, changed,
+        reason: result.reason ?? null, changed, focus: after.focused,
         result: after.name
       });
       if (!result.ok) {

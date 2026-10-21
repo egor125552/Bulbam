@@ -34,7 +34,7 @@ export function setupMessenger() {
   elements.newChatButton.addEventListener("click", toggleSearchPanel);
   elements.userSearchInput.addEventListener("input", scheduleUserSearch);
   elements.userSearchInput.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeSearchPanel();
+    if (event.key === "Escape") closeSearchPanel({ restoreFocus: true });
   });
   elements.messageForm.addEventListener("submit", sendCurrentMessage);
   elements.messageInput.addEventListener("keydown", (event) => {
@@ -109,15 +109,16 @@ function toggleSearchPanel() {
     elements.userSearchInput.focus();
     return;
   }
-  closeSearchPanel();
+  closeSearchPanel({ restoreFocus: true });
 }
 
-function closeSearchPanel() {
+function closeSearchPanel({ restoreFocus = false } = {}) {
   clearTimeout(searchTimer);
   elements.userSearchPanel.hidden = true;
   elements.newChatButton.setAttribute("aria-expanded", "false");
   elements.userSearchInput.value = "";
   elements.userSearchResults.replaceChildren();
+  if (restoreFocus) elements.newChatButton.focus();
 }
 
 function scheduleUserSearch() {
