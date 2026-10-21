@@ -29,7 +29,9 @@ function addOrigins(result){
 try{
   browser=await launchHeadless();
   for(const signedIn of [false,true]){
-    const context=await browser.newContext({serviceWorkers:"block",permissions:[]});
+    const mobile=process.env.ACCESSPILOT_MOBILE==="1";
+    const context=await browser.newContext({serviceWorkers:"block",permissions:[],
+      ...(mobile?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{})});
     await context.addInitScript(installSourceTracking);
     await context.addInitScript(userId=>localStorage.setItem("bulbam.welcome.v1."+userId,"yes"),host.account.userId);
     if(signedIn)await context.addCookies([{name:"bulbam_session",value:host.cookie,url:host.baseURL,httpOnly:true,sameSite:"Lax"}]);

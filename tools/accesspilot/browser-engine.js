@@ -7,10 +7,10 @@ export async function inspectBrowser(page) {
   return await page.evaluate(selector => {
     const norm = value => String(value || "").replace(/\s+/g, " ").trim();
     const activeDialog = [...document.querySelectorAll('dialog[open],[role="dialog"][aria-modal="true"]')].find(el => el.getClientRects().length) ?? null;
-    function visible(node) {
+    function visible(node, ignoreAria=false) {
       if (activeDialog && !activeDialog.contains(node)) return false;
       for (let p=node; p && p.nodeType===1; p=p.parentElement) {
-        if (p.hidden || p.getAttribute('aria-hidden')==='true' || p.inert) return false;
+        if (p.hidden || (!ignoreAria && p.getAttribute('aria-hidden')==='true') || p.inert) return false;
         const style=getComputedStyle(p);
         if (style.display==='none' || style.visibility==='hidden') return false;
       }
@@ -54,11 +54,12 @@ export async function inspectBrowser(page) {
       }
       return parts.join(' > ');
     }
-    const elements=[...document.querySelectorAll(selector)].filter(visible)
+    const elements=[...document.querySelectorAll(selector)].filter(node=>visible(node,true))
       .filter(el=>!el.closest('button,a[href]') || el.matches('button,a[href]'));
     const state=elements.map(el=>{
       const issues=[];
       const roleName=role(el), label=name(el);
+      if(!visible(el))issues.push('interactive-hidden-from-screen-reader');
       if(!label && roleName!=='generic')issues.push('missing-name');
       if(el.getAttribute('aria-labelledby'))
         for(const id of el.getAttribute('aria-labelledby').split(/\s+/))

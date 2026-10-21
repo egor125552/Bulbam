@@ -12,6 +12,7 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
         <section id="details" hidden>
           <button id="blank" aria-label=""></button>
           <input id="unnamed" placeholder="Подсказка">
+          <div aria-hidden="true"><button id="invisible">Скрытая</button></div>
         </section>
       </body></html>`;
       const reset=()=>page.setContent(html);
@@ -19,6 +20,9 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
       expect(report.screens.length).toBeGreaterThanOrEqual(2);
       expect(report.findings).toContainEqual(expect.objectContaining({code:"missing-name",element:"#blank"}));
       expect(report.findings).toContainEqual(expect.objectContaining({code:"missing-name",element:"#unnamed"}));
+      expect(report.findings).toContainEqual(expect.objectContaining({
+        code:"interactive-hidden-from-screen-reader",element:"#invisible"
+      }));
       expect(report.actions).toContainEqual(expect.objectContaining({name:"Раздел",success:true,changed:true}));
       const snapshot=await inspectBrowser(page);
       expect(snapshot.elements).toEqual(expect.any(Array));
