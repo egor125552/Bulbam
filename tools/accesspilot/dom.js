@@ -3,13 +3,13 @@
 const SELECTOR = 'button, input, select, textarea, a[href], summary, [role="button"], [role="switch"], [role="checkbox"], [tabindex]:not([tabindex="-1"])';
 
 function clean(text) { return (text ?? "").replace(/\s+/g, " ").trim(); }
-export function isVisible(node, activeDialog = undefined) {
+export function isVisible(node, activeDialog = undefined, ignoreAriaHidden = false) {
   // Lookup once per snapshot: doing a full DOM query per element is too costly.
   if (activeDialog === undefined) activeDialog = node.ownerDocument?.querySelector("dialog[open]") ?? null;
   // Native modal dialogs make the rest of the page inert to screen readers.
   if (activeDialog && node !== activeDialog && !activeDialog.contains(node)) return false;
   for (let p = node; p && p.nodeType === 1; p = p.parentElement) {
-    if (p.hidden || p.hasAttribute("hidden") || p.getAttribute("aria-hidden") === "true") return false;
+    if (p.hidden || p.hasAttribute("hidden") || (p.getAttribute("aria-hidden") === "true" && !ignoreAriaHidden)) return false;
     if (p.getAttribute("style")?.match(/(?:display\s*:\s*none|visibility\s*:\s*hidden)/i)) return false;
     if (p.tagName === "DIALOG" && !p.open && !p.hasAttribute("open")) return false;
     if (p.tagName === "DETAILS" && !p.open && p !== node && !p.querySelector("summary")?.contains(node)) return false;
@@ -68,7 +68,12 @@ function roleOf(node) {
 export function describeElements(document, { locate = () => null, isNavigation = () => false } = {}) {
   const keys = new Map();
   const modal = document.querySelector("dialog[open]");
-  return [...document.querySelectorAll(SELECTOR)].filter(node => isVisible(node, modal)).map((node, index) => {
+  // An otherwise active control hidden only via aria-hidden is a real
+  // accessibility hazard, not a reason to silently omit it from the report.
+  return [...document.querySelectorAll(SELECTOR)]
+    .filter(node => isVisible(node, modal, true))
+    .map((node, index) => {
+    const suppressed = !isVisible(node, modal);
     const role = roleOf(node);
     const name = accessibleName(node, document);
     const source = locate(node);
@@ -82,6 +87,10 @@ export function describeElements(document, { locate = () => null, isNavigation =
     if (stable) keys.set(stable, ordinal + 1);
     const key = stable ? stable + (ordinal ? ":nth(" + ordinal + ")" : "") : "dom-index:" + index;
     const issues = [];
+    if (suppressed) issues.push({
+      code: "focusable-hidden-from-screen-reader", severity: "error",
+      message: "Интерактивный элемент скрыт от скринридера с помощью aria-hidden."
+    });
     if (node.hasAttribute("aria-labelledby")) {
       for (const id of node.getAttribute("aria-labelledby").trim().split(/\s+/)) {
         if (id && !document.getElementById(id)) issues.push({
@@ -108,7 +117,7 @@ export function describeElements(document, { locate = () => null, isNavigation =
       issues.push({ code: "placeholder-is-not-label", severity: "warning",
         message: "Подсказка в поле ввода не заменяет доступного названия." });
     }
-    const state = node.disabled ? "disabled" : node.getAttribute("aria-pressed") !== null
+    const state = suppressed ? "aria-hidden" : node.disabled ? "disabled" : node.getAttribute("aria-pressed") !== null
       ? "pressed=" + node.getAttribute("aria-pressed") : node.getAttribute("aria-expanded") !== null
       ? "expanded=" + node.getAttribute("aria-expanded") : node.getAttribute("aria-checked") !== null
       ? "checked=" + node.getAttribute("aria-checked") : "enabled";
@@ -119,7 +128,7 @@ export function describeElements(document, { locate = () => null, isNavigation =
       : state.replace("pressed=", "нажата: ").replace("expanded=", "раскрыта: ").replace("checked=", "отмечена: ");
     return { key, index, role, name: name.value, nameOrigin: name.origin,
       predictedAnnouncement: clean([name.value || "(без названия)", russianRole, russianState].filter(Boolean).join(", ")),
-      state, source, action: isNavigation(node) ? "navigate" : "inspect-only", issues };
+      state, source, action: !suppressed && isNavigation(node) ? "navigate" : "inspect-only", issues };
   });
 }
 export function findControl(document, key) {

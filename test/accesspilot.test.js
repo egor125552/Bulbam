@@ -14,6 +14,15 @@ describe("AccessPilot autonomous test engine", () => {
     expect(results[1].issues).toHaveLength(0);
   });
 
+  test("finds focusable controls hidden from screen readers", () => {
+    const { document } = parseHTML('<html><body><div aria-hidden="true"><button id="lost">Недостижимая кнопка</button></div></body></html>');
+    const result = describeElements(document);
+    expect(result).toContainEqual(expect.objectContaining({
+      key: "#lost", action: "inspect-only",
+      issues: expect.arrayContaining([expect.objectContaining({ code: "focusable-hidden-from-screen-reader" })])
+    }));
+  });
+
   test("respects native modal semantics, even without a visible browser window", () => {
     const { document } = parseHTML('<html><body><button id="outside">Главная</button><dialog open><button id="inside">Внутри</button></dialog></body></html>');
     expect(isVisible(document.getElementById("outside"))).toBe(false);
