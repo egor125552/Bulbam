@@ -129,7 +129,7 @@ async function fillNearbyForm(page, locator) {
       info.autocomplete.includes('username')?'accesspilot_tester':
       info.type==='search'?'pilot':'AccessPilot test input';
     if(info.minlength>value.length)value=value.padEnd(info.minlength,'x');
-    await field.fill(value,{timeout:1300});
+    await field.fill(value,{timeout:3200});
     count++;
   }
   return count;
@@ -145,7 +145,7 @@ export async function clickBrowser(page, target) {
       const current=await loc.inputValue();
       const next=target.options.find(x=>x!==current && x!=='')??current;
       if(next===current)return {ok:false,reason:'no-other-option'};
-      await loc.selectOption(next,{timeout:1300});
+      await loc.selectOption(next,{timeout:3200});
     } else if(target.kind==='fill') {
       if(target.inputType==='file')return {ok:false,reason:'file-input-requires-fixture'};
       const value=target.inputType==='email'?'pilot@example.test':
@@ -153,11 +153,11 @@ export async function clickBrowser(page, target) {
         target.inputType==='password'?'AccessPilot-Isolated-2026!':
         target.inputType==='url'?'https://example.test':
         target.inputType==='search'?'pilot':'Тестовое сообщение AccessPilot';
-      await loc.fill(value,{timeout:1300});
+      await loc.fill(value,{timeout:3200});
       if(target.inputType==='search')await page.waitForTimeout(270);
     } else {
       await fillNearbyForm(page,loc);
-      await loc.click({timeout:1300});
+      await loc.click({timeout:3200});
     }
     await page.waitForTimeout(110);
     return {ok:true};
@@ -166,7 +166,7 @@ export async function clickBrowser(page, target) {
     // Test their real keyboard activation rather than declare them broken.
     if (target.kind === "click") {
       try {
-        await loc.focus({timeout:700});
+        await loc.focus({timeout:1200});
         await page.keyboard.press("Enter");
         await page.waitForTimeout(80);
         return {ok:true,via:"keyboard"};

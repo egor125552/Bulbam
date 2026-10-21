@@ -20,6 +20,21 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
     } finally { await browser.close(); }
   },30000);
 
+  test("explores transient child screen before an irreversible trigger disappears", async () => {
+    const browser=await launchHeadless();
+    try {
+      const page=await browser.newPage();
+      const html=`<html><body>
+        <button id="open" onclick="if(window.alreadyOpened)return;window.alreadyOpened=true;document.querySelector('#child').hidden=false">Start</button>
+        <section id="child" hidden><button id="inside" onclick="this.textContent='Clicked'">Inside</button></section>
+      </body></html>`;
+      const reset=()=>page.setContent(html);
+      const report=await crawlBrowser({page,reset,depthFirst:true,maxStates:4,maxActions:10,maxDepth:3});
+      expect(report.actions.some(a=>a.selector==="#inside"&&a.success)).toBe(true);
+      await page.close();
+    } finally {await browser.close();}
+  },30000);
+
   test("discovers and activates a nested screen without a button map", async () => {
     const browser=await launchHeadless();
     try {

@@ -55,13 +55,20 @@ export async function launchBulbamTestHost() {
     await harness.close();
     throw error;
   }
-  // Add a real direct chat and a non-sensitive synthetic message through the
-  // actual backend so the browser renders conversations automatically.
+  // Add a real direct chat and synthetic messages through the isolated
+  // backend so the browser renders conversation and message actions.
   const open = await harness.fetch("/api/v1/chats/direct", {
     method: "POST", headers: { "content-type": "application/json", cookie: "bulbam_session=" + cookie },
     body: JSON.stringify({ userId: demo.userId })
   });
   if (!open.ok) throw new Error("Unable to seed isolated direct chat: " + await open.text());
+  const seededChat=(await open.json()).chat;
+  const sample=await harness.fetch(`/api/v1/chats/${seededChat.conversationId}/messages`,{
+    method:"POST",headers:{"content-type":"application/json",cookie:"bulbam_session="+peerCookie},
+    body:JSON.stringify({clientMessageId:"accesspilot-fixture-message-1",
+      text:"Привет! Это тестовое сообщение AccessPilot в отдельной базе."})
+  });
+  if(!sample.ok)throw new Error("Failed to seed fixture message: "+await sample.text());
 
   const base = resolve("web");
   const server = http.createServer(async (request, response) => {

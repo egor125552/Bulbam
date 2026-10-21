@@ -5,7 +5,7 @@ import { inspectBrowser, clickBrowser } from "./browser-engine.js";
 // buttons that were already executed.
 export async function crawlBrowser({
   page, reset, maxStates=45, maxActions=120, maxDepth=5, name="browser",
-  onProgress=()=>{}, onCheckpoint=()=>{}, initialState=null
+  onProgress=()=>{}, onCheckpoint=()=>{}, initialState=null, depthFirst=false
 }) {
   const queue=initialState?.queue ?? [{path:[],nextAction:0}];
   const visited=new Set(initialState?.visited ?? []);
@@ -27,12 +27,18 @@ export async function crawlBrowser({
     version:1,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys]
   });
   async function reach(path) {
-    await reset();
-    for(const step of path){
-      const result=await clickBrowser(page,step);
-      if(!result.ok)return result;
+    let failure=null;
+    for(let attempt=0;attempt<3;attempt++){
+      await reset();
+      let ok=true;
+      for(const step of path){
+        const result=await clickBrowser(page,step);
+        if(!result.ok){failure=result;ok=false;break;}
+      }
+      if(ok)return {ok:true};
+      await page.waitForTimeout(150*(attempt+1));
     }
-    return {ok:true};
+    return failure||{ok:false,reason:"unable to reproduce path"};
   }
   async function progress() {
     await onProgress({name,states:screens.length,actions:actions.length,
@@ -41,7 +47,12 @@ export async function crawlBrowser({
   while(queue.length){
     if(screens.length>=maxStates||actions.length>=maxActions){truncated=true;break;}
     const task=queue.shift(),path=task.path;
-    const reached=await reach(path);
+    let atNewChild=false;
+    if(task.reuseCurrent){
+      const current=await inspectBrowser(page);
+      atNewChild=graphKey(current)===task.expectedGraph;
+    }
+    const reached=atNewChild?{ok:true}:await reach(path);
     if(!reached.ok){
       findings.push({code:"route-unreachable",path:path.map(el=>el.selector),reason:reached.reason});
       await onCheckpoint(checkpoint());
@@ -73,6 +84,7 @@ export async function crawlBrowser({
       el.kind==="select"?1:el.kind==="click"?2:3;
     const targets=[...view.elements].sort((a,b)=>priority(a)-priority(b));
     let paused=false;
+    let descended=false;
     for(let index=task.nextAction;index<targets.length;index++){
       if(actions.length>=maxActions){
         queue.unshift({path,nextAction:index});
@@ -113,20 +125,33 @@ export async function crawlBrowser({
         apiResponses,announcements:after.announcements,after:after.title,
         focus:after.focus,source:target.source});
       const shape=state=>JSON.stringify(state.elements.map(el=>[el.selector,el.role,el.name,el.disabled]));
-      if(result.ok&&shape(before)!==shape(after)&&!visited.has(graphKey(after)))
-        queue.push({path:[...path,target],nextAction:0});
+      if(result.ok&&shape(before)!==shape(after)&&!visited.has(graphKey(after))){
+        if(depthFirst){
+          queue.unshift({path,nextAction:index+1});
+          queue.unshift({path:[...path,target],nextAction:0,
+            reuseCurrent:true,expectedGraph:graphKey(after)});
+          descended=true;
+        }else{
+          queue.push({path:[...path,target],nextAction:0});
+        }
+      }
       if(actions.length%10===0){
         await progress();
-        await onCheckpoint({...checkpoint(),queue:[{path,nextAction:index+1},...queue]});
+        await onCheckpoint(descended?checkpoint():{
+          ...checkpoint(),queue:[{path,nextAction:index+1},...queue]
+        });
       }
+      if(descended)break;
     }
     await progress();
     await onCheckpoint(checkpoint());
     if(paused)break;
   }
+  const blockedRoutes=findings.filter(f=>f.code==="route-unreachable"||f.code==="route-unreachable-before-action").length;
   return {
     name,screens,actions,findings,checkpoint:checkpoint(),
-    summary:{screens:screens.length,actions:actions.length,
+    summary:{screens:screens.length,actions:actions.length,blockedRoutes,
+      complete:!truncated&&blockedRoutes===0,
       elements:screens.reduce((n,screen)=>n+screen.elements.length,0),
       issues:findings.length,changed:actions.filter(action=>action.changed).length,
       truncated,pending:queue.length}
