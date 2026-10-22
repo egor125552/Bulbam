@@ -39,9 +39,10 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
       && specific.includes(p.selector)
     )).toEqual([]);
     const listRoles=await page.locator('#message-list > li').evaluateAll(items=>
-      items.map(el=>el.getAttribute('role'))
+      items.map(el=>({role:el.getAttribute('role'),html:el.outerHTML.slice(0,350)}))
     );
-    expect(listRoles.every(role=>!role || role==='listitem')).toBe(true);
+    expect(listRoles.every(item=>!item.role || item.role==='listitem'),
+      JSON.stringify(listRoles)).toBe(true);
     await context.close();
   }finally{if(browser)await browser.close();await host.close();}
 },35000);
