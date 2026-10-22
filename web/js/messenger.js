@@ -368,8 +368,9 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
     if (currentDay !== lastDay) {
       const separator = document.createElement("li");
       separator.className = "message-day";
-      separator.setAttribute("role", "separator");
-      separator.setAttribute("aria-label", dayLabel(message.createdAt));
+      // An <ol> must have list items as direct accessibility children.
+      // role=separator removes the <li> listitem semantics (WCAG list).
+      separator.setAttribute("role", "listitem");
       separator.textContent = dayLabel(message.createdAt);
       list.append(separator);
       lastDay = currentDay;
@@ -378,6 +379,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
     const item = document.createElement("li");
     const mine = message.senderUserId === account?.userId;
     item.className = `message ${mine ? "message-mine" : "message-theirs"}`;
+    item.setAttribute("role", "listitem");
     item.dataset.messageId = message.messageId;
     if (message.localState) item.classList.add(`message-${message.localState}`);
 
