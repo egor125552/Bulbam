@@ -677,7 +677,17 @@ async function deleteRecoverableDraft() {
 }
 
 function hideDraftPanel() {
-  if (draftPanel) draftPanel.hidden = true;
+  if (!draftPanel) return;
+  const containedFocus = draftPanel.contains(document.activeElement);
+  draftPanel.hidden = true;
+  // The delete/send buttons disappear with the recovered draft. Transfer
+  // keyboard and screen-reader focus to the composer instead of leaving it
+  // attached to a hidden button.
+  if (containedFocus) {
+    const target = [recordButton, document.querySelector("#message-input")]
+      .find((node) => node && !node.disabled && !node.hidden && node.getClientRects().length > 0);
+    target?.focus({ preventScroll: true });
+  }
 }
 
 function setStartingUi(active) {
