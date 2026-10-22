@@ -49,7 +49,7 @@ function updateQuickCallMode() {
   if (!button) return;
   const profile=getSelectedAudioProfile();
   button.textContent=`Микрофон: ${profile.label}`;
-  button.setAttribute("aria-label",`Режим микрофона: ${profile.label}. Нажмите, чтобы переключить.`);
+  button.setAttribute("aria-label",`Микрофон: ${profile.label}. Нажмите, чтобы переключить режим микрофона.`);
 }
 
 export function getSelectedAudioProfile() {
