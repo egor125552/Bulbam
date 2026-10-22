@@ -7,7 +7,8 @@ export function controlCoverage(reports=[]){
         const id=item.selector;
         if(!id)continue;
         const saved=elements.get(id)??{selector:id,name:item.name??"",role:item.role??"",
-          seen:0,visibleEver:false,exposedEver:false,attempted:false,activated:false};
+          seen:0,visibleEver:false,exposedEver:false,attempted:false,activated:false,readOnlyOnly:false};
+        saved.readOnlyOnly=saved.seen===0?!!item.readOnly:(saved.readOnlyOnly&&!!item.readOnly);
         saved.seen++;
         saved.visibleEver ||= item.visible??true;
         saved.exposedEver ||= item.exposed??true;
@@ -35,7 +36,8 @@ export function controlCoverage(reports=[]){
     attempted:controls.filter(x=>x.attempted).length,
     activated:controls.filter(x=>x.activated).length,
     neverVisible:controls.filter(x=>!x.visibleEver),
-    untested:controls.filter(x=>!x.attempted),
+    readOnly:controls.filter(x=>x.readOnlyOnly),
+    untested:controls.filter(x=>!x.attempted&&!x.readOnlyOnly),
     failed:controls.filter(x=>x.attempted&&!x.activated),
     controls
   };
