@@ -25,16 +25,25 @@ test.skipIf(!browserReady)(
       await page.locator(host.readySelector).first().click();
       await page.locator('#message-form').waitFor({state:'visible',timeout:10000});
       await page.evaluate(async accountId=>{
-        const {createVoiceDraft}=await import('/js/voice-drafts.js');
-        const {getSelectedChat}=await import('/js/messenger.js');
-        const conversationId=getSelectedChat()?.conversationId;
+        const conversationId=document.getElementById('message-form')?.dataset.conversationId;
         if(!conversationId)throw new Error('Seeded chat not selected');
-        const now=Date.now();
-        await createVoiceDraft({
-          id:'accesspilot-focus-'+now,accountId,conversationId,
-          state:'interrupted',startedAt:now-1000,lastChunkAt:now,
-          durationMs:1000,totalBytes:0,mimeType:'audio/webm'
+        const request=indexedDB.open('bulbam-voice-v1',2);
+        const database=await new Promise((resolve,reject)=>{
+          request.onsuccess=()=>resolve(request.result);
+          request.onerror=()=>reject(request.error);
         });
+        const now=Date.now();
+        await new Promise((resolve,reject)=>{
+          const transaction=database.transaction('drafts','readwrite');
+          transaction.objectStore('drafts').put({
+            id:'accesspilot-focus-'+now,accountId,conversationId,
+            state:'interrupted',startedAt:now-1000,lastChunkAt:now,
+            durationMs:1000,totalBytes:0,mimeType:'audio/webm'
+          });
+          transaction.oncomplete=()=>resolve();
+          transaction.onerror=()=>reject(transaction.error);
+        });
+        database.close();
         window.dispatchEvent(new CustomEvent('bulbam:chat-changed',{
           detail:{chat:{conversationId}}
         }));
