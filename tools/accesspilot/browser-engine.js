@@ -8,7 +8,13 @@ export async function inspectBrowser(page) {
     const norm = value => String(value || "").replace(/\s+/g, " ").trim();
     const activeDialog = [...document.querySelectorAll('dialog[open],[role="dialog"][aria-modal="true"]')].find(el => el.getClientRects().length) ?? null;
     function visible(node, ignoreAria=false) {
-      if (activeDialog && !activeDialog.contains(node)) return false;
+      if(activeDialog){
+        let within=false;
+        for(let p=node;p&&p.nodeType===1;p=p.parentElement||p.getRootNode()?.host){
+          if(p===activeDialog){within=true;break;}
+        }
+        if(!within)return false;
+      }
       for (let p=node; p && p.nodeType===1; p=p.parentElement||p.getRootNode()?.host) {
         if (p.hidden || (!ignoreAria && p.getAttribute('aria-hidden')==='true') || p.inert) return false;
         const style=getComputedStyle(p);
@@ -35,7 +41,7 @@ export async function inspectBrowser(page) {
       if(el.getAttribute('role'))return el.getAttribute('role');
       if(el.tagName==='BUTTON')return 'button';
       if(el.tagName==='A')return 'link';
-      if(el.tagName==='TEXTAREA')return 'textbox';
+      if(el.tagName==='TEXTAREA'||el.isContentEditable)return 'textbox';
       if(el.tagName==='SELECT')return 'combobox';
       if(el.tagName==='SUMMARY')return 'button';
       if(el.tagName==='INPUT')return ['checkbox','radio','range'].includes(el.type)?el.type:
@@ -49,7 +55,7 @@ export async function inspectBrowser(page) {
       const parts=[];
       for(let n=el;n && n.tagName && n!==document.documentElement;n=n.parentElement){
         const parent=n.parentElement;
-        if(!parent)break;
+        if(!parent){parts.unshift(n.tagName.toLowerCase());break;}
         const same=[...parent.children].filter(e=>e.tagName===n.tagName);
         parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+(same.indexOf(n)+1)+')');
         if(parent.id){parts.unshift('#'+CSS.escape(parent.id));break;}
