@@ -94,7 +94,13 @@ export async function inspectBrowser(page) {
       };
     });
     const extraIssues=[];
-    for(const canvas of discoverAll(document).filter(el=>el.tagName==='CANVAS')){
+    function discoverCanvases(root){
+      const list=[...root.querySelectorAll('canvas')];
+      for(const node of root.querySelectorAll('*'))if(node.shadowRoot)
+        list.push(...discoverCanvases(node.shadowRoot));
+      return list;
+    }
+    for(const canvas of discoverCanvases(document)){
       if(!visible(canvas))continue;
       const labelled=norm(canvas.getAttribute('aria-label')||
         canvas.getAttribute('title')||canvas.textContent);
