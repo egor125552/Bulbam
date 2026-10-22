@@ -84,6 +84,8 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
       const reset=()=>page.setContent(html);
       const report=await crawlBrowser({page,reset,maxStates:5,maxActions:15,maxDepth:3});
       expect(report.screens.length).toBeGreaterThanOrEqual(2);
+      expect(report.screens.find(screen => screen.path.length > 0)?.pathSteps)
+        .toContainEqual(expect.objectContaining({selector:"#open"}));
       expect(report.findings).toContainEqual(expect.objectContaining({code:"missing-name",element:"#blank"}));
       expect(report.findings).toContainEqual(expect.objectContaining({code:"missing-name",element:"#unnamed"}));
       expect(report.findings).toContainEqual(expect.objectContaining({
