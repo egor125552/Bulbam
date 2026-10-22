@@ -18,3 +18,16 @@ test("never-visible elements are explicitly reported separately from failed clic
  expect(result.failed.map(x=>x.selector)).toEqual(["#locked"]);
  expect(result.untested.map(x=>x.selector)).toEqual(["#answer"]);
 });
+
+test("read-only recovery information is classified separately from untested controls",()=>{
+  const result=controlCoverage([{
+    screens:[{inventory:[
+      {selector:"#recovery-codes-text",role:"textbox",visible:true,exposed:true,readOnly:true},
+      {selector:"#editable",role:"textbox",visible:true,exposed:true,readOnly:false},
+      {selector:"#hidden",role:"button",visible:false,exposed:false}
+    ]}],actions:[]
+  }]);
+  expect(result.readOnly.map(x=>x.selector)).toEqual(["#recovery-codes-text"]);
+  expect(result.untested.map(x=>x.selector)).toEqual(["#editable","#hidden"]);
+  expect(result.total).toBe(3);
+});
