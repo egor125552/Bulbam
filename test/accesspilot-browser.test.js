@@ -16,7 +16,10 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
           <canvas id="only-pixels" width="100" height="40"></canvas>
           <script>
             const shadow=document.querySelector('#widget-host').attachShadow({mode:'open'});
-            shadow.innerHTML='<button id="inside" onclick="this.textContent=\'Done\'">Execute</button>';
+            shadow.innerHTML='<button id="inside">Execute</button>';
+            shadow.querySelector('button').addEventListener('click',event=>{
+              event.currentTarget.textContent='Done';
+            });
           </script>
         </main></body></html>`;
       await page.setContent(html);
