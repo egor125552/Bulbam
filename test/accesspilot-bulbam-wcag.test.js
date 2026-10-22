@@ -32,6 +32,16 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
       document.getElementById('voice-pause-button').hidden=false;
       document.getElementById('call-audio-cycle').hidden=false;
     });
+    // Audio profile changes its visible text dynamically. Every state must
+    // retain the exact visible label inside the accessible name.
+    const micButton=page.locator('#call-audio-cycle');
+    for(let mode=0;mode<4;mode++){
+      const visibleText=(await micButton.innerText()).trim();
+      const accessibleLabel=await micButton.getAttribute('aria-label');
+      expect((accessibleLabel||visibleText).includes(visibleText),
+        'Visible call audio label must be present in the accessible name').toBe(true);
+      await micButton.click();
+    }
     const conversationProblems=await auditAccessibility(page);
     const specific=['#message-list','#voice-record-button','#voice-pause-button','#call-audio-cycle'];
     expect(conversationProblems.filter(p=>
