@@ -18,6 +18,28 @@ export async function createEnvironment(){
       }
     },
     async reset({page,context,scenario,url}){
+      // A call is a persistent fixture-side resource. Merely reloading the
+      // browser keeps the caller "busy", so subsequent independent explorations
+      // cannot reproduce the outgoing-call controls. Clean up *test data*
+      // before resetting the UI; this contains no application-button map.
+      if(scenario.profile==="user"){
+        try{
+          const activeResponse=await context.request.get(
+            new URL("/api/v1/calls/active",url).href,{timeout:3500});
+          if(activeResponse.ok()){
+            const {call}=await activeResponse.json();
+            if(call?.conversationId&&call?.callId){
+              await context.request.post(
+                new URL("/api/v1/chats/"+encodeURIComponent(call.conversationId)
+                  +"/calls/"+encodeURIComponent(call.callId)+"/end",url).href,
+                {timeout:3500});
+            }
+          }
+        }catch{
+          // A fixture account may have changed credentials. The existing
+          // authenticated-session recovery below handles that case.
+        }
+      }
       let error;
       for(let attempt=0;attempt<3;attempt++){
         try{
