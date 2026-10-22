@@ -17,7 +17,7 @@ permissions:
 jobs:
   autonomous-accessibility:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 48
     steps:
       - name: Checkout Bulbam
         uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
         run: |
           npm run check
           npm run check:web
-          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-detailed-help.test.js --maxWorkers=2 --reporter=dot
+          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js --maxWorkers=2 --reporter=dot
       - name: Explore signed-out screens
         timeout-minutes: 6
         env:
@@ -44,13 +44,13 @@ jobs:
           ACCESSPILOT_MAX_STATES: '100'
         run: npm run test:accessibility
       - name: Explore signed-in screens and every discoverable button
-        timeout-minutes: 17
+        timeout-minutes: 35
         env:
           ACCESSPILOT_SCENARIOS: signed-in
           ACCESSPILOT_FAKE_MEDIA: '1'
           ACCESSPILOT_EXHAUSTIVE: '1'
-          ACCESSPILOT_MAX_ACTIONS: '360'
-          ACCESSPILOT_MAX_STATES: '180'
+          ACCESSPILOT_MAX_ACTIONS: '650'
+          ACCESSPILOT_MAX_STATES: '240'
         run: npm run test:accessibility
       - name: Print coverage and unresolved controls
         if: always()
