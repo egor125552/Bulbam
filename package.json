@@ -10,13 +10,15 @@
     "check:web": "for f in web/app.js web/sw.js web/js/*.js; do node --check \"$f\" || exit 1; done",
     "check:worker": "wrangler deploy --dry-run",
     "test": "vitest run",
-    "test:accessibility": "node tools/accesspilot/run-browser.js",
+    "test:accessibility": "node tools/accesspilot/cli.js --config tools/accesspilot/accesspilot.project.json --output accesspilot-report",
     "test:accessibility:virtual": "node tools/accesspilot/run.js",
     "test:registration": "vitest run test/registration-smoke.test.js --reporter=verbose",
     "test:messaging": "vitest run test/messaging-smoke.test.js --reporter=verbose",
     "test:voice": "vitest run test/voice-messages-smoke.test.js --reporter=verbose",
     "test:calls": "vitest run test/calls-smoke.test.js --reporter=verbose",
-    "verify": "npm run check && npm run check:web && npm run check:worker && npm test"
+    "verify": "npm run check && npm run check:web && npm run check:worker && npm test",
+    "test:accessibility:legacy": "node tools/accesspilot/run-browser.js",
+    "test:accessibility:site": "node tools/accesspilot/cli.js"
   },
   "dependencies": {
     "@simplewebauthn/server": "14.0.3",
