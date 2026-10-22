@@ -70,7 +70,13 @@ export async function inspectBrowser(page) {
       }
       return matches;
     }
-    const elements=discoverAll(document).filter(node=>visible(node,true))
+    const candidates=discoverAll(document);
+    const inventory=candidates.map(el=>({
+      selector:path(el),name:name(el),role:role(el),
+      visible:visible(el,true),exposed:visible(el),
+      disabled:!!el.disabled
+    }));
+    const elements=candidates.filter(node=>visible(node,true))
       .filter(el=>!el.closest('button,a[href]') || el.matches('button,a[href]'));
     const state=elements.map(el=>{
       const issues=[];
@@ -120,6 +126,7 @@ export async function inspectBrowser(page) {
     const announcements=[...document.querySelectorAll('[role="status"],[role="alert"],[aria-live]')]
       .filter(visible).map(node=>norm(node.textContent).slice(0,180)).filter(Boolean).slice(-12);
     return {
+      inventory,
       issues:extraIssues,
       announcements,
       title: activeDialog?.getAttribute('aria-label') || activeDialog?.querySelector('h1,h2,h3')?.textContent?.trim()
