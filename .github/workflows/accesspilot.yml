@@ -1,0 +1,81 @@
+name: AccessPilot autonomous audit
+on:
+  push:
+    branches:
+      - feature/accesspilot-virtual-accessibility
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'tools/accesspilot/**'
+      - 'test/accesspilot*'
+      - '.github/workflows/accesspilot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  autonomous-accessibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Bulbam
+        uses: actions/checkout@v4
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test source and universal browser explorer
+        run: |
+          npm run check
+          npm run check:web
+          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js --maxWorkers=2 --reporter=dot
+      - name: Explore signed-out screens
+        timeout-minutes: 6
+        env:
+          ACCESSPILOT_SCENARIOS: signed-out
+          ACCESSPILOT_EXHAUSTIVE: '1'
+          ACCESSPILOT_MAX_ACTIONS: '175'
+          ACCESSPILOT_MAX_STATES: '100'
+        run: npm run test:accessibility
+      - name: Explore signed-in screens and every discoverable button
+        timeout-minutes: 17
+        env:
+          ACCESSPILOT_SCENARIOS: signed-in
+          ACCESSPILOT_FAKE_MEDIA: '1'
+          ACCESSPILOT_EXHAUSTIVE: '1'
+          ACCESSPILOT_MAX_ACTIONS: '360'
+          ACCESSPILOT_MAX_STATES: '180'
+        run: npm run test:accessibility
+      - name: Print coverage and unresolved controls
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from 'node:fs';
+          for (const scenario of ['signed-out','signed-in']) {
+            const filename = 'accesspilot-report/Полный отчёт браузерного тестирования Бульбама-' + scenario + '.json';
+            if (!existsSync(filename)) { console.log(scenario, 'NO REPORT'); continue; }
+            for (const result of JSON.parse(readFileSync(filename, 'utf8'))) {
+              console.log(scenario, result.summary);
+              for (const finding of result.findings) console.log('FINDING', JSON.stringify(finding));
+            }
+            const coverage = 'accesspilot-report/Покрытие элементов Бульбама-' + scenario + '.json';
+            if (existsSync(coverage)) {
+              const report = JSON.parse(readFileSync(coverage, 'utf8'));
+              console.log('COVERAGE', scenario, report.totalStaticControls, report.activated);
+              for (const item of report.notActivated) console.log('UNTESTED', item.file + ':' + item.line, item.id);
+            }
+          }
+          NODE
+      - name: Upload detailed accessibility reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accesspilot-reports
+          path: accesspilot-report/
+          if-no-files-found: warn
