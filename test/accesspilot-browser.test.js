@@ -6,6 +6,30 @@ import { launchBulbamTestHost } from "../tools/accesspilot/browser-host.js";
 import { installAccessibilityAudit } from "../tools/accesspilot/audit.js";
 
 describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-browser accessibility explorer", () => {
+  test("finds unnamed canvas and explores an open Shadow DOM widget",async()=>{
+    const browser=await launchHeadless();
+    try{
+      const page=await browser.newPage();
+      const html=`<!doctype html><html lang="en"><head><title>Widgets</title></head>
+        <body><main>
+          <div id="widget-host"></div>
+          <canvas id="only-pixels" width="100" height="40"></canvas>
+          <script>
+            const shadow=document.querySelector('#widget-host').attachShadow({mode:'open'});
+            shadow.innerHTML='<button id="inside" onclick="this.textContent=\'Done\'">Execute</button>';
+          </script>
+        </main></body></html>`;
+      await page.setContent(html);
+      const snapshot=await inspectBrowser(page);
+      expect(snapshot.elements.some(el=>el.selector.includes('#widget-host')&&
+        el.selector.includes('#inside'))).toBe(true);
+      expect(snapshot.issues).toContainEqual(expect.objectContaining({
+        code:"canvas-without-accessible-alternative",element:"#only-pixels"
+      }));
+      await page.close();
+    }finally{await browser.close();}
+  },30000);
+
   test("collects independent violations across successive button states", async () => {
     const browser=await launchHeadless();
     try{
