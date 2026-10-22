@@ -38,6 +38,7 @@ async function auditOnly(page,config,scenario){
   const violations=await auditAccessibility(page);
   return {name:scenario.name,actions:[],findings:[
     ...violations.map(issue=>({...issue,screen:view.title})),
+    ...(view.issues??[]).map(issue=>({...issue,screen:view.title})),
     ...view.elements.flatMap(element=>element.issues.map(code=>({
       code,screen:view.title,element:element.selector,source:element.source
     })))
