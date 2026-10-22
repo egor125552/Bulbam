@@ -2,6 +2,7 @@
 import {existsSync} from "node:fs";
 import {readFile,writeFile} from "node:fs/promises";
 import {resolve,join} from "node:path";
+import {pathToFileURL} from "node:url";
 import {readProjectConfig,projectRunSummary} from "./project-config.js";
 import {groupFindings} from "./findings.js";
 
@@ -55,7 +56,7 @@ async function main(argv){
   }));
   return combined;
 }
-if(import.meta.url===new URL("file://"+process.argv[1]).href){
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   main(process.argv.slice(2)).catch(error=>{
     console.error("ACCESSPILOT_MERGE_ERROR",error?.stack||String(error));
     process.exitCode=1;
