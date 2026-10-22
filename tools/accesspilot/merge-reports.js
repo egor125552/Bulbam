@@ -5,6 +5,7 @@ import {resolve,join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {readProjectConfig,projectRunSummary} from "./project-config.js";
 import {groupFindings} from "./findings.js";
+import {controlCoverage} from "./control-coverage.js";
 
 export function combineProjectReports(config,reports){
   const found=new Map(reports.map(r=>[r.name,r]));
@@ -12,7 +13,8 @@ export function combineProjectReports(config,reports){
   const summary=projectRunSummary(reports,config.screens);
   if(missingScenarios.length)summary.complete=false;
   return {project:config.name,summary,missingScenarios,
-    findings:groupFindings(reports),scenarios:reports};
+    findings:groupFindings(reports),coverage:controlCoverage(reports),
+    scenarios:reports};
 }
 async function main(argv){
   const configPath=argv.includes("--config")?
@@ -38,6 +40,11 @@ async function main(argv){
     "Не выполнены сценарии: "+(combined.missingScenarios.join(", ")||"нет"),
     "Уникальных ошибок: "+combined.findings.uniqueIssues,
     "Срабатываний проверок: "+combined.findings.occurrences,
+    "Обнаружено DOM-элементов: "+combined.coverage.total,
+    "Появлялись: "+combined.coverage.visible,
+    "Нажимались: "+combined.coverage.attempted,
+    "Сработали: "+combined.coverage.activated,
+    "Никогда не появлялись: "+combined.coverage.neverVisible.length,
     "",
     ...combined.summary.screens.map(x=>
       (x.visited?"Проверен экран: ":"НЕ ПРОВЕРЕН экран: ")+x.name+" "+x.selector),
@@ -48,6 +55,9 @@ async function main(argv){
       "Количество: "+issue.occurrences+"; экраны: "+issue.screens.join(", "),
       issue.message,JSON.stringify(issue.source??{}),"");
   }
+  lines.push("","ВСЕ НЕПРОВЕРЕННЫЕ ЭЛЕМЕНТЫ:");
+  for(const item of combined.coverage.untested)
+    lines.push(item.selector+" | "+(item.visibleEver?"появлялся":"не появлялся"));
   await writeFile(join(dir,"accesspilot-combined.txt"),lines.join("\n")+"\n");
   console.log("ACCESSPILOT_COMBINED",JSON.stringify({
     ...combined.summary,missingScenarios:combined.missingScenarios,
