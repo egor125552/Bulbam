@@ -47,27 +47,42 @@ try{
     // Accept only prompts produced inside the disposable isolated test worker.
     page.on("dialog",dialog=>dialog.accept("AccessPilot test").catch(()=>{}));
     async function reset(){
-      await page.goto(host.baseURL,{waitUntil:"domcontentloaded",timeout:8000});
-      await page.waitForFunction(() => {
-        const logged = document.getElementById("signed-in");
-        const loggedOut = document.getElementById("signed-out");
-        return (logged && !logged.hidden) || (loggedOut && !loggedOut.hidden);
-      },{timeout:9000}).catch(()=>{});
-      await page.waitForTimeout(150);
-      if(signedIn && await page.locator("#signed-in").isHidden()) {
-        // The previous action may have ended the disposable test session.
-        // Restore only when needed, not after every button.
-        const token=await host.issueSession();
-        await context.addCookies([{name:"bulbam_session",value:token,url:host.baseURL,
-          httpOnly:true,sameSite:"Lax"}]);
-        await page.reload({waitUntil:"domcontentloaded",timeout:8000});
-        await page.waitForFunction(()=>!document.getElementById("signed-in")?.hidden,{timeout:7000}).catch(()=>{});
+      // Never treat a half-loaded document as an application state. A prior
+      // action can revoke a session or navigate while the test is backtracking.
+      let lastFailure;
+      for(let attempt=0;attempt<3;attempt++){
+        try{
+          if(!signedIn) await context.clearCookies();
+          await page.goto(host.baseURL,{waitUntil:"domcontentloaded",timeout:12000});
+          await page.waitForFunction(()=>{
+            const signedInView=document.getElementById("signed-in");
+            const signedOutView=document.getElementById("signed-out");
+            return Boolean((signedInView&&!signedInView.hidden)||
+              (signedOutView&&!signedOutView.hidden));
+          },null,{timeout:9000});
+          if(signedIn && await page.locator("#signed-in").isHidden()){
+            // Recreate a disposable session after logout / password changes.
+            const token=await host.issueSession();
+            await context.addCookies([{name:"bulbam_session",value:token,
+              url:host.baseURL,httpOnly:true,sameSite:"Lax"}]);
+            await page.reload({waitUntil:"domcontentloaded",timeout:12000});
+          }
+          if(signedIn){
+            await page.locator("#signed-in").waitFor({state:"visible",timeout:9000});
+            if(host.readySelector)await page.locator(host.readySelector).first()
+              .waitFor({state:"attached",timeout:9000});
+          }else{
+            await page.locator("#signed-out").waitFor({state:"visible",timeout:9000});
+          }
+          await page.waitForTimeout(120);
+          return;
+        }catch(error){
+          lastFailure=error;
+          console.warn("AccessPilot reset retry",attempt+1,String(error?.message||error).slice(0,180));
+        }
       }
-      if(signedIn && host.readySelector){
-        await page.locator(host.readySelector).first().waitFor({
-          state:"attached",timeout:5000
-        }).catch(()=>{});
-      }
+      throw new Error("AccessPilot could not restore ready application: "+
+        String(lastFailure?.message||lastFailure));
     }
     const exhaustive=process.env.ACCESSPILOT_EXHAUSTIVE==="1";
     const depthFirst=process.env.ACCESSPILOT_BREADTH_FIRST!=="1";
