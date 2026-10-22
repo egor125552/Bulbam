@@ -16,6 +16,8 @@ test.skipIf(!hasBrowser)('toggling detailed help keeps screen-reader controls us
     browser=await launchHeadless();
     const context=await browser.newContext({serviceWorkers:'block'});
     await context.addCookies([{name:'bulbam_session',value:host.cookie,url:host.baseURL}]);
+    // Keep onboarding from covering the controls being tested; it is a separate UI flow.
+    await context.addInitScript(id=>localStorage.setItem('bulbam.welcome.v1.'+id,'yes'),host.account.userId);
     const page=await context.newPage();
     await page.goto(host.baseURL,{waitUntil:'domcontentloaded'});
     await page.locator(host.readySelector).first().waitFor({state:'attached',timeout:10000});
