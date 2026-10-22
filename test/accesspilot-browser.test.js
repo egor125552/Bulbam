@@ -3,8 +3,33 @@ import { launchHeadless } from "../tools/accesspilot/browser-launch.js";
 import { inspectBrowser } from "../tools/accesspilot/browser-engine.js";
 import { crawlBrowser } from "../tools/accesspilot/crawler.js";
 import { launchBulbamTestHost } from "../tools/accesspilot/browser-host.js";
+import { installAccessibilityAudit } from "../tools/accesspilot/audit.js";
 
 describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-browser accessibility explorer", () => {
+  test("collects independent violations across successive button states", async () => {
+    const browser=await launchHeadless();
+    try{
+      const context=await browser.newContext();
+      await installAccessibilityAudit(context);
+      const page=await context.newPage();
+      await page.goto('about:blank');
+      const html=`<!doctype html><html lang="ru"><head><title>Тест</title></head><body>
+        <main><h1>Тестирование</h1>
+        <button id="toggle" onclick="this.setAttribute('aria-label','Скрытое название')">Включить</button>
+        <button id="unnamed"></button>
+        </main></body></html>`;
+      const report=await crawlBrowser({page,reset:()=>page.setContent(html),
+        maxActions:12,maxStates:5,maxDepth:2});
+      expect(report.findings).toContainEqual(expect.objectContaining({
+        code:"missing-name",element:"#unnamed"
+      }));
+      expect(report.findings).toContainEqual(expect.objectContaining({
+        code:"wcag-label-content-name-mismatch",selector:"#toggle"
+      }));
+      await context.close();
+    }finally{await browser.close();}
+  },30000);
+
   test("keeps untested controls in a resumable checkpoint", async () => {
     const browser=await launchHeadless();
     try {
