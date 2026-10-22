@@ -116,10 +116,13 @@ export async function crawlBrowser({
       continue;
     }
     const targets=[...view.elements].sort((a,b)=>priority(a)-priority(b));
-    if(task.force&&key!==task.expectedGraph){
+    // An unrelated control or banner may have changed since this screen
+    // was first discovered. If our target still exists, try the actual
+    // control instead of requiring an identical complete DOM snapshot.
+    if(task.force&&!targets.some(target=>target.selector===task.onlySelector)){
       unreachableActions.add(task.expectedGraph+"|"+task.onlySelector);
       findings.push({code:"state-unavailable",screen:view.title,
-        element:task.onlySelector,message:"State cannot be restored"});
+        element:task.onlySelector,message:"Target control is no longer reachable"});
       continue;
     }
     let paused=false;
@@ -163,7 +166,8 @@ export async function crawlBrowser({
       if(result.ok&&after.focus&&!after.focus.visible)
         findings.push({code:"focus-hidden-after-action",screen:view.title,
           element:target.selector,name:target.name,focus:after.focus,source:target.source});
-      actions.push({screen:view.title,stateKey:key,selector:target.selector,name:target.name,
+      actions.push({screen:view.title,stateKey:task.force?task.expectedGraph:key,
+        selector:target.selector,name:target.name,
         kind:target.kind,success:result.ok,changed,reason:result.reason??null,
         apiResponses,announcements:after.announcements,after:after.title,
         focus:after.focus,source:target.source});
