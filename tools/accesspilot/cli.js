@@ -44,8 +44,11 @@ async function main(){
       url:args.url,mode:args.explore?"explore":"audit"},"accesspilot-url.json")
     :await readProjectConfig(args.config??"tools/accesspilot/accesspilot.project.json");
   const result=await runProject(config,{
-    scenarioNames:args.scenarios.length?args.scenarios:null,
-    outputDir:resolve(args.output??"accesspilot-report"),resume:!!args.resume
+    scenarioNames:args.scenarios.length?args.scenarios:
+      (process.env.ACCESSPILOT_SCENARIOS
+        ?process.env.ACCESSPILOT_SCENARIOS.split(",").map(x=>x.trim()).filter(Boolean):null),
+    outputDir:resolve(args.output??"accesspilot-report"),
+    resume:!!args.resume||process.env.ACCESSPILOT_RESUME==="1"
   });
   if(result.scenarios.some(s=>s.findings.some(f=>f.code==="scenario-failed")))
     process.exitCode=2;
