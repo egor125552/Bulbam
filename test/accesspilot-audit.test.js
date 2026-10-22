@@ -1,8 +1,15 @@
 import {test,expect} from 'vitest';
+import {existsSync} from 'node:fs';
+import {chromium} from 'playwright';
 import {launchHeadless} from '../tools/accesspilot/browser-launch.js';
 import {installAccessibilityAudit,auditAccessibility} from '../tools/accesspilot/audit.js';
 
-test('real-browser audit catches a missing form label autonomously',async()=>{
+// The default non-browser CI job does not install Chromium. Dedicated
+// AccessPilot CI sets ACCESSPILOT_BROWSER_TESTS=1 and must execute this test.
+const browserReady=process.env.ACCESSPILOT_BROWSER_TESTS==='1' ||
+  existsSync(chromium.executablePath()) ||
+  (process.env.ACCESSPILOT_BROWSER_PATH && existsSync(process.env.ACCESSPILOT_BROWSER_PATH));
+test.skipIf(!browserReady)('real-browser audit catches a missing form label autonomously',async()=>{
   const browser=await launchHeadless();
   try{
     const context=await browser.newContext();
