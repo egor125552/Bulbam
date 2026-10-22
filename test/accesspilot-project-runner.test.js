@@ -19,10 +19,16 @@ test.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS!=="1")(
         document.getElementById('preferences').hidden=false
       });
       document.getElementById('apply').addEventListener('click',()=>{
-        document.getElementById('apply').textContent='Applied'
+        document.getElementById('apply').textContent='Applied';
+        fetch('/fail')
       });
     </script></body></html>`;
-  const server=http.createServer((_request,response)=>{
+  const server=http.createServer((request,response)=>{
+    if(request.url==="/fail"){
+      response.writeHead(503,{"content-type":"text/plain"});
+      response.end("isolated test failure");
+      return;
+    }
     response.setHeader("content-type","text/html; charset=utf-8");
     response.end(html);
   });
@@ -55,5 +61,8 @@ test.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS!=="1")(
     expect(result.scenarios[0].actions).toContainEqual(
       expect.objectContaining({selector:"#apply",success:true})
     );
+    expect(result.findings.groups).toContainEqual(expect.objectContaining({
+      code:"http-server-error",selector:"#apply",severity:"serious"
+    }));
   }finally{await new Promise(done=>server.close(done));}
 },45000);
