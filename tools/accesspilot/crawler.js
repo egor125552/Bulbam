@@ -64,6 +64,12 @@ export async function crawlBrowser({
       issueKeys.add(itemKey);
       findings.push({...violation,screen:state.title,source:null});
     }
+    for(const issue of state.issues??[]){
+      const itemKey=auditKey+"|"+issue.code+"|"+issue.element;
+      if(issueKeys.has(itemKey))continue;
+      issueKeys.add(itemKey);
+      findings.push({...issue,screen:state.title});
+    }
     for(const element of state.elements)for(const issue of element.issues){
       const itemKey=auditKey+"|"+element.selector+"|"+issue;
       if(issueKeys.has(itemKey))continue;
