@@ -1,4 +1,5 @@
 import { inspectBrowser, clickBrowser } from "./browser-engine.js";
+import { auditAccessibility } from "./audit.js";
 
 // Application-independent breadth-first exploration with durable checkpoints.
 // Each queued task contains the button index so a resumed run does not repeat
@@ -13,6 +14,7 @@ export async function crawlBrowser({
   const actions=initialState?.actions ?? [];
   const findings=initialState?.findings ?? [];
   const issueKeys=new Set(initialState?.issueKeys ?? []);
+  const unreachableActions=new Set(initialState?.unreachableActions ?? []);
   let truncated=false;
   const signature=state=>JSON.stringify(state.elements.map(el=>[
     el.selector,el.name,el.role,el.state,el.disabled,el.value
@@ -24,7 +26,7 @@ export async function crawlBrowser({
     el.selector,el.role,el.kind,el.disabled
   ]));
   const checkpoint=()=>({
-    version:1,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys]
+    version:2,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys],unreachableActions:[...unreachableActions]
   });
   async function reach(path) {
     let failure=null;
@@ -44,8 +46,31 @@ export async function crawlBrowser({
     await onProgress({name,states:screens.length,actions:actions.length,
       pending:queue.length,findings:findings.length});
   }
-  while(queue.length){
+  const priority=el=>el.role==="button"||el.role==="link"||el.role==="tab"?0:
+    el.kind==="select"?1:el.kind==="click"?2:3;
+  function missingActions(){
+    const done=new Set(actions.map(a=>a.stateKey+"|"+a.selector));
+    const pending=[];
+    for(const screen of screens){
+      if(screen.path.length>=maxDepth)continue;
+      const stateKey=screen.stateKey??graphKey(screen);
+      for(const target of screen.elements){
+        const k=stateKey+"|"+target.selector;
+        if(!done.has(k)&&!unreachableActions.has(k))
+          pending.push({screen,target});
+      }
+    }
+    return pending;
+  }
+  while(true){
     if(screens.length>=maxStates||actions.length>=maxActions){truncated=true;break;}
+    if(!queue.length){
+      const missing=missingActions();
+      if(!missing.length)break;
+      const {screen,target}=missing[0];
+      queue.push({path:screen.path,nextAction:0,onlySelector:target.selector,
+        expectedGraph:screen.stateKey??graphKey(screen),force:true});
+    }
     const task=queue.shift(),path=task.path;
     let atNewChild=false;
     if(task.reuseCurrent){
@@ -54,17 +79,27 @@ export async function crawlBrowser({
     }
     const reached=atNewChild?{ok:true}:await reach(path);
     if(!reached.ok){
+      if(task.onlySelector)unreachableActions.add(task.expectedGraph+"|"+task.onlySelector);
       findings.push({code:"route-unreachable",path:path.map(el=>el.selector),reason:reached.reason});
       await onCheckpoint(checkpoint());
       continue;
     }
     const view=await inspectBrowser(page),key=graphKey(view);
     const firstVisit=!visited.has(key);
-    if(!firstVisit&&task.nextAction===0)continue;
+    if(!firstVisit&&task.nextAction===0&&!task.force)continue;
     if(firstVisit){
       visited.add(key);
       const accessibilityTree=await page.locator("body").ariaSnapshot({timeout:3000}).catch(()=>null);
-      screens.push({name:view.title,path:path.map(el=>el.selector),
+      const audit=await auditAccessibility(page).catch(error=>[{
+        code:"audit-failed",message:String(error?.message||error).slice(0,170)
+      }]);
+      for(const rule of audit){
+        const auditKey=key+"|"+rule.code+"|"+rule.selector;
+        if(issueKeys.has(auditKey))continue;
+        issueKeys.add(auditKey);
+        findings.push({...rule,screen:view.title,source:null});
+      }
+      screens.push({name:view.title,stateKey:key,path:path.map(el=>el.selector),
         elements:view.elements,focus:view.focus,announcements:view.announcements,
         accessibilityTree});
       for(const element of view.elements)for(const issue of element.issues){
@@ -80,12 +115,19 @@ export async function crawlBrowser({
       await onCheckpoint(checkpoint());
       continue;
     }
-    const priority=el=>el.role==="button"||el.role==="link"||el.role==="tab"?0:
-      el.kind==="select"?1:el.kind==="click"?2:3;
     const targets=[...view.elements].sort((a,b)=>priority(a)-priority(b));
+    if(task.force&&key!==task.expectedGraph){
+      unreachableActions.add(task.expectedGraph+"|"+task.onlySelector);
+      findings.push({code:"state-unavailable",screen:view.title,
+        element:task.onlySelector,message:"State cannot be restored"});
+      continue;
+    }
     let paused=false;
     let descended=false;
-    for(let index=task.nextAction;index<targets.length;index++){
+    // A returned parent can have acquired new controls asynchronously.
+    // In that case inspect the newly discovered structure from its first
+    // control rather than reusing an index from the old structure.
+    for(let index=firstVisit?0:task.nextAction;index<targets.length;index++){
       if(actions.length>=maxActions){
         queue.unshift({path,nextAction:index});
         truncated=true;
@@ -93,6 +135,7 @@ export async function crawlBrowser({
         break;
       }
       const target=targets[index];
+      if(task.onlySelector&&target.selector!==task.onlySelector)continue;
       let before=await inspectBrowser(page);
       if(graphKey(before)!==key){
         const restored=await reach(path);
@@ -120,7 +163,7 @@ export async function crawlBrowser({
       if(result.ok&&after.focus&&!after.focus.visible)
         findings.push({code:"focus-hidden-after-action",screen:view.title,
           element:target.selector,name:target.name,focus:after.focus,source:target.source});
-      actions.push({screen:view.title,selector:target.selector,name:target.name,
+      actions.push({screen:view.title,stateKey:key,selector:target.selector,name:target.name,
         kind:target.kind,success:result.ok,changed,reason:result.reason??null,
         apiResponses,announcements:after.announcements,after:after.title,
         focus:after.focus,source:target.source});
@@ -141,17 +184,19 @@ export async function crawlBrowser({
           ...checkpoint(),queue:[{path,nextAction:index+1},...queue]
         });
       }
-      if(descended)break;
+      if(descended||task.force)break;
     }
     await progress();
     await onCheckpoint(checkpoint());
     if(paused)break;
   }
-  const blockedRoutes=findings.filter(f=>f.code==="route-unreachable"||f.code==="route-unreachable-before-action").length;
+  const blockedRoutes=findings.filter(f=>f.code==="route-unreachable"||
+    f.code==="route-unreachable-before-action"||f.code==="state-unavailable").length;
+  const untested=missingActions().length+unreachableActions.size;
   return {
     name,screens,actions,findings,checkpoint:checkpoint(),
-    summary:{screens:screens.length,actions:actions.length,blockedRoutes,
-      complete:!truncated&&blockedRoutes===0,
+    summary:{screens:screens.length,actions:actions.length,blockedRoutes,untested,
+      complete:!truncated&&blockedRoutes===0&&untested===0,
       elements:screens.reduce((n,screen)=>n+screen.elements.length,0),
       issues:findings.length,changed:actions.filter(action=>action.changed).length,
       truncated,pending:queue.length}

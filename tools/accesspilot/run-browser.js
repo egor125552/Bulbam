@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { launchBulbamTestHost } from "./browser-host.js";
 import { crawlBrowser } from "./crawler.js";
 import { installSourceTracking } from "./browser-instrumentation.js";
+import { installAccessibilityAudit } from "./audit.js";
 import { measureStaticCoverage } from "./coverage.js";
 const host=await launchBulbamTestHost();
 let browser;
@@ -36,6 +37,7 @@ try{
       permissions:process.env.ACCESSPILOT_FAKE_MEDIA==="1"?["microphone"]:[],
       ...(mobile?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{})});
     await context.addInitScript(installSourceTracking);
+    await installAccessibilityAudit(context);
     await context.addInitScript(userId=>localStorage.setItem("bulbam.welcome.v1."+userId,"yes"),host.account.userId);
     if(signedIn)await context.addCookies([{name:"bulbam_session",value:host.cookie,url:host.baseURL,httpOnly:true,sameSite:"Lax"}]);
     const page=await context.newPage();
@@ -60,6 +62,11 @@ try{
           httpOnly:true,sameSite:"Lax"}]);
         await page.reload({waitUntil:"domcontentloaded",timeout:8000});
         await page.waitForFunction(()=>!document.getElementById("signed-in")?.hidden,{timeout:7000}).catch(()=>{});
+      }
+      if(signedIn && host.readySelector){
+        await page.locator(host.readySelector).first().waitFor({
+          state:"attached",timeout:5000
+        }).catch(()=>{});
       }
     }
     const exhaustive=process.env.ACCESSPILOT_EXHAUSTIVE==="1";
@@ -97,9 +104,10 @@ try{
   await host.close();
 }
 mkdirSync("accesspilot-report",{recursive:true});
-writeFileSync(resolve("accesspilot-report","Полный отчёт браузерного тестирования Бульбама.json"),JSON.stringify(reports,null,2));
+const resultTag=process.env.ACCESSPILOT_SCENARIOS?"-"+process.env.ACCESSPILOT_SCENARIOS.replace(/[^a-z,-]/g,""):"";
+writeFileSync(resolve("accesspilot-report","Полный отчёт браузерного тестирования Бульбама"+resultTag+".json"),JSON.stringify(reports,null,2));
 const coverage=measureStaticCoverage(sourceHTML,reports);
-writeFileSync(resolve("accesspilot-report","Покрытие элементов Бульбама.json"),JSON.stringify(coverage,null,2));
+writeFileSync(resolve("accesspilot-report","Покрытие элементов Бульбама"+resultTag+".json"),JSON.stringify(coverage,null,2));
 const lines=["AccessPilot. Реальный браузер Chromium, изолированная тестовая база, без реального VoiceOver."];
 for(const report of reports){
  lines.push("Сценарий: "+report.name,JSON.stringify(report.summary),"Проблемы:");
@@ -114,4 +122,4 @@ lines.push("", "ПОКРЫТИЕ СТАТИЧЕСКИХ ЭЛЕМЕНТОВ:",
   "Вызвано действие: "+coverage.activated,
   "Ещё не выполнены (не обязательно ошибки):");
 for(const item of coverage.notActivated)lines.push(item.file+":"+item.line+" | "+item.tag+" #"+item.id);
-writeFileSync(resolve("accesspilot-report","Полный отчёт браузерного тестирования Бульбама.txt"),lines.join("\n"));
+writeFileSync(resolve("accesspilot-report","Полный отчёт браузерного тестирования Бульбама"+resultTag+".txt"),lines.join("\n"));

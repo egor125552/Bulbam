@@ -1,6 +1,6 @@
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
-import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
+import { chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -251,8 +251,13 @@ function renderChats() {
     presence.className="chat-presence";
     presence.dataset.presenceUserId=chat.peer.userId;
     presence.textContent=presenceLabel(chat.peer.userId);
-    button.append(name, time, username, presence, preview);
-    button.setAttribute("aria-label", peerChatLabel(chat));
+    // Use the visible descendants as the accessible name, in their real
+    // reading order. A separately constructed aria-label could rearrange
+    // them and fail WCAG 2.5.3 (Label in Name).
+    const screenReaderHint = document.createElement("span");
+    screenReaderHint.className = "visually-hidden";
+    screenReaderHint.textContent = [`@${chat.peer.username}`, translateText("Открыть чат")].filter(Boolean).join(". ");
+    button.append(name, time, username, presence, preview, screenReaderHint);
     button.addEventListener("click", () => void selectChat(chat, { focusHeading: true }));
     elements.chatList.append(button);
   }
@@ -321,10 +326,6 @@ function presenceLabel(userId) {
   return presenceByUserId.get(userId)?.label ?? translateText("Статус неизвестен");
 }
 
-function peerChatLabel(chat) {
-  return chatAccessibleLabel(chat, account?.userId) + ". " + presenceLabel(chat.peer.userId);
-}
-
 function updatePeerPresence() {
   if (!account)return;
   for (const chat of chats) {
@@ -333,7 +334,7 @@ function updatePeerPresence() {
     if (!button)continue;
     const span=button.querySelector(".chat-presence");
     if(span)span.textContent=presenceLabel(chat.peer.userId);
-    button.setAttribute("aria-label",peerChatLabel(chat));
+    // Native button accessible name updates automatically with descendants.
   }
   if(selectedChat)
     elements.conversationPeer.textContent=`@${selectedChat.peer.username} · ${presenceLabel(selectedChat.peer.userId)}`;

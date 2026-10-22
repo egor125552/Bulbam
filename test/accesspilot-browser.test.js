@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { launchHeadless } from "../tools/accesspilot/browser-launch.js";
 import { inspectBrowser } from "../tools/accesspilot/browser-engine.js";
 import { crawlBrowser } from "../tools/accesspilot/crawler.js";
+import { launchBulbamTestHost } from "../tools/accesspilot/browser-host.js";
 
 describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-browser accessibility explorer", () => {
   test("keeps untested controls in a resumable checkpoint", async () => {
@@ -33,6 +34,39 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
       expect(report.actions.some(a=>a.selector==="#inside"&&a.success)).toBe(true);
       await page.close();
     } finally {await browser.close();}
+  },30000);
+
+  test("waits for seeded conversations before marking the first screen inspected", async () => {
+    const host=await launchBulbamTestHost();
+    let browser;
+    try {
+      browser=await launchHeadless();
+      const context=await browser.newContext({serviceWorkers:"block"});
+      await context.addCookies([{name:"bulbam_session",value:host.cookie,url:host.baseURL}]);
+      await context.addInitScript(id=>localStorage.setItem("bulbam.welcome.v1."+id,"yes"),host.account.userId);
+      const page=await context.newPage();
+      await page.goto(host.baseURL,{waitUntil:"domcontentloaded"});
+      await page.locator(host.readySelector).first().waitFor({state:"attached",timeout:10000});
+      const actual=await inspectBrowser(page);
+      expect(actual.elements).toContainEqual(expect.objectContaining({role:"button",selector:"#chat-list > button:nth-of-type(1)"}));
+      await context.close();
+    } finally {if(browser)await browser.close(); await host.close();}
+  },30000);
+
+  test("attempts every control it encounters before marking coverage complete",async()=>{
+    const browser=await launchHeadless();
+    try{
+      const page=await browser.newPage();
+      const html=`<html><body><button id="details" onclick="document.querySelector('#panel').hidden=false">Details</button><button id="other" onclick="this.setAttribute('aria-pressed','true')">Other</button><section id="panel" hidden><button id="nested" onclick="this.setAttribute('aria-pressed','true')">Nested</button></section></body></html>`;
+      const report=await crawlBrowser({page,reset:()=>page.setContent(html),depthFirst:true,maxStates:12,maxActions:30});
+      const done=new Set(report.actions.map(x=>x.stateKey+'|'+x.selector));
+      for(const screen of report.screens)for(const el of screen.elements){
+        expect(done.has(screen.stateKey+'|'+el.selector)).toBe(true);
+      }
+      expect(report.summary.complete).toBe(true);
+      expect(report.summary.untested).toBe(0);
+      await page.close();
+    }finally{await browser.close();}
   },30000);
 
   test("discovers and activates a nested screen without a button map", async () => {

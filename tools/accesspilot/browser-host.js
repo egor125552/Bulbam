@@ -99,6 +99,13 @@ export async function launchBulbamTestHost() {
       response.setHeader("cache-control", "no-store");
       response.end(contents);
     } catch (error) {
+      // A connection may close while the disposable worker is shutting down,
+      // after the response headers have already been sent.
+      if (response.destroyed || response.writableEnded) return;
+      if (response.headersSent) {
+        response.destroy(error);
+        return;
+      }
       response.writeHead(error?.code === "ENOENT" ? 404 : 500);
       response.end("Isolated test server error");
     }
@@ -107,6 +114,9 @@ export async function launchBulbamTestHost() {
   const port = server.address().port;
   return {
     baseURL: "http://127.0.0.1:" + port,
+    // Fixture-derived readiness signal: the isolated database contains a chat.
+    // The generic crawler does not know any routes or button responsibilities.
+    readySelector: "#chat-list .chat-item",
     cookie,
     async issueSession() {
       // The autonomous crawler may submit a password-change form. Restore
