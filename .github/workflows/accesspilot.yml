@@ -34,7 +34,7 @@ jobs:
         run: |
           npm run check
           npm run check:web
-          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js --maxWorkers=2 --reporter=dot
+          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js test/accesspilot-project-config.test.js test/accesspilot-project-runner.test.js --maxWorkers=2 --reporter=dot
       - name: Explore signed-out screens
         timeout-minutes: 6
         env:
@@ -52,25 +52,30 @@ jobs:
           ACCESSPILOT_MAX_ACTIONS: '650'
           ACCESSPILOT_MAX_STATES: '240'
         run: npm run test:accessibility
-      - name: Print coverage and unresolved controls
+      - name: Print generic screen and action coverage
         if: always()
         run: |
           node --input-type=module <<'NODE'
-          import { existsSync, readFileSync } from 'node:fs';
-          for (const scenario of ['signed-out','signed-in']) {
-            const filename = 'accesspilot-report/Полный отчёт браузерного тестирования Бульбама-' + scenario + '.json';
-            if (!existsSync(filename)) { console.log(scenario, 'NO REPORT'); continue; }
-            for (const result of JSON.parse(readFileSync(filename, 'utf8'))) {
-              console.log(scenario, result.summary);
-              for (const finding of result.findings) console.log('FINDING', JSON.stringify(finding));
-            }
-            const coverage = 'accesspilot-report/Покрытие элементов Бульбама-' + scenario + '.json';
-            if (existsSync(coverage)) {
-              const report = JSON.parse(readFileSync(coverage, 'utf8'));
-              console.log('COVERAGE', scenario, report.totalStaticControls, report.activated);
-              for (const item of report.notActivated) console.log('UNTESTED', item.file + ':' + item.line, item.id);
-            }
+          import {existsSync,readFileSync} from "node:fs";
+          import {groupFindings} from "./tools/accesspilot/findings.js";
+          const reports=[];
+          for(const scenario of ["signed-out","signed-in"]){
+            const file="accesspilot-report/"+scenario+".json";
+            if(!existsSync(file)){console.log("MISSING SCENARIO",scenario);continue;}
+            const result=JSON.parse(readFileSync(file,"utf8"));
+            reports.push(result);
+            console.log("SCENARIO",scenario,result.summary);
+            for(const finding of result.findings)
+              console.log("FINDING",JSON.stringify(finding));
           }
+          const summary=groupFindings(reports);
+          console.log("ALL ISSUES",JSON.stringify({
+            unique:summary.uniqueIssues,occurrences:summary.occurrences,
+            bySeverity:summary.bySeverity
+          }));
+          for(const group of summary.groups)
+            console.log("ISSUE",group.code,group.selector,group.occurrences,
+              group.screens.join("; "));
           NODE
       - name: Upload detailed accessibility reports
         if: always()
