@@ -19,7 +19,8 @@ test.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS!=="1")(
       async function startCall(){
         await page.locator("#chat-list .chat-item").first().click();
         await page.locator("#call-start").click();
-        await expect(page.locator("#call-mute")).toBeVisible({timeout:6500});
+        await page.locator("#call-mute").waitFor({state:"visible",timeout:6500});
+        expect(await page.locator("#call-mute").isVisible()).toBe(true);
       }
       await reset();
       await startCall();
