@@ -23,6 +23,25 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
     await page.locator(host.readySelector).first().waitFor({state:'attached',timeout:10000});
     const problems=await auditAccessibility(page);
     expect(problems.filter(p=>p.code==='wcag-label-content-name-mismatch'&&p.selector==='.chat-item')).toEqual([]);
+    // Open the seeded conversation through the real application UI.
+    await page.locator(host.readySelector).first().click();
+    await page.locator('#message-form').waitFor({state:'visible',timeout:10000});
+    // Hidden controls become testable in their corresponding UI states.
+    // This checks their computed accessible label in the real browser.
+    await page.evaluate(()=>{
+      document.getElementById('voice-pause-button').hidden=false;
+      document.getElementById('call-audio-cycle').hidden=false;
+    });
+    const conversationProblems=await auditAccessibility(page);
+    const specific=['#message-list','#voice-record-button','#voice-pause-button','#call-audio-cycle'];
+    expect(conversationProblems.filter(p=>
+      (p.code==='wcag-list' || p.code==='wcag-label-content-name-mismatch')
+      && specific.includes(p.selector)
+    )).toEqual([]);
+    const listRoles=await page.locator('#message-list > li').evaluateAll(items=>
+      items.map(el=>el.getAttribute('role'))
+    );
+    expect(listRoles.every(role=>!role || role==='listitem')).toBe(true);
     await context.close();
   }finally{if(browser)await browser.close();await host.close();}
 },35000);
