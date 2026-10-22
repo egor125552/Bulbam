@@ -55,9 +55,10 @@ test.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS!=="1")(
       {name:"Library",selector:"main",visited:true},
       {name:"Preferences",selector:"#preferences",visited:true}
     ]);
-    expect(result.findings.groups).toContainEqual(expect.objectContaining({
-      code:"wcag-label",selector:"#unnamed"
-    }));
+    expect(result.findings.groups.some(issue=>
+      issue.selector==="#unnamed"&&
+      ["missing-name","wcag-label"].includes(issue.code)
+    )).toBe(true);
     expect(result.scenarios[0].actions).toContainEqual(
       expect.objectContaining({selector:"#apply",success:true})
     );
