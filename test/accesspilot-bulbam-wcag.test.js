@@ -1,9 +1,16 @@
 import {test,expect} from 'vitest';
+import {existsSync} from 'node:fs';
+import {chromium} from 'playwright';
 import {launchHeadless} from '../tools/accesspilot/browser-launch.js';
 import {launchBulbamTestHost} from '../tools/accesspilot/browser-host.js';
 import {installAccessibilityAudit,auditAccessibility} from '../tools/accesspilot/audit.js';
 
-test('visible chat button text is included in its accessible name',async()=>{
+// The default non-browser CI job does not install Chromium. Dedicated
+// AccessPilot CI sets ACCESSPILOT_BROWSER_TESTS=1 and must execute this test.
+const browserReady=process.env.ACCESSPILOT_BROWSER_TESTS==='1' ||
+  existsSync(chromium.executablePath()) ||
+  (process.env.ACCESSPILOT_BROWSER_PATH && existsSync(process.env.ACCESSPILOT_BROWSER_PATH));
+test.skipIf(!browserReady)('visible chat button text is included in its accessible name',async()=>{
   const host=await launchBulbamTestHost(); let browser;
   try{
     browser=await launchHeadless();
