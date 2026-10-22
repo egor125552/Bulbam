@@ -7,6 +7,7 @@ export async function createEnvironment(){
   return {
     url:host.baseURL,
     isolated:true,
+    confirmDialogs:true,
     async prepare({context,scenario}){
       await context.addInitScript(id=>
         localStorage.setItem("bulbam.welcome.v1."+id,"yes"),
