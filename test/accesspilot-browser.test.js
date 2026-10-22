@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { launchHeadless } from "../tools/accesspilot/browser-launch.js";
 import { inspectBrowser } from "../tools/accesspilot/browser-engine.js";
 import { crawlBrowser } from "../tools/accesspilot/crawler.js";
+import {actionIdentity} from "../tools/accesspilot/action-coverage.js";
 import { launchBulbamTestHost } from "../tools/accesspilot/browser-host.js";
 import { installAccessibilityAudit } from "../tools/accesspilot/audit.js";
 
@@ -111,9 +112,10 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
       const page=await browser.newPage();
       const html=`<html><body><button id="details" onclick="document.querySelector('#panel').hidden=false">Details</button><button id="other" onclick="this.setAttribute('aria-pressed','true')">Other</button><section id="panel" hidden><button id="nested" onclick="this.setAttribute('aria-pressed','true')">Nested</button></section></body></html>`;
       const report=await crawlBrowser({page,reset:()=>page.setContent(html),depthFirst:true,maxStates:12,maxActions:30});
-      const done=new Set(report.actions.map(x=>x.stateKey+'|'+x.selector));
+      const done=new Set(report.actions.map(x=>x.actionKey));
       for(const screen of report.screens)for(const el of screen.elements){
-        expect(done.has(screen.stateKey+'|'+el.selector)).toBe(true);
+        if(el.disabled||(el.kind==="fill"&&el.readOnly))continue;
+        expect(done.has(actionIdentity(el,screen.stateKey))).toBe(true);
       }
       expect(report.summary.complete).toBe(true);
       expect(report.summary.untested).toBe(0);
