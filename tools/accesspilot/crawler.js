@@ -68,7 +68,7 @@ export async function crawlBrowser({
       const missing=missingActions();
       if(!missing.length)break;
       const {screen,target}=missing[0];
-      queue.push({path:screen.path,nextAction:0,onlySelector:target.selector,
+      queue.push({path:screen.pathSteps??[],nextAction:0,onlySelector:target.selector,
         expectedGraph:screen.stateKey??graphKey(screen),force:true});
     }
     const task=queue.shift(),path=task.path;
@@ -99,7 +99,7 @@ export async function crawlBrowser({
         issueKeys.add(auditKey);
         findings.push({...rule,screen:view.title,source:null});
       }
-      screens.push({name:view.title,stateKey:key,path:path.map(el=>el.selector),
+      screens.push({name:view.title,stateKey:key,path:path.map(el=>el.selector),pathSteps:path,
         elements:view.elements,focus:view.focus,announcements:view.announcements,
         accessibilityTree});
       for(const element of view.elements)for(const issue of element.issues){
