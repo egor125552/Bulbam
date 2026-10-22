@@ -34,6 +34,7 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
     });
     // Audio profile changes its visible text dynamically. Every state must
     // retain the exact visible label inside the accessible name.
+    await page.evaluate(()=>{document.getElementById('call-panel').hidden=false;});
     const micButton=page.locator('#call-audio-cycle');
     for(let mode=0;mode<4;mode++){
       const visibleText=(await micButton.innerText()).trim();
@@ -42,6 +43,10 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
         'Visible call audio label must be present in the accessible name').toBe(true);
       await micButton.click();
     }
+    const microphoneProblems=await auditAccessibility(page);
+    expect(microphoneProblems.filter(p=>p.code==='wcag-label-content-name-mismatch'
+      &&p.selector==='#call-audio-cycle')).toEqual([]);
+    await page.evaluate(()=>{document.getElementById('call-panel').hidden=true;});
     const conversationProblems=await auditAccessibility(page);
     const specific=['#message-list','#voice-record-button','#voice-pause-button','#call-audio-cycle'];
     expect(conversationProblems.filter(p=>
