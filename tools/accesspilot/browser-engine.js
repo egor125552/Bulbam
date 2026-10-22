@@ -1,6 +1,6 @@
 // Universal browser explorer: no knowledge of Bulbam routes, IDs or button meanings.
 // Discovers actions from the live accessibility surface, then interacts via browser APIs.
-const TARGETS = 'button, a[href], input, textarea, select, summary, [role="button"], [role="link"], [role="switch"], [role="checkbox"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+const TARGETS = 'button, a[href], input, textarea, select, summary, [contenteditable="true"], [role="button"], [role="link"], [role="switch"], [role="checkbox"], [role="radio"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="textbox"], [role="searchbox"], [tabindex]:not([tabindex="-1"])';
 const safeName = value => String(value || "").replace(/\s+/g, " ").trim().slice(0, 170);
 
 export async function inspectBrowser(page) {
@@ -9,7 +9,7 @@ export async function inspectBrowser(page) {
     const activeDialog = [...document.querySelectorAll('dialog[open],[role="dialog"][aria-modal="true"]')].find(el => el.getClientRects().length) ?? null;
     function visible(node, ignoreAria=false) {
       if (activeDialog && !activeDialog.contains(node)) return false;
-      for (let p=node; p && p.nodeType===1; p=p.parentElement) {
+      for (let p=node; p && p.nodeType===1; p=p.parentElement||p.getRootNode()?.host) {
         if (p.hidden || (!ignoreAria && p.getAttribute('aria-hidden')==='true') || p.inert) return false;
         const style=getComputedStyle(p);
         if (style.display==='none' || style.visibility==='hidden') return false;
@@ -19,7 +19,7 @@ export async function inspectBrowser(page) {
     function name(el) {
       const refs=el.getAttribute('aria-labelledby');
       if (refs) {
-        const n=norm(refs.split(/\s+/).map(id=>document.getElementById(id)?.textContent).join(' '));
+        const n=norm(refs.split(/\s+/).map(id=>(el.getRootNode()?.getElementById?.(id)||document.getElementById(id))?.textContent).join(' '));
         if(n)return n;
       }
       if (norm(el.getAttribute('aria-label')))return norm(el.getAttribute('aria-label'));
@@ -43,7 +43,9 @@ export async function inspectBrowser(page) {
       return 'generic';
     }
     function path(el) {
-      if(el.id) return '#' + CSS.escape(el.id);
+      const root=el.getRootNode();
+      const shadowPrefix=root?.host ? path(root.host)+' ' : '';
+      if(el.id) return shadowPrefix + '#' + CSS.escape(el.id);
       const parts=[];
       for(let n=el;n && n.tagName && n!==document.documentElement;n=n.parentElement){
         const parent=n.parentElement;
@@ -52,9 +54,17 @@ export async function inspectBrowser(page) {
         parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+(same.indexOf(n)+1)+')');
         if(parent.id){parts.unshift('#'+CSS.escape(parent.id));break;}
       }
-      return parts.join(' > ');
+      return shadowPrefix + parts.join(' > ');
     }
-    const elements=[...document.querySelectorAll(selector)].filter(node=>visible(node,true))
+    function discoverAll(root){
+      const matches=[];
+      for(const el of root.querySelectorAll('*')){
+        if(el.matches(selector))matches.push(el);
+        if(el.shadowRoot)matches.push(...discoverAll(el.shadowRoot));
+      }
+      return matches;
+    }
+    const elements=discoverAll(document).filter(node=>visible(node,true))
       .filter(el=>!el.closest('button,a[href]') || el.matches('button,a[href]'));
     const state=elements.map(el=>{
       const issues=[];
@@ -68,7 +78,9 @@ export async function inspectBrowser(page) {
       if(el.getAttribute('role')==='button'&&!['BUTTON','A'].includes(el.tagName)
         && !el.hasAttribute('tabindex'))issues.push('custom-button-not-focusable');
       const inputType=el.getAttribute('type')||'';
-      const type=el.matches('select')?'select':el.matches('textarea')?'fill':
+      const type=el.matches('select')?'select':
+        el.matches('input[type="range"],[role="slider"]')?'adjust':
+        el.matches('textarea,[contenteditable="true"],[role="textbox"],[role="searchbox"]')?'fill':
         el.matches('input:not([type="button"]):not([type="submit"]):not([type="reset"])')
           ?(['checkbox','radio'].includes(inputType)?'click': 'fill'):'click';
       return {
@@ -81,10 +93,22 @@ export async function inspectBrowser(page) {
         source:window.__accesspilotSource?.(el)??null
       };
     });
-    const focus=document.activeElement;
+    const extraIssues=[];
+    for(const canvas of discoverAll(document).filter(el=>el.tagName==='CANVAS')){
+      if(!visible(canvas))continue;
+      const labelled=norm(canvas.getAttribute('aria-label')||
+        canvas.getAttribute('title')||canvas.textContent);
+      if(!labelled)extraIssues.push({
+        code:'canvas-without-accessible-alternative',element:path(canvas),
+        message:'Canvas has no accessible description or fallback text. WebAssembly or WebGL controls require DOM/ARIA equivalents.'
+      });
+    }
+    let focus=document.activeElement;
+    while(focus?.shadowRoot?.activeElement)focus=focus.shadowRoot.activeElement;
     const announcements=[...document.querySelectorAll('[role="status"],[role="alert"],[aria-live]')]
       .filter(visible).map(node=>norm(node.textContent).slice(0,180)).filter(Boolean).slice(-12);
     return {
+      issues:extraIssues,
       announcements,
       title: activeDialog?.getAttribute('aria-label') || activeDialog?.querySelector('h1,h2,h3')?.textContent?.trim()
         || [...document.querySelectorAll('main h2')].find(visible)?.textContent?.trim() || document.title,
@@ -140,7 +164,10 @@ export async function clickBrowser(page, target) {
   const loc=page.locator(target.selector).first();
   if (target.disabled) return { ok:false, reason:'disabled' };
   try {
-    if(target.kind==='select') {
+    if(target.kind==='adjust'){
+      await loc.focus({timeout:3200});
+      await page.keyboard.press('ArrowRight');
+    }else if(target.kind==='select') {
       // Select an alternate valid item without any application-specific mapping.
       const current=await loc.inputValue();
       const next=target.options.find(x=>x!==current && x!=='')??current;
