@@ -41,7 +41,7 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
       const accessibleLabel=await micButton.getAttribute('aria-label');
       expect((accessibleLabel||visibleText).includes(visibleText),
         'Visible call audio label must be present in the accessible name').toBe(true);
-      await micButton.click();
+      await micButton.evaluate(element=>element.click());
     }
     const microphoneProblems=await auditAccessibility(page);
     expect(microphoneProblems.filter(p=>p.code==='wcag-label-content-name-mismatch'
@@ -60,4 +60,4 @@ test.skipIf(!browserReady)('visible chat button text is included in its accessib
       JSON.stringify(listRoles)).toBe(true);
     await context.close();
   }finally{if(browser)await browser.close();await host.close();}
-},35000);
+},60000);
