@@ -24,7 +24,25 @@ test.skipIf(!hasBrowser)('toggling detailed help keeps screen-reader controls us
     const input=page.locator('#voice-detailed-help');
     expect(await input.isVisible()).toBe(true);
     await input.uncheck();
-    expect(await page.locator('#settings-close').isVisible()).toBe(true);
+    const closeVisible=await page.locator('#settings-close').isVisible();
+    if(!closeVisible){
+      const diagnostic=await page.evaluate(()=>{
+        const button=document.querySelector('#settings-close');
+        const dialog=document.querySelector('#settings-dialog');
+        const ancestors=[];
+        for(let n=button;n;n=n.parentElement){
+          ancestors.push({tag:n.tagName,id:n.id,className:String(n.className||''),
+            hidden:n.hidden,display:getComputedStyle(n).display,
+            visibility:getComputedStyle(n).visibility,
+            detailedHelp:n.getAttribute('data-detailed-help')});
+        }
+        return {url:location.href,readyState:document.readyState,
+          signedInHidden:document.querySelector('#signed-in')?.hidden,
+          dialogOpen:dialog?.open,rootDetailedHelp:document.documentElement.dataset.detailedHelp,
+          ancestors};
+      });
+      throw new Error('Detailed help checkbox made close button invisible: '+JSON.stringify(diagnostic));
+    }
     const tree=await page.locator('body').ariaSnapshot();
     expect(tree).toContain('checkbox');
     expect(tree).toContain('button');
