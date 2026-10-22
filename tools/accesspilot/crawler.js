@@ -180,19 +180,37 @@ export async function crawlBrowser({
         }
         before=await inspectBrowser(page);
       }
-      const apiResponses=[];
+      const apiResponses=[],jsExceptions=[];
       const observe=response=>{
-        if(new URL(response.url()).pathname.startsWith("/api/"))
-          apiResponses.push({status:response.status(),path:new URL(response.url()).pathname});
+        try{
+          const path=new URL(response.url()).pathname;
+          apiResponses.push({status:response.status(),path,
+            method:response.request().method(),type:response.request().resourceType()});
+        }catch{}
       };
+      const observeError=error=>jsExceptions.push(String(error?.stack||error).slice(0,1200));
       page.on("response",observe);
+      page.on("pageerror",observeError);
       let result;
       try{
         result=await clickBrowser(page,target);
         await page.waitForTimeout(180);
-      }finally{page.off("response",observe);}
+      }finally{
+        page.off("response",observe);
+        page.off("pageerror",observeError);
+      }
       const after=await inspectBrowser(page);
       await auditState(after);
+      for(const response of apiResponses.filter(r=>r.status>=500)){
+        findings.push({code:"http-server-error",severity:"serious",
+          screen:view.title,selector:target.selector,source:target.source,
+          message:response.method+" "+response.path+" returned HTTP "+response.status});
+      }
+      for(const message of jsExceptions){
+        findings.push({code:"javascript-error",severity:"serious",
+          screen:view.title,selector:target.selector,source:target.source,
+          message});
+      }
       const changed=signature(before)!==signature(after)
         ||JSON.stringify(before.announcements)!==JSON.stringify(after.announcements);
       if(result.ok&&after.focus&&!after.focus.visible)
