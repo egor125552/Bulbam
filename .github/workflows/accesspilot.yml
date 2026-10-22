@@ -34,7 +34,7 @@ jobs:
         run: |
           npm run check
           npm run check:web
-          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js test/accesspilot-project-config.test.js test/accesspilot-project-runner.test.js --maxWorkers=2 --reporter=dot
+          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js test/accesspilot-project-config.test.js test/accesspilot-project-runner.test.js test/accesspilot-merge.test.js --maxWorkers=2 --reporter=dot
       - name: Explore signed-out screens
         timeout-minutes: 6
         env:
@@ -52,6 +52,9 @@ jobs:
           ACCESSPILOT_MAX_ACTIONS: '650'
           ACCESSPILOT_MAX_STATES: '240'
         run: npm run test:accessibility
+      - name: Combine scenarios and report every issue
+        if: always()
+        run: node tools/accesspilot/merge-reports.js --config tools/accesspilot/accesspilot.project.json --output accesspilot-report
       - name: Print generic screen and action coverage
         if: always()
         run: |
