@@ -74,7 +74,7 @@ export async function inspectBrowser(page) {
     const inventory=candidates.map(el=>({
       selector:path(el),name:name(el),role:role(el),
       visible:visible(el,true),exposed:visible(el),
-      disabled:!!el.disabled
+      disabled:!!el.disabled,readOnly:!!el.readOnly
     }));
     const elements=candidates.filter(node=>visible(node,true))
       .filter(el=>!el.closest('button,a[href]') || el.matches('button,a[href]'));
@@ -122,7 +122,7 @@ export async function inspectBrowser(page) {
       return {
         selector:path(el), name:label, role:roleName,
         scopeKey:scopeKeys.get(scopeRoot(el)),
-        kind:type, inputType, required:!!el.required, disabled:!!el.disabled,
+        kind:type, inputType, required:!!el.required, disabled:!!el.disabled, readOnly:!!el.readOnly,
         state:el.getAttribute('aria-expanded')||el.getAttribute('aria-pressed')||
           el.getAttribute('aria-checked')|| (el.checked?'checked':(el.type==='checkbox'?'unchecked':'')),
         value:el.matches('input,textarea,select')?String(el.value??'').slice(0,55):'', 
@@ -207,6 +207,7 @@ function CSS_ESCAPE(text){return text.replace(/[^a-zA-Z0-9_-]/g,x=>'\\'+x);}
 export async function clickBrowser(page, target) {
   const loc=page.locator(target.selector).first();
   if (target.disabled) return { ok:false, reason:'disabled' };
+  if (target.kind==='fill'&&target.readOnly) return {ok:false,reason:'read-only'};
   try {
     if(target.kind==='adjust'){
       await loc.focus({timeout:3200});
