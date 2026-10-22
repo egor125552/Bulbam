@@ -24,6 +24,7 @@ test.skipIf(!hasBrowser)('toggling detailed help keeps screen-reader controls us
     const input=page.locator('#voice-detailed-help');
     expect(await input.isVisible()).toBe(true);
     await input.uncheck();
+    expect(await page.locator('html').evaluate(element=>element.hidden)).toBe(false);
     const closeVisible=await page.locator('#settings-close').isVisible();
     if(!closeVisible){
       const diagnostic=await page.evaluate(()=>{
@@ -51,6 +52,7 @@ test.skipIf(!hasBrowser)('toggling detailed help keeps screen-reader controls us
     await page.locator('#settings-button').click();
     await page.locator('[data-open-settings="accessibility"]').click();
     expect(await page.locator('#voice-detailed-help').isChecked()).toBe(false);
+    expect(await page.locator('html').evaluate(element=>element.hidden)).toBe(false);
     expect(await page.locator('#settings-close').isVisible()).toBe(true);
     await context.close();
   }finally{
