@@ -1,5 +1,6 @@
 import { inspectBrowser, clickBrowser } from "./browser-engine.js";
 import { auditAccessibility } from "./audit.js";
+import {actionIdentity,missingActionCandidates} from "./action-coverage.js";
 
 // Application-independent breadth-first exploration with durable checkpoints.
 // Each queued task contains the button index so a resumed run does not repeat
@@ -17,6 +18,8 @@ export async function crawlBrowser({
   const issueKeys=new Set(initialState?.issueKeys ?? []);
   const unreachableActions=new Set(initialState?.unreachableActions ?? []);
   const auditedSignatures=new Set(initialState?.auditedSignatures ?? []);
+  const completedActions=new Set(actions.map(action=>action.actionKey??
+    actionIdentity(action,action.stateKey)));
   let truncated=false;
   const signature=state=>JSON.stringify(state.elements.map(el=>[
     el.selector,el.name,el.role,el.state,el.disabled,el.value
@@ -28,7 +31,7 @@ export async function crawlBrowser({
     el.selector,el.role,el.kind,el.disabled
   ]));
   const checkpoint=()=>({
-    version:3,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys],
+    version:4,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys],
     unreachableActions:[...unreachableActions],auditedSignatures:[...auditedSignatures]
   });
   async function reach(path) {
@@ -80,28 +83,18 @@ export async function crawlBrowser({
   }
   const priority=el=>el.role==="button"||el.role==="link"||el.role==="tab"?0:
     el.kind==="select"?1:el.kind==="click"?2:3;
-  function missingActions(){
-    const done=new Set(actions.map(a=>a.stateKey+"|"+a.selector));
-    const pending=[];
-    for(const screen of screens){
-      if(screen.path.length>=maxDepth)continue;
-      const stateKey=screen.stateKey??graphKey(screen);
-      for(const target of screen.elements){
-        const k=stateKey+"|"+target.selector;
-        if(!done.has(k)&&!unreachableActions.has(k))
-          pending.push({screen,target});
-      }
-    }
-    return pending;
+  function missingActions(depth=maxDepth){
+    return missingActionCandidates({screens,actions,maxDepth:depth,
+      unreachableActions});
   }
   while(true){
     if(screens.length>=maxStates||actions.length>=maxActions){truncated=true;break;}
     if(!queue.length){
       const missing=missingActions();
       if(!missing.length)break;
-      const {screen,target}=missing[0];
+      const {screen,target,actionKey}=missing[0];
       queue.push({path:screen.pathSteps??[],nextAction:0,onlySelector:target.selector,
-        expectedGraph:screen.stateKey??graphKey(screen),force:true});
+        actionKey,expectedGraph:screen.stateKey??graphKey(screen),force:true});
     }
     const task=queue.shift(),path=task.path;
     let atNewChild=false;
@@ -111,7 +104,7 @@ export async function crawlBrowser({
     }
     const reached=atNewChild?{ok:true}:await reach(path);
     if(!reached.ok){
-      if(task.onlySelector)unreachableActions.add(task.expectedGraph+"|"+task.onlySelector);
+      if(task.onlySelector)unreachableActions.add(task.actionKey??(task.expectedGraph+"|"+task.onlySelector));
       findings.push({code:"route-unreachable",path:path.map(el=>el.selector),reason:reached.reason});
       await onCheckpoint(checkpoint());
       continue;
@@ -152,7 +145,7 @@ export async function crawlBrowser({
     // was first discovered. If our target still exists, try the actual
     // control instead of requiring an identical complete DOM snapshot.
     if(task.force&&!targets.some(target=>target.selector===task.onlySelector)){
-      unreachableActions.add(task.expectedGraph+"|"+task.onlySelector);
+      unreachableActions.add(task.actionKey??(task.expectedGraph+"|"+task.onlySelector));
       findings.push({code:"state-unavailable",screen:view.title,
         element:task.onlySelector,message:"Target control is no longer reachable"});
       continue;
@@ -171,6 +164,9 @@ export async function crawlBrowser({
       }
       const target=targets[index];
       if(task.onlySelector&&target.selector!==task.onlySelector)continue;
+      const actionKey=actionIdentity(target,key);
+      if(completedActions.has(actionKey))continue;
+      if(task.force&&task.actionKey&&actionKey!==task.actionKey)continue;
       let before=await inspectBrowser(page);
       if(graphKey(before)!==key){
         const restored=await reach(path);
@@ -218,10 +214,11 @@ export async function crawlBrowser({
         findings.push({code:"focus-hidden-after-action",screen:view.title,
           element:target.selector,name:target.name,focus:after.focus,source:target.source});
       actions.push({screen:view.title,stateKey:task.force?task.expectedGraph:key,
-        selector:target.selector,name:target.name,
+        actionKey,selector:target.selector,name:target.name,
         kind:target.kind,success:result.ok,changed,reason:result.reason??null,
         apiResponses,announcements:after.announcements,after:after.title,
         focus:after.focus,source:target.source});
+      completedActions.add(actionKey);
       const shape=state=>JSON.stringify(state.elements.map(el=>[el.selector,el.role,el.name,el.disabled]));
       if(result.ok&&shape(before)!==shape(after)&&!visited.has(graphKey(after))){
         if(depthFirst){
@@ -247,7 +244,9 @@ export async function crawlBrowser({
   }
   const blockedRoutes=findings.filter(f=>f.code==="route-unreachable"||
     f.code==="route-unreachable-before-action"||f.code==="state-unavailable").length;
-  const untested=missingActions().length+unreachableActions.size;
+  const allMissing=missingActions(Infinity);
+  const untested=allMissing.length+unreachableActions.size;
+  const depthLimited=allMissing.filter(item=>item.screen.path.length>=maxDepth).length;
   return {
     name,screens,actions,findings,checkpoint:checkpoint(),
     summary:{screens:screens.length,actions:actions.length,blockedRoutes,untested,
@@ -255,6 +254,6 @@ export async function crawlBrowser({
       auditedStates:auditedSignatures.size,
       elements:screens.reduce((n,screen)=>n+screen.elements.length,0),
       issues:findings.length,changed:actions.filter(action=>action.changed).length,
-      truncated,pending:queue.length}
+      truncated,pending:queue.length,depthLimited}
   };
 }
