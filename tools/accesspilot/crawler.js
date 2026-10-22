@@ -165,8 +165,15 @@ export async function crawlBrowser({
       const target=targets[index];
       if(task.onlySelector&&target.selector!==task.onlySelector)continue;
       const actionKey=actionIdentity(target,key);
+      // Replays may land on the same selector in a DIFFERENT local state.
+      // Requeueing the old action forever makes pending counts meaningless.
+      if(task.force&&task.actionKey&&actionKey!==task.actionKey){
+        unreachableActions.add(task.actionKey);
+        findings.push({code:"state-unavailable",screen:view.title,
+          element:target.selector,reason:"Local action state changed on replay"});
+        break;
+      }
       if(completedActions.has(actionKey))continue;
-      if(task.force&&task.actionKey&&actionKey!==task.actionKey)continue;
       let before=await inspectBrowser(page);
       if(graphKey(before)!==key){
         const restored=await reach(path);
