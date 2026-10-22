@@ -15,6 +15,7 @@ export async function crawlBrowser({
   const findings=initialState?.findings ?? [];
   const issueKeys=new Set(initialState?.issueKeys ?? []);
   const unreachableActions=new Set(initialState?.unreachableActions ?? []);
+  const auditedSignatures=new Set(initialState?.auditedSignatures ?? []);
   let truncated=false;
   const signature=state=>JSON.stringify(state.elements.map(el=>[
     el.selector,el.name,el.role,el.state,el.disabled,el.value
@@ -26,7 +27,8 @@ export async function crawlBrowser({
     el.selector,el.role,el.kind,el.disabled
   ]));
   const checkpoint=()=>({
-    version:2,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys],unreachableActions:[...unreachableActions]
+    version:3,queue,visited:[...visited],screens,actions,findings,issueKeys:[...issueKeys],
+    unreachableActions:[...unreachableActions],auditedSignatures:[...auditedSignatures]
   });
   async function reach(path) {
     let failure=null;
@@ -45,6 +47,29 @@ export async function crawlBrowser({
   async function progress() {
     await onProgress({name,states:screens.length,actions:actions.length,
       pending:queue.length,findings:findings.length});
+  }
+  // The graph tracks structural routes; independent audits track every
+  // distinct accessible name, role, value and state seen during interactions.
+  async function auditState(state){
+    const auditKey=signature(state);
+    if(auditedSignatures.has(auditKey))return;
+    auditedSignatures.add(auditKey);
+    const violations=await auditAccessibility(page).catch(error=>[{
+      code:"audit-failed",message:String(error?.message||error).slice(0,170)
+    }]);
+    for(const violation of violations){
+      const itemKey=auditKey+"|"+violation.code+"|"+violation.selector;
+      if(issueKeys.has(itemKey))continue;
+      issueKeys.add(itemKey);
+      findings.push({...violation,screen:state.title,source:null});
+    }
+    for(const element of state.elements)for(const issue of element.issues){
+      const itemKey=auditKey+"|"+element.selector+"|"+issue;
+      if(issueKeys.has(itemKey))continue;
+      issueKeys.add(itemKey);
+      findings.push({code:issue,screen:state.title,element:element.selector,
+        name:element.name,source:element.source});
+    }
   }
   const priority=el=>el.role==="button"||el.role==="link"||el.role==="tab"?0:
     el.kind==="select"?1:el.kind==="click"?2:3;
@@ -85,30 +110,15 @@ export async function crawlBrowser({
       continue;
     }
     const view=await inspectBrowser(page),key=graphKey(view);
+    await auditState(view);
     const firstVisit=!visited.has(key);
     if(!firstVisit&&task.nextAction===0&&!task.force)continue;
     if(firstVisit){
       visited.add(key);
       const accessibilityTree=await page.locator("body").ariaSnapshot({timeout:3000}).catch(()=>null);
-      const audit=await auditAccessibility(page).catch(error=>[{
-        code:"audit-failed",message:String(error?.message||error).slice(0,170)
-      }]);
-      for(const rule of audit){
-        const auditKey=key+"|"+rule.code+"|"+rule.selector;
-        if(issueKeys.has(auditKey))continue;
-        issueKeys.add(auditKey);
-        findings.push({...rule,screen:view.title,source:null});
-      }
       screens.push({name:view.title,stateKey:key,path:path.map(el=>el.selector),pathSteps:path,
         elements:view.elements,focus:view.focus,announcements:view.announcements,
         accessibilityTree});
-      for(const element of view.elements)for(const issue of element.issues){
-        const issueKey=key+"|"+element.selector+"|"+issue;
-        if(issueKeys.has(issueKey))continue;
-        issueKeys.add(issueKey);
-        findings.push({code:issue,screen:view.title,element:element.selector,
-          name:element.name,source:element.source});
-      }
     }
     if(path.length>=maxDepth){
       await progress();
@@ -161,6 +171,7 @@ export async function crawlBrowser({
         await page.waitForTimeout(180);
       }finally{page.off("response",observe);}
       const after=await inspectBrowser(page);
+      await auditState(after);
       const changed=signature(before)!==signature(after)
         ||JSON.stringify(before.announcements)!==JSON.stringify(after.announcements);
       if(result.ok&&after.focus&&!after.focus.visible)
@@ -201,6 +212,7 @@ export async function crawlBrowser({
     name,screens,actions,findings,checkpoint:checkpoint(),
     summary:{screens:screens.length,actions:actions.length,blockedRoutes,untested,
       complete:!truncated&&blockedRoutes===0&&untested===0,
+      auditedStates:auditedSignatures.size,
       elements:screens.reduce((n,screen)=>n+screen.elements.length,0),
       issues:findings.length,changed:actions.filter(action=>action.changed).length,
       truncated,pending:queue.length}
