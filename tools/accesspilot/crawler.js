@@ -138,7 +138,8 @@ export async function crawlBrowser({
       }).map(item=>item.name),screenDescriptions);
       const accessibilityTree=await page.locator("body").ariaSnapshot({timeout:3000}).catch(()=>null);
       screens.push({name:view.title,stateKey:key,path:path.map(el=>el.selector),pathSteps:path,
-        elements:view.elements,focus:view.focus,announcements:view.announcements,
+        elements:view.elements,inventory:view.inventory,
+        focus:view.focus,announcements:view.announcements,
         landmarks,accessibilityTree});
     }
     if(path.length>=maxDepth){
