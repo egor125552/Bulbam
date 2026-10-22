@@ -41,3 +41,10 @@ test("disabled controls do not count as actionable coverage debt",()=>{
   const disabled={...target("#locked","group|#locked"),disabled:true};
   expect(missingActionCandidates({screens:[screen("a",[disabled])],actions:[],maxDepth:10})).toEqual([]);
 });
+
+test("read-only textareas are content, not failed editable actions",()=>{
+  const readOnly={...target("#codes","panel|#codes"),
+    role:"textbox",kind:"fill",readOnly:true};
+  expect(missingActionCandidates({screens:[screen("codes",[readOnly])],
+    actions:[],maxDepth:10})).toEqual([]);
+});
