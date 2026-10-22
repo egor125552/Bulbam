@@ -78,6 +78,30 @@ export async function inspectBrowser(page) {
     }));
     const elements=candidates.filter(node=>visible(node,true))
       .filter(el=>!el.closest('button,a[href]') || el.matches('button,a[href]'));
+    // Nearest semantic landmark is the unit of interaction coverage. A change
+    // in a different panel must not make this control a brand-new task.
+    const scopeSelector='dialog,[role="dialog"],[role="menu"],[role="toolbar"],[role="tablist"],form,nav,header,footer,aside,section,fieldset,main,article';
+    function scopeRoot(node){
+      for(let p=node;p&&p.nodeType===1;p=p.parentElement||p.getRootNode()?.host){
+        if(p.matches(scopeSelector))return p;
+      }
+      return document.body;
+    }
+    const scopes=new Map();
+    for(const element of elements){
+      const root=scopeRoot(element);
+      if(!scopes.has(root))scopes.set(root,[]);
+      scopes.get(root).push(element);
+    }
+    const scopeKeys=new Map();
+    for(const [root,members] of scopes){
+      scopeKeys.set(root,JSON.stringify([
+        path(root),members.map(member=>[
+          path(member),role(member),member.tagName.toLowerCase(),
+          member.getAttribute('type')||'',!!member.disabled
+        ])
+      ]));
+    }
     const state=elements.map(el=>{
       const issues=[];
       const roleName=role(el), label=name(el);
@@ -97,6 +121,7 @@ export async function inspectBrowser(page) {
           ?(['checkbox','radio'].includes(inputType)?'click': 'fill'):'click';
       return {
         selector:path(el), name:label, role:roleName,
+        scopeKey:scopeKeys.get(scopeRoot(el)),
         kind:type, inputType, required:!!el.required, disabled:!!el.disabled,
         state:el.getAttribute('aria-expanded')||el.getAttribute('aria-pressed')||
           el.getAttribute('aria-checked')|| (el.checked?'checked':(el.type==='checkbox'?'unchecked':'')),
