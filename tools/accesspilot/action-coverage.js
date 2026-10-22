@@ -21,7 +21,8 @@ export function missingActionCandidates({
   for(const screen of screens){
     if((screen.path?.length??0)>=maxDepth)continue;
     for(const target of screen.elements??[]){
-      if(target.disabled)continue; // Report as disabled, but cannot activate.
+      if(target.disabled||(target.kind==="fill"&&target.readOnly))continue;
+      // Disabled and read-only controls stay in the inventory, but cannot be activated.
       const actionKey=actionIdentity(target,screen.stateKey);
       if(done.has(actionKey)||unreachable.has(actionKey)||unique.has(actionKey))
         continue;
