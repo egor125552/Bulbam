@@ -34,7 +34,7 @@ jobs:
         run: |
           npm run check
           npm run check:web
-          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js test/accesspilot-project-config.test.js test/accesspilot-project-runner.test.js test/accesspilot-merge.test.js test/accesspilot-control-coverage.test.js --maxWorkers=2 --reporter=dot
+          ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js test/accesspilot-project-config.test.js test/accesspilot-project-runner.test.js test/accesspilot-merge.test.js test/accesspilot-control-coverage.test.js test/accesspilot-voice-draft-focus.test.js --maxWorkers=2 --reporter=dot
       - name: Explore signed-out screens
         timeout-minutes: 6
         env:
