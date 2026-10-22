@@ -52,6 +52,7 @@ test("late controls are awaited during replay instead of silently skipped",async
   const result=await crawlBrowser({
     page:{
       waitForTimeout:async()=>{},
+      on:()=>{},off:()=>{},
       locator:()=>({first:()=>({waitFor:async()=>{ready=true;}})})
     },
     reset:async()=>{},
