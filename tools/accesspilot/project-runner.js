@@ -136,7 +136,22 @@ export async function runProject(config,{
           try{origin=new URL(url).origin;}catch{return route.abort();}
           return allowed.has(origin)?route.continue():route.abort();
         });
-        page.on("dialog",dialog=>dialog.dismiss().catch(()=>{}));
+        // Browser request routing does not cover WebSockets. Limit those as
+        // well, so UI actions cannot contact a production socket elsewhere.
+        if(typeof context.routeWebSocket==="function") {
+          await context.routeWebSocket("**/*",route=>{
+            const endpoint=new URL(route.url());
+            const protocol=endpoint.protocol==="wss:"?"https:":"http:";
+            const origin=protocol+"//"+endpoint.host;
+            if(!allowed.has(origin))return route.close();
+            return route.connectToServer();
+          });
+        }
+        page.on("dialog",dialog=>{
+          const confirm=environment.isolated&&environment.confirmDialogs===true;
+          const action=confirm?dialog.accept("AccessPilot isolated test"):dialog.dismiss();
+          action.catch(()=>{});
+        });
         const errors=[];
         page.on("pageerror",error=>errors.push(error.message));
         const reset=async()=>{
