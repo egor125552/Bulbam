@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {existsSync} from "node:fs";
-import {readFile,writeFile} from "node:fs/promises";
+import {readFile,writeFile,mkdir} from "node:fs/promises";
 import {resolve,join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {readProjectConfig,projectRunSummary} from "./project-config.js";
@@ -28,6 +28,7 @@ async function main(argv){
     if(existsSync(file))reports.push(JSON.parse(await readFile(file,"utf8")));
   }
   const combined=combineProjectReports(config,reports);
+  await mkdir(dir,{recursive:true});
   await writeFile(join(dir,"accesspilot-combined.json"),JSON.stringify(combined,null,2)+"\n");
   const lines=[
     "AccessPilot / "+config.name,
@@ -35,7 +36,7 @@ async function main(argv){
       "; экранов: "+combined.summary.states+
       "; нажатий: "+combined.summary.actions,
     "Проверено состояний доступности: "+combined.summary.auditedStates,
-    "Непроверенных элементов: "+combined.summary.untested,
+    "Непроверенных действий в открытых состояниях: "+combined.summary.untested,
     "Завершён: "+(combined.summary.complete?"да":"нет"),
     "Не выполнены сценарии: "+(combined.missingScenarios.join(", ")||"нет"),
     "Уникальных ошибок: "+combined.findings.uniqueIssues,
@@ -45,6 +46,7 @@ async function main(argv){
     "Нажимались: "+combined.coverage.attempted,
     "Сработали: "+combined.coverage.activated,
     "Никогда не появлялись: "+combined.coverage.neverVisible.length,
+    "Поля только для чтения: "+combined.coverage.readOnly.length,
     "",
     ...combined.summary.screens.map(x=>
       (x.visited?"Проверен экран: ":"НЕ ПРОВЕРЕН экран: ")+x.name+" "+x.selector),
