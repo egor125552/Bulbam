@@ -109,7 +109,19 @@ export async function crawlBrowser({
       await onCheckpoint(checkpoint());
       continue;
     }
-    const view=await inspectBrowser(page),key=graphKey(view);
+    let view=await inspectBrowser(page);
+    // Network-backed transitions (calls, uploads, dialogs) can render their
+    // final controls after click() resolves. Wait briefly for the exact
+    // discovered target before deciding the saved state cannot be replayed.
+    if(task.force&&task.onlySelector&&
+        !view.elements.some(el=>el.selector===task.onlySelector)){
+      try{
+        await page.locator(task.onlySelector).first()
+          .waitFor({state:"visible",timeout:2200});
+      }catch{}
+      view=await inspectBrowser(page);
+    }
+    const key=graphKey(view);
     await auditState(view);
     const firstVisit=!visited.has(key);
     if(!firstVisit&&task.nextAction===0&&!task.force)continue;
