@@ -124,7 +124,9 @@ function decorateConversationAvatar() {
 
 function decorateMessages() {
   for (const item of document.querySelectorAll(".message")) {
-    if (item.getAttribute("role") !== "group") item.setAttribute("role", "group");
+    // Message cards remain <li> children of an ordered list. Giving them
+    // role=group removes their listitem semantics and breaks WCAG list.
+    if (item.getAttribute("role") !== "listitem") item.setAttribute("role", "listitem");
     const author = item.querySelector(".message-author")?.textContent?.trim() || "Сообщение";
     const meta = item.querySelector(".message-meta")?.textContent?.trim() || "";
     const body = item.querySelector(".voice-message") ? "голосовое сообщение" : item.querySelector(":scope > p")?.textContent?.trim() || "сообщение";
