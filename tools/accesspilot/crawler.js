@@ -6,7 +6,8 @@ import { auditAccessibility } from "./audit.js";
 // buttons that were already executed.
 export async function crawlBrowser({
   page, reset, maxStates=45, maxActions=120, maxDepth=5, name="browser",
-  onProgress=()=>{}, onCheckpoint=()=>{}, initialState=null, depthFirst=false
+  onProgress=()=>{}, onCheckpoint=()=>{}, initialState=null, depthFirst=false,
+  screenDescriptions=[]
 }) {
   const queue=initialState?.queue ?? [{path:[],nextAction:0}];
   const visited=new Set(initialState?.visited ?? []);
@@ -115,10 +116,24 @@ export async function crawlBrowser({
     if(!firstVisit&&task.nextAction===0&&!task.force)continue;
     if(firstVisit){
       visited.add(key);
+      // Screen descriptions are observation-only labels, never action scripts.
+      // A project may omit them entirely; exploration is still autonomous.
+      const landmarks=await page.evaluate(descriptions=>descriptions.filter(item=>{
+        try{
+          const element=document.querySelector(item.selector);
+          if(!element)return false;
+          for(let p=element;p&&p.nodeType===1;p=p.parentElement){
+            if(p.hidden||p.inert||p.getAttribute("aria-hidden")==="true")return false;
+            const style=getComputedStyle(p);
+            if(style.display==="none"||style.visibility==="hidden")return false;
+          }
+          return element.getClientRects().length>0;
+        }catch{return false;}
+      }).map(item=>item.name),screenDescriptions);
       const accessibilityTree=await page.locator("body").ariaSnapshot({timeout:3000}).catch(()=>null);
       screens.push({name:view.title,stateKey:key,path:path.map(el=>el.selector),pathSteps:path,
         elements:view.elements,focus:view.focus,announcements:view.announcements,
-        accessibilityTree});
+        landmarks,accessibilityTree});
     }
     if(path.length>=maxDepth){
       await progress();
