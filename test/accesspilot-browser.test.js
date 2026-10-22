@@ -69,6 +69,24 @@ describe.skipIf(process.env.ACCESSPILOT_BROWSER_TESTS !== "1")("Universal real-b
     }finally{await browser.close();}
   },30000);
 
+  test("retries an untested button when unrelated controls change", async () => {
+    const browser=await launchHeadless();
+    try {
+      const page=await browser.newPage();
+      let resets=0;
+      const reset=()=>page.setContent(`<html><body>
+        <button id="open" onclick="document.querySelector('#child').hidden=false">Open</button>
+        <button id="later" onclick="this.setAttribute('aria-pressed','true')">Later</button>
+        ${++resets>=3?'<button id="extra">Extra</button>':''}
+        <section id="child" hidden><button id="close" onclick="this.parentElement.hidden=true">Close</button></section>
+        </body></html>`);
+      const report=await crawlBrowser({page,reset,depthFirst:true,maxStates:14,maxActions:45,maxDepth:3});
+      expect(report.actions.some(action=>action.selector==="#later"&&action.success)).toBe(true);
+      expect(report.findings.some(issue=>issue.code==="state-unavailable"&&issue.element==="#later")).toBe(false);
+      await page.close();
+    } finally { await browser.close(); }
+  },30000);
+
   test("discovers and activates a nested screen without a button map", async () => {
     const browser=await launchHeadless();
     try {
