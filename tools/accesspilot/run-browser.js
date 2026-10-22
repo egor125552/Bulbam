@@ -7,6 +7,7 @@ import { crawlBrowser } from "./crawler.js";
 import { installSourceTracking } from "./browser-instrumentation.js";
 import { installAccessibilityAudit } from "./audit.js";
 import { measureStaticCoverage } from "./coverage.js";
+import { groupFindings } from "./findings.js";
 const host=await launchBulbamTestHost();
 let browser;
 const reports=[];
@@ -121,6 +122,35 @@ try{
 mkdirSync("accesspilot-report",{recursive:true});
 const resultTag=process.env.ACCESSPILOT_SCENARIOS?"-"+process.env.ACCESSPILOT_SCENARIOS.replace(/[^a-z,-]/g,""):"";
 writeFileSync(resolve("accesspilot-report","Полный отчёт браузерного тестирования Бульбама"+resultTag+".json"),JSON.stringify(reports,null,2));
+const findingsSummary=groupFindings(reports);
+writeFileSync(resolve("accesspilot-report","Ошибки доступности Бульбама"+resultTag+".json"),
+  JSON.stringify(findingsSummary,null,2)+"\n");
+const overview=[
+  "AccessPilot: все обнаруженные проблемы доступности Бульбама",
+  "Уникальных нарушений: "+findingsSummary.uniqueIssues,
+  "Срабатываний проверок, включая повторы: "+findingsSummary.occurrences,
+  ...reports.map(report=>"Сценарий "+report.name+
+    ": экранов "+report.summary.screens+
+    ", действий "+report.summary.actions+
+    ", не проверено "+report.summary.untested+
+    ", завершён "+(report.summary.complete?"да":"нет")),
+  "",
+  ...findingsSummary.groups.flatMap((issue,index)=>[
+    (index+1)+". "+issue.severity+" | "+issue.code+" | "+issue.selector,
+    "   Срабатываний: "+issue.occurrences+
+      "; экраны: "+issue.screens.join(", "),
+    "   Суть: "+issue.message,
+    "   Исходный код: "+JSON.stringify(issue.source??{}),
+    ""
+  ])
+];
+writeFileSync(resolve("accesspilot-report","Ошибки доступности Бульбама"+resultTag+".txt"),
+  overview.join("\n")+"\n");
+console.log("ACCESSPILOT_ISSUES",JSON.stringify({
+  unique:findingsSummary.uniqueIssues,occurrences:findingsSummary.occurrences,
+  groups:findingsSummary.groups.map(({code,selector,occurrences,severity})=>
+    ({code,selector,occurrences,severity}))
+}));
 const coverage=measureStaticCoverage(sourceHTML,reports);
 writeFileSync(resolve("accesspilot-report","Покрытие элементов Бульбама"+resultTag+".json"),JSON.stringify(coverage,null,2));
 const lines=["AccessPilot. Реальный браузер Chromium, изолированная тестовая база, без реального VoiceOver."];
