@@ -8,6 +8,7 @@ import {crawlBrowser} from "./crawler.js";
 import {auditAccessibility,installAccessibilityAudit} from "./audit.js";
 import {installSourceTracking} from "./browser-instrumentation.js";
 import {groupFindings} from "./findings.js";
+import {controlCoverage} from "./control-coverage.js";
 import {projectRunSummary,resolveProjectProvider} from "./project-config.js";
 
 const safeFile=name=>name.replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90);
@@ -43,7 +44,8 @@ async function auditOnly(page,config,scenario){
       code,screen:view.title,element:element.selector,source:element.source
     })))
   ],screens:[{name:view.title,landmarks,elements:view.elements,
-    focus:view.focus,accessibilityTree:await page.locator("body").ariaSnapshot()}],
+    inventory:view.inventory,focus:view.focus,
+    accessibilityTree:await page.locator("body").ariaSnapshot()}],
     summary:{screens:1,actions:0,issues:violations.length,untested:view.elements.length,
       auditedStates:1,complete:false,truncated:false,pending:0,blockedRoutes:0}};
 }
@@ -56,7 +58,13 @@ function reportText(config,report){
     "Непроверенных действий: "+report.summary.untested+
       ". Завершён: "+(report.summary.complete?"да":"нет"),
     "Уникальных проблем: "+report.findings.uniqueIssues+
-      ". Срабатываний проверок: "+report.findings.occurrences,"",
+      ". Срабатываний проверок: "+report.findings.occurrences,
+    "Всего обнаружено элементов в DOM: "+report.coverage.total,
+    "Хотя бы раз появлялись: "+report.coverage.visible,
+    "Были доступны скринридеру: "+report.coverage.exposed,
+    "Попытка действия: "+report.coverage.attempted,
+    "Успешно активированы: "+report.coverage.activated,
+    "Ни разу не появились: "+report.coverage.neverVisible.length,"",
     "ОПИСАННЫЕ ЭКРАНЫ:"
   ];
   for(const s of report.summary.screens)
@@ -67,6 +75,10 @@ function reportText(config,report){
       "  Повторы: "+item.occurrences+"; экраны: "+item.screens.join(", "),
       "  "+item.message,"  "+JSON.stringify(item.source??{}));
   }
+  lines.push("","ОБНАРУЖЕННЫЕ, НО НЕ ПРОВЕРЕННЫЕ ЭЛЕМЕНТЫ:");
+  for(const item of report.coverage.untested)
+    lines.push(item.selector+" | "+item.name+" | "+
+      (item.visibleEver?"видимый":"не появлялся"));
   lines.push("","РЕАЛЬНЫЕ ДЕЙСТВИЯ:");
   for(const r of report.scenarios){
     lines.push("СЦЕНАРИЙ "+r.name+": "+JSON.stringify(r.summary));
@@ -179,11 +191,16 @@ export async function runProject(config,{
     }
     const findings=groupFindings(reports);
     const summary=projectRunSummary(reports,config.screens);
-    const all={project:config.name,mode:config.mode,summary,findings,scenarios:reports};
+    const coverage=controlCoverage(reports);
+    const all={project:config.name,mode:config.mode,summary,findings,
+      coverage,scenarios:reports};
     await saveJSON(join(dir,"accesspilot-report.json"),all);
     await writeFile(join(dir,"accesspilot-report.txt"),reportText(config,all));
     logger.log("ACCESSPILOT_RESULT",JSON.stringify({
-      ...summary,uniqueIssues:findings.uniqueIssues,occurrences:findings.occurrences
+      ...summary,uniqueIssues:findings.uniqueIssues,
+      occurrences:findings.occurrences,
+      controls:coverage.total,activated:coverage.activated,
+      neverVisible:coverage.neverVisible.length
     }));
     return all;
   }finally{
