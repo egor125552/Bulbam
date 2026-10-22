@@ -167,7 +167,10 @@ export async function runProject(config,{
         const checkpointFile=join(dir,filename+".checkpoint.json");
         let initialState=null;
         if(resume&&existsSync(checkpointFile)){
-          initialState=JSON.parse(await readFile(checkpointFile,"utf8"));
+          const saved=JSON.parse(await readFile(checkpointFile,"utf8"));
+          if(saved.version===4)initialState=saved;
+          else logger.log("ACCESSPILOT_RESTART_LEGACY_CHECKPOINT",
+            JSON.stringify({name:scenario.name,version:saved.version??null}));
         }
         let result;
         try{
