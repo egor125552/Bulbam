@@ -586,15 +586,21 @@ async function handleCallEvent(event) {
 
 async function beginOfferIfNeeded() {
   if (!currentCall || currentCall.direction !== "outgoing" || offerStarted || recoveryPending) return;
+  const startingCallId = currentCall.callId;
   offerStarted = true;
+  logCallEvent("начало согласования", "исходящее предложение");
   try {
     const pc = await ensurePeerConnection();
+    if (currentCall?.callId !== startingCallId || pc !== peerConnection) return;
     localNegotiationId = crypto.randomUUID();
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await sendSignal("offer", { type: offer.type, sdp: offer.sdp, negotiationId: localNegotiationId });
+    logCallEvent("SDP предложение", "отправлено");
   } catch (error) {
+    if (currentCall?.callId !== startingCallId) return;
     offerStarted = false;
+    logCallEvent("сигнал ошибка", `offer, ${String(error?.name || "network")}`);
     setCallStatus(`Не удалось создать аудиосоединение: ${error.message}`);
   }
 }
@@ -710,10 +716,15 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   const pc = createPeerConnectionWithRoutePool(iceServers);
+  logCallEvent("новый WebRTC создан", `маршрут ${callIcePolicy(iceServers, isTemporaryTurnOnly())}`);
   peerConnection = pc;
   setCallRouteAvailability(iceServers);
 
   for (const track of localStream.getTracks()) {
+    if (epoch !== peerCreationEpoch) {
+      pc.close();
+      throw new Error("Создание устаревшего аудиосоединения отменено.");
+    }
     const sender = pc.addTrack(track, localStream);
     if (track.kind === "audio") {
       try { await tuneAudioSender(sender); } catch {
@@ -735,15 +746,18 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   });
   pc.addEventListener("track", (event) => {
     if (peerConnection !== pc) return;
+    logCallEvent("SDP ответ", "удалённая аудиодорожка");
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     elements.callRemoteAudio.srcObject = stream;
     applyJitterBufferTargetToReceiver(event.receiver, jitterBufferTargetMs);
     void Promise.resolve(elements.callRemoteAudio.play()).then(() => {
+      if (peerConnection !== pc) return;
       remotePlaybackBlocked = false;
       if (!recoveryPending) elements.callResumeButton.hidden = true;
     }).catch(() => {
       if (peerConnection !== pc) return;
       remotePlaybackBlocked = true;
+      logCallEvent("воспроизведение заблокировано", "нужно нажать включить звук");
       elements.callResumeButton.hidden = false;
       elements.callResumeButton.textContent = "Включить звук";
       setCallStatus("Соединение есть, но Safari заблокировал воспроизведение. Нажмите «Включить звук».");
@@ -757,7 +771,10 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     if (peerConnection !== pc) return;
     handleIceConnectionState(pc);
   });
-  if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
+  if (epoch !== peerCreationEpoch) {
+    pc.close();
+    throw new Error("Создание устаревшего аудиосоединения отменено.");
+  }
   return pc;
 }
 
@@ -841,6 +858,7 @@ async function recoverCallConnection({ hard, reason }) {
   disconnectRecoveryTimer = null;
   networkRecoveryActive = true;
   recoveryAttempt = hard ? Math.max(2, recoveryAttempt + 1) : Math.max(recoveryAttempt, 1);
+  logCallEvent("восстановление", `попытка ${recoveryAttempt}, ${hard ? "пересоздание" : "обновление ice"}`);
   raiseJitterBufferForNetworkStress(peerConnection, hard ? "severe" : "degraded");
   setCallStatus(hard
     ? "Первый маршрут не восстановился. Перестраиваю соединение и обновляю STUN/TURN…"
@@ -1021,11 +1039,19 @@ async function applyAudioProfileDuringCall() {
 
 async function sendSignal(kind, payload) {
   if (!currentCall) return;
-  const result = await api(callPath("/signals"), {
-    method: "POST",
-    body: JSON.stringify({ kind, payload })
-  });
-  if (result.signal?.sequence) processedSignalSequences.add(result.signal.sequence);
+  // Capture the current call so an old request cannot mutate the next one's cursor.
+  const sendingCallId = currentCall.callId;
+  const path = callPath("/signals");
+  try {
+    const result = await api(path, { method: "POST", body: JSON.stringify({ kind, payload }) });
+    if (currentCall?.callId !== sendingCallId) return;
+    if (result.signal?.sequence) processedSignalSequences.add(result.signal.sequence);
+    if (kind !== "ice") logCallEvent("сигнал отправлен", kind);
+  } catch (error) {
+    if (currentCall?.callId === sendingCallId)
+      logCallEvent("сигнал ошибка", `${kind}, ${String(error?.name || "network")}`);
+    throw error;
+  }
 }
 
 async function prepareRecoveryCursor() {
@@ -1051,7 +1077,8 @@ function enqueueSignal(signal) {
 async function processSignal(signal) {
   if (!currentCall || signal.callId !== currentCall.callId) return true;
   if (signal.senderUserId === account?.userId || processedSignalSequences.has(signal.sequence)) return true;
-
+  const processingCallId = currentCall.callId;
+  if (signal.kind !== "ice") logCallEvent("сигнал получен", signal.kind);
   try {
     if (signal.kind === "resume") {
       if (currentCall.direction === "outgoing" && !recoveryPending) {
@@ -1067,6 +1094,7 @@ async function processSignal(signal) {
 
     const recoveryMode = signal.payload?.recoveryMode;
     let pc = await ensurePeerConnection();
+    if (currentCall?.callId !== processingCallId || pc !== peerConnection) return true;
     if (signal.kind === "offer") {
       const incomingNegotiation = signal.payload?.negotiationId ?? null;
       // A repeated WebSocket + polling delivery must not rebuild twice.
@@ -1088,11 +1116,13 @@ async function processSignal(signal) {
       }
       remoteNegotiationId = incomingNegotiation;
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      logCallEvent("SDP предложение", "принято");
       await flushRemoteCandidates();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       await sendSignal("answer", { type: answer.type, sdp: answer.sdp,
         negotiationId: remoteNegotiationId });
+      logCallEvent("SDP ответ", "отправлен");
       showConnectedControls("Соединяю аудио…");
       processedSignalSequences.add(signal.sequence);
       return true;
@@ -1103,6 +1133,7 @@ async function processSignal(signal) {
         return true;
       }
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      logCallEvent("SDP ответ", "получен");
       await flushRemoteCandidates();
       processedSignalSequences.add(signal.sequence);
       return true;
@@ -1127,6 +1158,8 @@ async function processSignal(signal) {
     processedSignalSequences.add(signal.sequence);
     return true;
   } catch (error) {
+    if (currentCall?.callId !== processingCallId) return true;
+    logCallEvent("сигнал ошибка", `${signal.kind}, ${String(error?.name || "network")}`);
     // Leave rejected offer/answer unprocessed so polling can try again
     // after the browser becomes ready. Do not advance the signaling cursor.
     setCallStatus(`Ошибка согласования аудио: ${error.message}`);
@@ -1262,6 +1295,7 @@ async function restoreCallFromUrl() {
 
 async function getIceServers({ refresh = false } = {}) {
   if (refresh) iceServersPromise = null;
+  if (!iceServersPromise) logCallEvent("запрос TURN", "обновление серверов");
   iceServersPromise = iceServersPromise ?? api("/api/v1/calls/ice")
     .then((result) => {
       const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
@@ -1269,7 +1303,10 @@ async function getIceServers({ refresh = false } = {}) {
       setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
       return lastIceServers ?? FALLBACK_ICE_SERVERS;
     })
-    .catch(() => lastIceServers ?? FALLBACK_ICE_SERVERS);
+    .catch((error) => {
+      logCallEvent("TURN недоступен", String(error?.name || "network"));
+      return lastIceServers ?? FALLBACK_ICE_SERVERS;
+    });
   return iceServersPromise;
 }
 
@@ -1518,14 +1555,19 @@ function cleanupMedia() {
   iceServersPromise = null;
   lastIceServers = null;
   elements.callMuteButton.textContent = "Выключить микрофон";
+  try { elements.callRemoteAudio.pause(); } catch {}
   elements.callRemoteAudio.srcObject = null;
 }
 
 function cleanupPeerConnection() {
   peerCreationEpoch += 1;
+  if (peerConnection) logCallEvent("WebRTC закрыт");
   peerConnectionPromise = null;
   stopQualityMonitoring();
-  if (elements.callRemoteAudio) elements.callRemoteAudio.srcObject = null;
+  if (elements.callRemoteAudio) {
+    try { elements.callRemoteAudio.pause(); } catch {}
+    elements.callRemoteAudio.srcObject = null;
+  }
   remotePlaybackBlocked = false;
   if (peerConnection) {
     try { peerConnection.close(); } catch {}
