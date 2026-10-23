@@ -1,7 +1,7 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
-import {hasTurnServer,readTemporaryTurnMode,writeTemporaryTurnMode,selectedIceRoute} from "./call-route-diagnostics.js";
+import {hasTurnServer,readTemporaryTurnMode,writeTemporaryTurnMode,selectedIceRoute,iceTransportPolicy} from "./call-route-diagnostics.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -625,13 +625,9 @@ async function prewarmOutgoingPeerConnection() {
 }
 
 function createPeerConnectionWithRoutePool(iceServers) {
-  const turnOnly=readTemporaryTurnMode();
-  if(turnOnly&&!hasTurnServer(iceServers)){
-    throw new Error("Режим TURN включён, но сервер не выдал TURN-адреса и временные учётные данные. Отключите «Только TURN» в диагностике или настройте TURN на сервере.");
-  }
   const baseConfiguration = {
     iceServers,
-    iceTransportPolicy: turnOnly?"relay":"all"
+    iceTransportPolicy: iceTransportPolicy(iceServers,readTemporaryTurnMode())
   };
   try {
     return new RTCPeerConnection({
