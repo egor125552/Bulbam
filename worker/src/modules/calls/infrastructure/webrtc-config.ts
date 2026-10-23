@@ -13,11 +13,15 @@ const DEFAULT_STUN_URLS = [
 ];
 
 export async function makeIceServers(env: Env, identity: string): Promise<IceServer[]> {
-  const cloudflare = await cloudflareTurnIceServers(env);
-  if (cloudflare.length) return mergeStunFallback(env, cloudflare);
-
   const shared = await sharedSecretTurn(env, identity);
   const configured = defaultIceServers(env, shared);
+  // If the VPS coturn service is configured with a matching TURN secret,
+  // use it before any Cloudflare TURN relay. Keep existing fallbacks.
+  if (configured.some(server=>[server.urls].flat()
+      .some(url=>/^turns?:/i.test(url)))) return configured;
+
+  const cloudflare = await cloudflareTurnIceServers(env);
+  if (cloudflare.length) return mergeStunFallback(env, cloudflare);
   return configured.length ? configured : DEFAULT_STUN_URLS.map((urls) => ({ urls }));
 }
 
