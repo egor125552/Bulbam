@@ -716,6 +716,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   const pc = createPeerConnectionWithRoutePool(iceServers);
+  const discoveredCandidateTypes = new Set();
   logCallEvent("новый WebRTC создан", `маршрут ${callIcePolicy(iceServers, isTemporaryTurnOnly())}`);
   peerConnection = pc;
   setCallRouteAvailability(iceServers);
@@ -736,13 +737,28 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   pc.addEventListener("icecandidate", (event) => {
     if (!event.candidate || !currentCall || peerConnection !== pc) return;
     const candidate = event.candidate;
+    const candidateType = /\btyp (host|srflx|prflx|relay)\b/.exec(candidate.candidate)?.[1] ?? "неизвестно";
+    if (!discoveredCandidateTypes.has(candidateType)) {
+      discoveredCandidateTypes.add(candidateType);
+      logCallEvent("ICE получен", candidateType);
+    }
     void sendSignal("ice", {
       candidate: candidate.candidate,
       sdpMid: candidate.sdpMid,
       sdpMLineIndex: candidate.sdpMLineIndex,
       usernameFragment: candidate.usernameFragment ?? null,
       negotiationId: currentCall.direction === "outgoing" ? localNegotiationId : remoteNegotiationId
-    });
+    }).catch(() => { /* Logged by sendSignal; a closed call may reject late candidates. */ });
+  });
+  pc.addEventListener("icecandidateerror", (event) => {
+    const code = Number(event.errorCode);
+    if (peerConnection === pc) logCallEvent("ICE ошибка", Number.isInteger(code) ? String(code) : "неизвестно");
+  });
+  pc.addEventListener("icegatheringstatechange", () => {
+    if (peerConnection === pc) logCallEvent("ICE состояние", `сбор ${pc.iceGatheringState}`);
+  });
+  pc.addEventListener("signalingstatechange", () => {
+    if (peerConnection === pc) logCallEvent("состояние звонка", pc.signalingState);
   });
   pc.addEventListener("track", (event) => {
     if (peerConnection !== pc) return;
@@ -1145,6 +1161,7 @@ async function processSignal(signal) {
         generation, currentGeneration, currentCall.direction === "incoming"
       );
       if (disposition === "ignore") {
+        logCallEvent("сигнал проигнорирован", "старый ice");
         processedSignalSequences.add(signal.sequence);
         return true;
       }
@@ -1174,7 +1191,8 @@ async function flushRemoteCandidates() {
   const expected = currentCall?.direction === "outgoing" ? localNegotiationId : remoteNegotiationId;
   for (const candidate of queued) {
     if (candidate.negotiationId && expected && candidate.negotiationId !== expected) continue;
-    try { await peerConnection.addIceCandidate(candidate); } catch {}
+    try { await peerConnection.addIceCandidate(candidate); }
+    catch (error) { logCallEvent("ICE ошибка", String(error?.name || "candidate")); }
   }
 }
 
@@ -1212,7 +1230,11 @@ async function pollSignals() {
       if (!processed) break;
       signalPollCursor = Math.max(signalPollCursor, Number(signal.sequence) || 0);
     }
-  } catch {} finally {
+  } catch (error) {
+    // The single foreground reconnect is handled separately; do not log every polling tick.
+    if (currentCall?.status === "accepted")
+      logCallEvent("ошибка опроса", String(error?.name || "network"));
+  } finally {
     signalPollInFlight = false;
   }
 }
