@@ -1,4 +1,12 @@
-// Local outgoing connection cue. It is never sent to the other participant.
+// A classic telephone ringback heard only by the caller, not transmitted via WebRTC.
+// 425 Hz for 1 second, then 4 seconds of silence (5-second cycle).
+// Unlike the old short two-note notification, this is a sustained call-progress tone.
+const RINGBACK_HZ = 425;
+const RINGBACK_DURATION_SECONDS = 1;
+const RINGBACK_CYCLE_MS = 5000;
+const FADE_SECONDS = 0.025;
+const VOLUME = 0.12;
+
 let context = null;
 let interval = null;
 let ringing = false;
@@ -21,30 +29,28 @@ export function prepareRingback() {
   }
 }
 
-function tone(startOffset, frequency, duration = 0.16) {
-  if (!context || context.state === "suspended") return;
-  const now = context.currentTime + startOffset;
-  const osc = context.createOscillator();
-  const gain = context.createGain();
-  osc.frequency.value = frequency;
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.linearRampToValueAtTime(0.075, now + 0.025);
-  gain.gain.setValueAtTime(0.075, now + duration - 0.035);
-  gain.gain.linearRampToValueAtTime(0.0001, now + duration);
-  osc.connect(gain).connect(context.destination);
-  activeOscillators.add(osc);
-  osc.onended = () => activeOscillators.delete(osc);
-  osc.start(now);
-  osc.stop(now + duration + 0.01);
-}
-
-function pulse() {
+function ringOnce() {
   if (!ringing || !context || context.state === "suspended") return;
   try {
-    tone(0, 440);
-    tone(0.28, 523.25);
+    const now = context.currentTime;
+    const end = now + RINGBACK_DURATION_SECONDS;
+    const osc = context.createOscillator();
+    const gain = context.createGain();
+
+    osc.type = "sine";
+    osc.frequency.value = RINGBACK_HZ;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(VOLUME, now + FADE_SECONDS);
+    gain.gain.setValueAtTime(VOLUME, end - FADE_SECONDS);
+    gain.gain.linearRampToValueAtTime(0.0001, end);
+
+    osc.connect(gain).connect(context.destination);
+    activeOscillators.add(osc);
+    osc.onended = () => activeOscillators.delete(osc);
+    osc.start(now);
+    osc.stop(end);
   } catch {
-    // Connection itself is independent of the local cue.
+    // Failure to play a local ringback must never interrupt the call.
   }
 }
 
@@ -54,8 +60,8 @@ export function startRingback() {
   const token = ++generation;
   void prepareRingback().then((ready) => {
     if (!ready || !ringing || token !== generation) return;
-    pulse();
-    if (!interval) interval = setInterval(pulse, 2800);
+    ringOnce();
+    if (!interval) interval = setInterval(ringOnce, RINGBACK_CYCLE_MS);
   });
 }
 
