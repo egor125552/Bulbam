@@ -1,6 +1,8 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
+import {hasTurnCredentials,readIcePolicy} from "./call-ice-route.js";
+import {setupCallNetworkDiagnostics,updateCallRouteStats,clearCallRouteStats} from "./call-network-diagnostics.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -58,6 +60,10 @@ const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 const ICE_CANDIDATE_POOL_SIZE = 4;
 
 export function setupCalls() {
+  setupCallNetworkDiagnostics({
+    peerConnection:()=>peerConnection,
+    iceServers:options=>getIceServers(options)
+  });
   elements.callStartButton.addEventListener("click", () => {
     prepareRingback();
     void startCall();
@@ -601,9 +607,13 @@ async function prewarmOutgoingPeerConnection() {
 }
 
 function createPeerConnectionWithRoutePool(iceServers) {
+  const icePolicy=readIcePolicy();
+  if(icePolicy==="relay"&&!hasTurnCredentials(iceServers)){
+    throw new Error("TURN недоступен: сервер звонков не выдал действующие TURN-данные. Выберите автоматический маршрут в диагностике.");
+  }
   const baseConfiguration = {
     iceServers,
-    iceTransportPolicy: "all"
+    iceTransportPolicy: icePolicy
   };
   try {
     return new RTCPeerConnection({
@@ -633,7 +643,7 @@ async function ensurePeerConnection(options = {}) {
 
 async function createPeerConnection({ iceServers: providedIceServers = null, refreshIce = false } = {}, epoch) {
   if (!localStream) localStream = await requestMicrophone();
-  const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
+  const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce||readIcePolicy()==="relay" });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   const pc = createPeerConnectionWithRoutePool(iceServers);
   peerConnection = pc;
@@ -844,6 +854,7 @@ function startQualityMonitoring(pc) {
 function stopQualityMonitoring() {
   clearInterval(qualityMonitorTimer);
   qualityMonitorTimer = null;
+  clearCallRouteStats();
   lastInboundAudioStats = null;
   healthyQualitySamples = 0;
 }
@@ -852,6 +863,7 @@ async function sampleInboundAudioQuality(pc) {
   if (peerConnection !== pc || pc.connectionState !== "connected" || typeof pc.getStats !== "function") return;
   try {
     const stats = await pc.getStats();
+    updateCallRouteStats(stats);
     let inbound = null;
     stats.forEach((report) => {
       const kind = report.kind ?? report.mediaType;
