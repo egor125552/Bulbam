@@ -34,6 +34,12 @@ function routeText(stats) {
   return "определяется";
 }
 
+export function selectedCallRoute(stats) {
+  if (!stats || typeof stats.values !== "function" || typeof stats.get !== "function")
+    return "определяется";
+  return routeText(stats);
+}
+
 export function describeCallDiagnostics(peer, stats) {
   const connection = peer?.connectionState || "неизвестно";
   const ice = peer?.iceConnectionState || "неизвестно";

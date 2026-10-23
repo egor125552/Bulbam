@@ -1,7 +1,11 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
+import { prepareCallCues, playCallCue, stopCallCues } from "./call-cues.js";
+import { startCallTrace, logCallEvent, subscribeCallLog, getCallLogText, clearCallLog } from "./call-event-log.js";
+import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
+import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
-import { describeCallDiagnostics, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
+import { describeCallDiagnostics, selectedCallRoute, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -39,12 +43,15 @@ let recoveryAttempt = 0;
 let qualityMonitorTimer = null;
 let callTimerInterval = null;
 let lastInboundAudioStats = null;
+let lastSelectedCallRoute = null;
 let healthyQualitySamples = 0;
 let jitterBufferTargetMs = null;
 let audioConnectedOnce = false;
 let networkRecoveryActive = false;
 let signalProcessingQueue = Promise.resolve();
 let signalPollInFlight = false;
+let signalPollRequestId = 0;
+const iceRequestEpoch = createRequestEpoch();
 let localNegotiationId = null;
 let remoteNegotiationId = null;
 let queuedRecoveryRequest = null;
@@ -58,18 +65,25 @@ const JITTER_BUFFER_DEGRADED_MS = 180;
 const JITTER_BUFFER_SEVERE_MS = 300;
 const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 const ICE_CANDIDATE_POOL_SIZE = 4;
+const initialConnectionWatchdog = createCallConnectionWatchdog((callId) => {
+  if (currentCall?.callId !== callId || currentCall.status !== "accepted" || isPeerConnected()) return;
+  logCallEvent("таймер подключения истёк", "12 s");
+  setCallStatus("Соединение зависло. Автоматически восстанавливаю аудио…");
+  void recoverCallConnection({ hard: false, reason: "initial-connection-timeout" });
+});
 
 export function setupCalls() {
   elements.callStartButton.addEventListener("click", () => {
     prepareRingback();
+    prepareCallCues();
     void startCall();
   });
-  elements.callAnswerButton.addEventListener("click", () => void answerCall());
-  elements.callDeclineButton.addEventListener("click", () => void declineCall());
+  elements.callAnswerButton.addEventListener("click", () => { prepareCallCues(); void answerCall(); });
+  elements.callDeclineButton.addEventListener("click", () => { prepareCallCues(); void declineCall(); });
   elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
   elements.callHandoffButton.addEventListener("click", () => void handoffCall());
   document.querySelector("#call-discover")?.addEventListener("click",()=>void discoverActiveCall());
-  elements.callEndButton.addEventListener("click", () => void endCall());
+  elements.callEndButton.addEventListener("click", () => { prepareCallCues(); void endCall(); });
   const routeChoice=document.querySelector("#turn-route-preference");
   if(routeChoice){
     routeChoice.value=isTemporaryTurnOnly()?"relay":"auto";
@@ -105,6 +119,25 @@ export function setupCalls() {
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
   elements.callExpandButton.addEventListener("click", expandCall);
   elements.callDismissButton.addEventListener("click", dismissFinishedCall);
+  subscribeCallLog((value) => {
+    const field = document.querySelector("#call-event-log");
+    if (field && field.value !== value) field.value = value;
+  });
+  document.querySelector("#call-clear-log")?.addEventListener("click", () => {
+    clearCallLog();
+    announce("Журнал звонков очищен.");
+  });
+  document.querySelector("#call-copy-log")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(getCallLogText());
+      announce("Журнал звонков скопирован.");
+    } catch {
+      const field = document.querySelector("#call-event-log");
+      field?.focus();
+      field?.select();
+      announce("Журнал выделен. Скопируйте выделенный текст.");
+    }
+  });
 
   const observer = new MutationObserver(syncCallButton);
   observer.observe(elements.conversationPeer, { childList: true, characterData: true, subtree: true });
@@ -149,7 +182,7 @@ export function setupCalls() {
 }
 
 async function switchAccount(nextAccount) {
-  if (currentCall) cleanupMedia();
+  if (currentCall) { logCallEvent("смена аккаунта"); cleanupMedia(); }
   account = nextAccount;
   currentCall = null;
   resetCallRuntime();
@@ -207,7 +240,9 @@ async function startCall() {
 
   elements.callStartButton.disabled = true;
   try {
+    logCallEvent("запрос микрофона");
     localStream = await requestMicrophone();
+    logCallEvent("микрофон доступен");
     const result = await api(`/api/v1/chats/${encodeURIComponent(chat.conversationId)}/calls`, {
       method: "POST"
     });
@@ -215,6 +250,7 @@ async function startCall() {
     answeredLocally = false;
     offerStarted = false;
     recoveryPending = false;
+    startCallTrace("outgoing");
     showOutgoing(currentCall);
     startRingback();
     void prewarmOutgoingPeerConnection();
@@ -232,18 +268,31 @@ async function startCall() {
 
 async function answerCall() {
   if (!account || !currentCall || currentCall.status !== "ringing" || currentCall.direction !== "incoming") return;
+  const answeringCallId = currentCall.callId;
   elements.callAnswerButton.disabled = true;
   answeredLocally = true;
   try {
-    localStream = await requestMicrophone();
-    await ensurePeerConnection();
+    logCallEvent("запрос микрофона");
+    const microphone = await requestMicrophone();
+    if (currentCall?.callId !== answeringCallId) {
+      microphone.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    localStream = microphone;
+    logCallEvent("микрофон доступен");
+    const pc = await ensurePeerConnection();
+    if (currentCall?.callId !== answeringCallId || pc !== peerConnection) return;
     const result = await api(callPath("/answer"), { method: "POST" });
+    if (currentCall?.callId !== answeringCallId) return;
+    logCallEvent("звонок принят");
+    playCallCue("answered");
     currentCall = result.call;
     recoveryPending = false;
     showConnectedControls("Соединяем звонок…");
     startCallPolling();
     announce(`Вы ответили ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
+    if (currentCall?.callId !== answeringCallId) return;
     answeredLocally = false;
     cleanupPeerConnection();
     stopLocalStream();
@@ -456,6 +505,7 @@ async function handleCallEvent(event) {
   if (event.type === "call.active" && event.call) {
     if (currentCall) return;
     currentCall = event.call;
+    startCallTrace(currentCall.direction);
     answeredLocally = false;
     offerStarted = false;
     if (currentCall.status === "ringing" && currentCall.direction === "incoming") {
@@ -483,6 +533,7 @@ async function handleCallEvent(event) {
   if (event.type === "call.ringing" && event.call) {
     if (!currentCall) {
       currentCall = event.call;
+      startCallTrace(currentCall.direction);
       answeredLocally = false;
       offerStarted = false;
       recoveryPending = false;
@@ -507,7 +558,10 @@ async function handleCallEvent(event) {
   }
 
   if (event.type === "call.answered") {
+    if (currentCall.status === "accepted") return;
+    logCallEvent("звонок принят");
     stopRingback();
+    playCallCue("answered");
     currentCall.status = "accepted";
     currentCall.answeredAt = event.answeredAt ?? Date.now();
     clearTimeout(ringTimeout);
@@ -538,22 +592,28 @@ async function handleCallEvent(event) {
     return;
   }
   if (event.type === "call.signal" && event.signal) {
-    if (recoveryPending) return;
+    if (recoveryPending) { logCallEvent("пауза сигналов"); return; }
     await enqueueSignal(event.signal);
   }
 }
 
 async function beginOfferIfNeeded() {
   if (!currentCall || currentCall.direction !== "outgoing" || offerStarted || recoveryPending) return;
+  const startingCallId = currentCall.callId;
   offerStarted = true;
+  logCallEvent("начало согласования", "исходящее предложение");
   try {
     const pc = await ensurePeerConnection();
+    if (currentCall?.callId !== startingCallId || pc !== peerConnection) return;
     localNegotiationId = crypto.randomUUID();
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await sendSignal("offer", { type: offer.type, sdp: offer.sdp, negotiationId: localNegotiationId });
+    logCallEvent("SDP предложение", "отправлено");
   } catch (error) {
+    if (currentCall?.callId !== startingCallId) return;
     offerStarted = false;
+    logCallEvent("сигнал ошибка", `offer, ${String(error?.name || "network")}`);
     setCallStatus(`Не удалось создать аудиосоединение: ${error.message}`);
   }
 }
@@ -669,10 +729,16 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   const pc = createPeerConnectionWithRoutePool(iceServers);
+  const discoveredCandidateTypes = new Set();
+  logCallEvent("новый WebRTC создан", `маршрут ${callIcePolicy(iceServers, isTemporaryTurnOnly())}`);
   peerConnection = pc;
   setCallRouteAvailability(iceServers);
 
   for (const track of localStream.getTracks()) {
+    if (epoch !== peerCreationEpoch) {
+      pc.close();
+      throw new Error("Создание устаревшего аудиосоединения отменено.");
+    }
     const sender = pc.addTrack(track, localStream);
     if (track.kind === "audio") {
       try { await tuneAudioSender(sender); } catch {
@@ -684,25 +750,43 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   pc.addEventListener("icecandidate", (event) => {
     if (!event.candidate || !currentCall || peerConnection !== pc) return;
     const candidate = event.candidate;
+    const candidateType = /\btyp (host|srflx|prflx|relay)\b/.exec(candidate.candidate)?.[1] ?? "неизвестно";
+    if (!discoveredCandidateTypes.has(candidateType)) {
+      discoveredCandidateTypes.add(candidateType);
+      logCallEvent("ICE получен", candidateType);
+    }
     void sendSignal("ice", {
       candidate: candidate.candidate,
       sdpMid: candidate.sdpMid,
       sdpMLineIndex: candidate.sdpMLineIndex,
       usernameFragment: candidate.usernameFragment ?? null,
       negotiationId: currentCall.direction === "outgoing" ? localNegotiationId : remoteNegotiationId
-    });
+    }).catch(() => { /* Logged by sendSignal; a closed call may reject late candidates. */ });
+  });
+  pc.addEventListener("icecandidateerror", (event) => {
+    const code = Number(event.errorCode);
+    if (peerConnection === pc) logCallEvent("ICE ошибка", Number.isInteger(code) ? String(code) : "неизвестно");
+  });
+  pc.addEventListener("icegatheringstatechange", () => {
+    if (peerConnection === pc) logCallEvent("ICE состояние", `сбор ${pc.iceGatheringState}`);
+  });
+  pc.addEventListener("signalingstatechange", () => {
+    if (peerConnection === pc) logCallEvent("состояние звонка", pc.signalingState);
   });
   pc.addEventListener("track", (event) => {
     if (peerConnection !== pc) return;
+    logCallEvent("SDP ответ", "удалённая аудиодорожка");
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     elements.callRemoteAudio.srcObject = stream;
     applyJitterBufferTargetToReceiver(event.receiver, jitterBufferTargetMs);
     void Promise.resolve(elements.callRemoteAudio.play()).then(() => {
+      if (peerConnection !== pc) return;
       remotePlaybackBlocked = false;
       if (!recoveryPending) elements.callResumeButton.hidden = true;
     }).catch(() => {
       if (peerConnection !== pc) return;
       remotePlaybackBlocked = true;
+      logCallEvent("воспроизведение заблокировано", "нужно нажать включить звук");
       elements.callResumeButton.hidden = false;
       elements.callResumeButton.textContent = "Включить звук";
       setCallStatus("Соединение есть, но Safari заблокировал воспроизведение. Нажмите «Включить звук».");
@@ -716,13 +800,18 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     if (peerConnection !== pc) return;
     handleIceConnectionState(pc);
   });
-  if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
+  if (epoch !== peerCreationEpoch) {
+    pc.close();
+    throw new Error("Создание устаревшего аудиосоединения отменено.");
+  }
   return pc;
 }
 
 function handlePeerConnectionState(pc) {
+  logCallEvent("WebRTC состояние", pc.connectionState);
   updateCallDiagnostics(pc);
   if (pc.connectionState === "connected") {
+    initialConnectionWatchdog.disarm();
     const recovered = networkRecoveryActive;
     clearAutomaticRecoveryTimers();
     recoveryAttempt = 0;
@@ -734,6 +823,8 @@ function handlePeerConnectionState(pc) {
       : `Разговор идёт. Режим: ${getSelectedAudioProfile().label}.`);
     if (!audioConnectedOnce) {
       audioConnectedOnce = true;
+      logCallEvent("звук соединён");
+      playCallCue("connected");
       announce(`Аудиозвонок с ${currentCall?.peer?.displayName ?? "собеседником"} соединён.`);
     } else if (recovered) {
       announce("Связь восстановлена. Разговор продолжается.");
@@ -761,6 +852,7 @@ function handlePeerConnectionState(pc) {
 }
 
 function handleIceConnectionState(pc) {
+  logCallEvent("ICE состояние", pc.iceConnectionState);
   if (pc.iceConnectionState === "disconnected") {
     raiseJitterBufferForNetworkStress(pc, "degraded");
     scheduleAutomaticRecovery(pc, "ice-disconnected");
@@ -795,6 +887,7 @@ async function recoverCallConnection({ hard, reason }) {
   disconnectRecoveryTimer = null;
   networkRecoveryActive = true;
   recoveryAttempt = hard ? Math.max(2, recoveryAttempt + 1) : Math.max(recoveryAttempt, 1);
+  logCallEvent("восстановление", `попытка ${recoveryAttempt}, ${hard ? "пересоздание" : "обновление ice"}`);
   raiseJitterBufferForNetworkStress(peerConnection, hard ? "severe" : "degraded");
   setCallStatus(hard
     ? "Первый маршрут не восстановился. Перестраиваю соединение и обновляю STUN/TURN…"
@@ -880,6 +973,7 @@ function stopQualityMonitoring() {
   clearInterval(qualityMonitorTimer);
   qualityMonitorTimer = null;
   lastInboundAudioStats = null;
+  lastSelectedCallRoute = null;
   healthyQualitySamples = 0;
 }
 
@@ -889,6 +983,11 @@ async function sampleInboundAudioQuality(pc) {
     const stats = await pc.getStats();
     if (peerConnection === pc && currentCall) {
       elements.callDiagnosticsText.textContent = describeCallDiagnostics(pc, stats);
+      const selected = selectedCallRoute(stats);
+      if (selected !== lastSelectedCallRoute && selected !== "определяется") {
+        lastSelectedCallRoute = selected;
+        logCallEvent("проверка качества", selected === "через TURN-сервер" ? "маршрут turn" : "маршрут прямой");
+      }
     }
     let inbound = null;
     stats.forEach((report) => {
@@ -975,11 +1074,19 @@ async function applyAudioProfileDuringCall() {
 
 async function sendSignal(kind, payload) {
   if (!currentCall) return;
-  const result = await api(callPath("/signals"), {
-    method: "POST",
-    body: JSON.stringify({ kind, payload })
-  });
-  if (result.signal?.sequence) processedSignalSequences.add(result.signal.sequence);
+  // Capture the current call so an old request cannot mutate the next one's cursor.
+  const sendingCallId = currentCall.callId;
+  const path = callPath("/signals");
+  try {
+    const result = await api(path, { method: "POST", body: JSON.stringify({ kind, payload }) });
+    if (currentCall?.callId !== sendingCallId) return;
+    if (result.signal?.sequence) processedSignalSequences.add(result.signal.sequence);
+    if (kind !== "ice") logCallEvent("сигнал отправлен", kind);
+  } catch (error) {
+    if (currentCall?.callId === sendingCallId)
+      logCallEvent("сигнал ошибка", `${kind}, ${String(error?.name || "network")}`);
+    throw error;
+  }
 }
 
 async function prepareRecoveryCursor() {
@@ -1005,7 +1112,8 @@ function enqueueSignal(signal) {
 async function processSignal(signal) {
   if (!currentCall || signal.callId !== currentCall.callId) return true;
   if (signal.senderUserId === account?.userId || processedSignalSequences.has(signal.sequence)) return true;
-
+  const processingCallId = currentCall.callId;
+  if (signal.kind !== "ice") logCallEvent("сигнал получен", signal.kind);
   try {
     if (signal.kind === "resume") {
       if (currentCall.direction === "outgoing" && !recoveryPending) {
@@ -1021,6 +1129,7 @@ async function processSignal(signal) {
 
     const recoveryMode = signal.payload?.recoveryMode;
     let pc = await ensurePeerConnection();
+    if (currentCall?.callId !== processingCallId || pc !== peerConnection) return true;
     if (signal.kind === "offer") {
       const incomingNegotiation = signal.payload?.negotiationId ?? null;
       // A repeated WebSocket + polling delivery must not rebuild twice.
@@ -1042,11 +1151,13 @@ async function processSignal(signal) {
       }
       remoteNegotiationId = incomingNegotiation;
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      logCallEvent("SDP предложение", "принято");
       await flushRemoteCandidates();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       await sendSignal("answer", { type: answer.type, sdp: answer.sdp,
         negotiationId: remoteNegotiationId });
+      logCallEvent("SDP ответ", "отправлен");
       showConnectedControls("Соединяю аудио…");
       processedSignalSequences.add(signal.sequence);
       return true;
@@ -1057,6 +1168,7 @@ async function processSignal(signal) {
         return true;
       }
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      logCallEvent("SDP ответ", "получен");
       await flushRemoteCandidates();
       processedSignalSequences.add(signal.sequence);
       return true;
@@ -1068,6 +1180,7 @@ async function processSignal(signal) {
         generation, currentGeneration, currentCall.direction === "incoming"
       );
       if (disposition === "ignore") {
+        logCallEvent("сигнал проигнорирован", "старый ice");
         processedSignalSequences.add(signal.sequence);
         return true;
       }
@@ -1081,6 +1194,8 @@ async function processSignal(signal) {
     processedSignalSequences.add(signal.sequence);
     return true;
   } catch (error) {
+    if (currentCall?.callId !== processingCallId) return true;
+    logCallEvent("сигнал ошибка", `${signal.kind}, ${String(error?.name || "network")}`);
     // Leave rejected offer/answer unprocessed so polling can try again
     // after the browser becomes ready. Do not advance the signaling cursor.
     setCallStatus(`Ошибка согласования аудио: ${error.message}`);
@@ -1095,7 +1210,8 @@ async function flushRemoteCandidates() {
   const expected = currentCall?.direction === "outgoing" ? localNegotiationId : remoteNegotiationId;
   for (const candidate of queued) {
     if (candidate.negotiationId && expected && candidate.negotiationId !== expected) continue;
-    try { await peerConnection.addIceCandidate(candidate); } catch {}
+    try { await peerConnection.addIceCandidate(candidate); }
+    catch (error) { logCallEvent("ICE ошибка", String(error?.name || "candidate")); }
   }
 }
 
@@ -1124,26 +1240,34 @@ function stopCallPolling() {
 async function pollSignals() {
   if (!currentCall || currentCall.status !== "accepted" || recoveryPending || signalPollInFlight) return;
   signalPollInFlight = true;
+  const requestId = ++signalPollRequestId;
   try {
     const callId = currentCall.callId;
     const result = await api(`${callPath("/signals")}?after=${signalPollCursor}`);
+    if (currentCall?.callId !== callId) return;
     for (const signal of result.signals ?? []) {
       if (currentCall?.callId !== callId || recoveryPending) break;
       const processed = await enqueueSignal(signal);
       if (!processed) break;
       signalPollCursor = Math.max(signalPollCursor, Number(signal.sequence) || 0);
     }
-  } catch {} finally {
-    signalPollInFlight = false;
+  } catch (error) {
+    // The single foreground reconnect is handled separately; do not log every polling tick.
+    if (currentCall?.status === "accepted")
+      logCallEvent("ошибка опроса", String(error?.name || "network"));
+  } finally {
+    if (signalPollRequestId === requestId) signalPollInFlight = false;
   }
 }
 
 async function pollCallState() {
   if (!currentCall) return;
+  const polledCallId = currentCall.callId;
+  const path = callPath();
   try {
-    const result = await api(callPath());
+    const result = await api(path);
     const latest = result.call;
-    if (!latest) return;
+    if (!matchesCallResponse(currentCall, polledCallId, latest)) return;
 
     if (latest.status === "accepted" && currentCall.status === "ringing") {
       stopRingback();
@@ -1215,15 +1339,27 @@ async function restoreCallFromUrl() {
 }
 
 async function getIceServers({ refresh = false } = {}) {
-  if (refresh) iceServersPromise = null;
-  iceServersPromise = iceServersPromise ?? api("/api/v1/calls/ice")
-    .then((result) => {
-      const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
-      if (servers.length) lastIceServers = servers;
-      setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
-      return lastIceServers ?? FALLBACK_ICE_SERVERS;
-    })
-    .catch(() => lastIceServers ?? FALLBACK_ICE_SERVERS);
+  if (refresh) {
+    iceRequestEpoch.invalidate();
+    iceServersPromise = null;
+  }
+  if (!iceServersPromise) {
+    const requestToken = iceRequestEpoch.token();
+    logCallEvent("запрос TURN", "обновление серверов");
+    iceServersPromise = api("/api/v1/calls/ice")
+      .then((result) => {
+        if (!iceRequestEpoch.isCurrent(requestToken)) return FALLBACK_ICE_SERVERS;
+        const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
+        if (servers.length) lastIceServers = servers;
+        setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
+        return lastIceServers ?? FALLBACK_ICE_SERVERS;
+      })
+      .catch((error) => {
+        if (!iceRequestEpoch.isCurrent(requestToken)) return FALLBACK_ICE_SERVERS;
+        logCallEvent("TURN недоступен", String(error?.name || "network"));
+        return lastIceServers ?? FALLBACK_ICE_SERVERS;
+      });
+  }
   return iceServersPromise;
 }
 
@@ -1274,6 +1410,8 @@ function showOutgoing(call) {
 
 function showConnectedControls(status) {
   startCallTimer();
+  if (currentCall?.status === "accepted" && !audioConnectedOnce)
+    initialConnectionWatchdog.arm(currentCall.callId);
   elements.callPanel.hidden = false;
   const focusMoved = [elements.callAnswerButton, elements.callResumeButton].includes(document.activeElement);
   setCallPresentation("connected");
@@ -1311,6 +1449,11 @@ function showRecoveredCall(status) {
 }
 
 function finishCall(message) {
+  if (currentCall) {
+    logCallEvent(message.includes("отклон") ? "звонок отклонён" : "звонок завершён");
+    stopCallCues();
+    playCallCue(message.includes("отклон") ? "declined" : "ended");
+  }
   cleanupMedia();
   currentCall = null;
   answeredLocally = false;
@@ -1323,6 +1466,7 @@ function finishCall(message) {
 function renderFinished(message) {
   elements.callPanel.hidden = false;
   setCallPresentation("finished");
+  elements.callDiagnostics.hidden = false;
   elements.callTitle.textContent = "Звонок";
   elements.callPeer.textContent = "";
   setCallStatus(message);
@@ -1409,6 +1553,7 @@ function stopCallTimer() {
 
 function setCallRouteAvailability(servers) {
   if (!currentCall) return;
+  logCallEvent("ICE конфигурация", turnAvailable(servers) ? "turn и stun" : "только stun");
   elements.callDiagnosticsText.textContent = turnAvailable(servers)
     ? "TURN-сервер доступен в настройках. Реальный маршрут определится после соединения."
     : "TURN-сервер не настроен. Используется попытка прямого соединения.";
@@ -1440,6 +1585,8 @@ function toggleMute() {
 }
 
 function cleanupMedia() {
+  initialConnectionWatchdog.disarm();
+  logCallEvent("очистка звонка");
   stopCallTimer();
   stopRingback();
   clearTimeout(ringTimeout);
@@ -1452,23 +1599,30 @@ function cleanupMedia() {
   signalPollCursor = 0;
   signalProcessingQueue = Promise.resolve();
   signalPollInFlight = false;
+  signalPollRequestId++;
   remoteCandidates = [];
   remotePlaybackBlocked = false;
   queuedRecoveryRequest = null;
   elements.callResumeButton.textContent = "Восстановить звук";
   muted = false;
   restartInFlight = false;
+  iceRequestEpoch.invalidate();
   iceServersPromise = null;
   lastIceServers = null;
   elements.callMuteButton.textContent = "Выключить микрофон";
+  try { elements.callRemoteAudio.pause(); } catch {}
   elements.callRemoteAudio.srcObject = null;
 }
 
 function cleanupPeerConnection() {
   peerCreationEpoch += 1;
+  if (peerConnection) logCallEvent("WebRTC закрыт");
   peerConnectionPromise = null;
   stopQualityMonitoring();
-  if (elements.callRemoteAudio) elements.callRemoteAudio.srcObject = null;
+  if (elements.callRemoteAudio) {
+    try { elements.callRemoteAudio.pause(); } catch {}
+    elements.callRemoteAudio.srcObject = null;
+  }
   remotePlaybackBlocked = false;
   if (peerConnection) {
     try { peerConnection.close(); } catch {}
@@ -1496,6 +1650,7 @@ function stopLocalStream() {
 }
 
 function resetCallRuntime() {
+  initialConnectionWatchdog.disarm();
   stopCallTimer();
   clearTimeout(ringTimeout);
   ringTimeout = null;
@@ -1506,6 +1661,7 @@ function resetCallRuntime() {
   signalPollCursor = 0;
   signalProcessingQueue = Promise.resolve();
   signalPollInFlight = false;
+  signalPollRequestId++;
   remotePlaybackBlocked = false;
   queuedRecoveryRequest = null;
   elements.callResumeButton.textContent = "Восстановить звук";
@@ -1514,6 +1670,7 @@ function resetCallRuntime() {
   restartInFlight = false;
   recoveryPending = false;
   muted = false;
+  iceRequestEpoch.invalidate();
   iceServersPromise = null;
   lastIceServers = null;
   clearNetworkRecoveryState();
