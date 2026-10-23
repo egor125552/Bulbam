@@ -1,7 +1,6 @@
 import { handleError, json, methodNotAllowed } from "./core/http";
 import { localizeApiResponse } from "./i18n";
 import { CallService } from "./modules/calls/application/call-service";
-import { signedRelayIceServers } from "./modules/calls/infrastructure/webrtc-config";
 import { handleCallHttp } from "./modules/calls/transport/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
 import { AdminRecoveryService } from "./modules/identity/application/admin-recovery-service";
@@ -53,15 +52,6 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
 async function handleRequestInternal(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
   try {
-    if (url.pathname === "/api/relay/probe") {
-      if (request.method !== "GET") return methodNotAllowed(["GET"]);
-      // Diagnostic response contains only success/failure, not the issued credentials.
-      const candidates = await signedRelayIceServers(env, "00000000-0000-4000-8000-000000000000");
-      return json({
-        ok: candidates.length > 0,
-        relayIssuer: candidates.length > 0 ? "ready" : "unavailable"
-      }, { status: candidates.length > 0 ? 200 : 503, headers: { "cache-control": "no-store" } });
-    }
     if (url.pathname === "/api/relay/public-key") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
       return json({ ok: Boolean(env.VAPID_PUBLIC_KEY), publicKey: env.VAPID_PUBLIC_KEY ?? null }, { status: env.VAPID_PUBLIC_KEY ? 200 : 503 });
