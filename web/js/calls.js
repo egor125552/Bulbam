@@ -1,7 +1,7 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
-import { describeCallDiagnostics, formatCallDuration, turnAvailable } from "./call-monitor.js";
+import { describeCallDiagnostics, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -70,6 +70,37 @@ export function setupCalls() {
   elements.callHandoffButton.addEventListener("click", () => void handoffCall());
   document.querySelector("#call-discover")?.addEventListener("click",()=>void discoverActiveCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
+  const routeChoice=document.querySelector("#turn-route-preference");
+  if(routeChoice){
+    routeChoice.value=isTemporaryTurnOnly()?"relay":"auto";
+    routeChoice.addEventListener("change",async()=>{
+      const turnOnly=routeChoice.value==="relay";
+      if(turnOnly){
+        routeChoice.disabled=true;
+        try{
+          const servers=await getIceServers({refresh:true});
+          if(!turnAvailable(servers)){
+            routeChoice.value="auto";
+            setTemporaryTurnOnly(false);
+            const status=document.querySelector("#turn-route-availability");
+            if(status)status.textContent="TURN не выдан сервером. Оставлен автоматический режим.";
+            announce("TURN не выдан сервером. Оставлен автоматический режим.");
+            return;
+          }
+        }finally{routeChoice.disabled=false;}
+      }
+      if(!setTemporaryTurnOnly(turnOnly)){
+        routeChoice.value=isTemporaryTurnOnly()?"relay":"auto";
+        announce("Не удалось сохранить временный режим TURN.");
+        return;
+      }
+      const status=document.querySelector("#turn-route-availability");
+      if(status)status.textContent=turnOnly
+        ?"TURN включён для следующих звонков.":"Автоматический выбор STUN/TURN включён.";
+      announce(turnOnly
+        ?"TURN включён для следующих звонков.":"Автоматический выбор STUN/TURN включён.");
+    });
+  }
   elements.callMuteButton.addEventListener("click", toggleMute);
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
   elements.callExpandButton.addEventListener("click", expandCall);
@@ -605,7 +636,7 @@ async function prewarmOutgoingPeerConnection() {
 function createPeerConnectionWithRoutePool(iceServers) {
   const baseConfiguration = {
     iceServers,
-    iceTransportPolicy: "all"
+    iceTransportPolicy: callIcePolicy(iceServers,isTemporaryTurnOnly())
   };
   try {
     return new RTCPeerConnection({
