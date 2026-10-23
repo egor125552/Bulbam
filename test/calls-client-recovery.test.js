@@ -260,7 +260,18 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
     constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
   });
   replaceGlobal("MutationObserver", class { observe() {} });
+  const mediaActions = new Map();
+  const mediaSession = {
+    playbackState: "none",
+    setMicrophoneActive: vi.fn(),
+    setActionHandler(name, callback) {
+      if (callback) mediaActions.set(name, callback);
+      else mediaActions.delete(name);
+    }
+  };
   replaceGlobal("navigator", {
+    mediaSession,
+    onLine: true,
     mediaDevices: {
       getSupportedConstraints: () => ({
         echoCancellation: true,
@@ -359,6 +370,18 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
 
   first.emitConnection("connected");
   await flushAsync();
+  // The WebRTC media sender must actually mute when a headset media key fires.
+  expect(mediaActions.has("togglemicrophone")).toBe(true);
+  mediaActions.get("togglemicrophone")();
+  expect(track.enabled).toBe(false);
+  expect(mediaSession.setMicrophoneActive).toHaveBeenLastCalledWith(false);
+  mediaActions.get("play")();
+  expect(track.enabled).toBe(true);
+  expect(mediaSession.setMicrophoneActive).toHaveBeenLastCalledWith(true);
+  mediaActions.get("pause")();
+  expect(track.enabled).toBe(false);
+  mediaActions.get("play")();
+  expect(track.enabled).toBe(true);
   first.emitConnection("failed", "failed");
   await flushAsync();
 
@@ -400,8 +423,20 @@ test("audio calls buffer short drops, soft-restart ICE, then rebuild with fresh 
   await flushAsync();
   expect(announcements).toContain("Связь восстановлена. Разговор продолжается.");
 
-  elements.callEndButton.click();
+  // Airplane mode was turned off: the browser's online event causes an ICE
+  // restart immediately, without advancing the 12-second watchdog.
+  const radioOffersBefore = signalBodies.filter((signal) => signal.kind === "offer").length;
+  window.dispatchEvent({ type: "offline" });
+  window.dispatchEvent({ type: "online" });
+  await flushAsync(200);
+  expect(signalBodies.filter((signal) => signal.kind === "offer").length).toBeGreaterThan(radioOffersBefore);
+  expect(track.enabled).toBe(true);
+  // The headset hang-up command must also end the call on the server.
+  expect(mediaActions.has("hangup")).toBe(true);
+  mediaActions.get("hangup")();
   await flushAsync();
+  expect(serverStatus).toBe("ended");
+  expect(mediaActions.size).toBe(0);
   vi.clearAllTimers();
 
   if (originalLiveStatusDescriptor) {
