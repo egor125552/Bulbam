@@ -29,7 +29,7 @@ export function startCallTrace(direction) {
 export function logCallEvent(event, detail = "") {
   if (!ALLOWED.has(event)) return;
   const safe = String(detail).slice(0, 90);
-  const sanitized = SAFE_DETAILS.test(safe) && !/\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{8}-[0-9a-f-]{27,}|(?:^|\s)(?:turn|stun):/i.test(safe) ? safe : "[данные скрыты]";
+  const sanitized = SAFE_DETAILS.test(safe) && !/\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{8}-[0-9a-f-]{27,}|(?:^|\s)(?:turn|stun):|candidate|secret|token|password|username|sdp|authorization|credential/i.test(safe) ? safe : "[данные скрыты]";
   const stamp = new Date().toLocaleTimeString("ru-RU", { hour12: false });
   entries.push(`${stamp} | ${event}${sanitized ? ": " + sanitized : ""}`);
   if (entries.length > MAX_LINES) entries.splice(0, entries.length - MAX_LINES);
