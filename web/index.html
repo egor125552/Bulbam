@@ -282,6 +282,11 @@
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+              <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
+              <details id="call-diagnostics" open hidden>
+                <summary>Диагностика звонка, временно включена</summary>
+                <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
+              </details>
             </div>
             <div class="call-screen-navigation">
               <button id="call-minimize" type="button" hidden>Свернуть звонок</button>

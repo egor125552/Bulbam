@@ -4,6 +4,9 @@
   "main": "worker/src/index.ts",
   "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "WEBRTC_TURN_URLS": "turn:169.58.224.216:3478?transport=udp,turn:169.58.224.216:3478?transport=tcp"
+  },
   "assets": {
     "directory": "./web",
     "binding": "ASSETS",

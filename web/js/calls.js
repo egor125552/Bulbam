@@ -1,6 +1,7 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
+import { describeCallDiagnostics, formatCallDuration, turnAvailable } from "./call-monitor.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -36,6 +37,7 @@ let disconnectRecoveryTimer = null;
 let recoveryWatchdogTimer = null;
 let recoveryAttempt = 0;
 let qualityMonitorTimer = null;
+let callTimerInterval = null;
 let lastInboundAudioStats = null;
 let healthyQualitySamples = 0;
 let jitterBufferTargetMs = null;
@@ -637,6 +639,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   const pc = createPeerConnectionWithRoutePool(iceServers);
   peerConnection = pc;
+  setCallRouteAvailability(iceServers);
 
   for (const track of localStream.getTracks()) {
     const sender = pc.addTrack(track, localStream);
@@ -687,6 +690,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
 }
 
 function handlePeerConnectionState(pc) {
+  updateCallDiagnostics(pc);
   if (pc.connectionState === "connected") {
     const recovered = networkRecoveryActive;
     clearAutomaticRecoveryTimers();
@@ -852,6 +856,9 @@ async function sampleInboundAudioQuality(pc) {
   if (peerConnection !== pc || pc.connectionState !== "connected" || typeof pc.getStats !== "function") return;
   try {
     const stats = await pc.getStats();
+    if (peerConnection === pc && currentCall) {
+      elements.callDiagnosticsText.textContent = describeCallDiagnostics(pc, stats);
+    }
     let inbound = null;
     stats.forEach((report) => {
       const kind = report.kind ?? report.mediaType;
@@ -1182,6 +1189,7 @@ async function getIceServers({ refresh = false } = {}) {
     .then((result) => {
       const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
       if (servers.length) lastIceServers = servers;
+      setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
       return lastIceServers ?? FALLBACK_ICE_SERVERS;
     })
     .catch(() => lastIceServers ?? FALLBACK_ICE_SERVERS);
@@ -1198,6 +1206,7 @@ function requestMicrophone() {
 }
 
 function showIncoming(call) {
+  startCallTimer();
   elements.callPanel.hidden = false;
   setCallPresentation("incoming");
   elements.callTitle.textContent = "Входящий звонок";
@@ -1215,6 +1224,7 @@ function showIncoming(call) {
 }
 
 function showOutgoing(call) {
+  startCallTimer();
   elements.callPanel.hidden = false;
   setCallPresentation("outgoing");
   elements.callTitle.textContent = "Исходящий звонок";
@@ -1232,6 +1242,7 @@ function showOutgoing(call) {
 }
 
 function showConnectedControls(status) {
+  startCallTimer();
   elements.callPanel.hidden = false;
   const focusMoved = [elements.callAnswerButton, elements.callResumeButton].includes(document.activeElement);
   setCallPresentation("connected");
@@ -1249,6 +1260,7 @@ function showConnectedControls(status) {
 }
 
 function showRecoveredCall(status) {
+  startCallTimer();
   if (!currentCall) return;
   elements.callPanel.hidden = false;
   setCallPresentation("connected");
@@ -1308,6 +1320,7 @@ function renderIdle() {
 }
 
 function setCallPresentation(mode) {
+  elements.callDiagnostics.hidden = !(mode === "incoming" || mode === "outgoing" || mode === "connected");
   if (["incoming", "outgoing", "finished", "idle"].includes(mode)) {
     elements.callPanel.classList.remove("is-minimized");
   }
@@ -1341,6 +1354,40 @@ function dismissFinishedCall() {
   target?.focus();
 }
 
+function startCallTimer() {
+  stopCallTimer();
+  refreshCallTimer();
+  if (currentCall?.status === "accepted") {
+    callTimerInterval = setInterval(refreshCallTimer, 1_000);
+  }
+}
+
+function refreshCallTimer() {
+  const active = currentCall?.status === "accepted" &&
+    Number.isFinite(Number(currentCall.answeredAt)) && Number(currentCall.answeredAt) > 0;
+  elements.callDuration.hidden = !active;
+  if (active) elements.callDuration.textContent =
+    `Время звонка: ${formatCallDuration(currentCall.answeredAt)}`;
+}
+
+function stopCallTimer() {
+  clearInterval(callTimerInterval);
+  callTimerInterval = null;
+  elements.callDuration.hidden = true;
+}
+
+function setCallRouteAvailability(servers) {
+  if (!currentCall) return;
+  elements.callDiagnosticsText.textContent = turnAvailable(servers)
+    ? "TURN-сервер доступен в настройках. Реальный маршрут определится после соединения."
+    : "TURN-сервер не настроен. Используется попытка прямого соединения.";
+}
+
+function updateCallDiagnostics(pc) {
+  if (peerConnection !== pc || !currentCall) return;
+  elements.callDiagnosticsText.textContent = describeCallDiagnostics(pc, null);
+}
+
 function setCallStatus(text) {
   elements.callStatus.textContent = text;
 }
@@ -1362,6 +1409,7 @@ function toggleMute() {
 }
 
 function cleanupMedia() {
+  stopCallTimer();
   stopRingback();
   clearTimeout(ringTimeout);
   ringTimeout = null;
@@ -1417,6 +1465,7 @@ function stopLocalStream() {
 }
 
 function resetCallRuntime() {
+  stopCallTimer();
   clearTimeout(ringTimeout);
   ringTimeout = null;
   stopCallPolling();
