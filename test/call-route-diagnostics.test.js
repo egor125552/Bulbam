@@ -1,5 +1,5 @@
 import {test,expect} from "vitest";
-import {hasTurnServer,readTemporaryTurnMode,writeTemporaryTurnMode,selectedIceRoute} from "../web/js/call-route-diagnostics.js";
+import {hasTurnServer,readTemporaryTurnMode,writeTemporaryTurnMode,selectedIceRoute,iceTransportPolicy} from "../web/js/call-route-diagnostics.js";
 
 function stats(localType,remoteType,{transport=true,nominated=true}={}){
   const rows=[
@@ -38,4 +38,13 @@ test("temporary relay mode is tab-scoped and reversible",()=>{
   expect(readTemporaryTurnMode(storage)).toBe(true);
   expect(writeTemporaryTurnMode(false,storage)).toBe(true);
   expect(readTemporaryTurnMode(storage)).toBe(false);
+});
+
+test("forcing TURN truly sets WebRTC relay policy and fails closed without relay",()=>{
+  const stun=[{urls:"stun:stun.cloudflare.com:3478"}];
+  const turn=[{urls:"turn:169.58.224.216:3478?transport=udp",
+    username:"example-user",credential:"example-only"}];
+  expect(iceTransportPolicy(stun,false)).toBe("all");
+  expect(iceTransportPolicy(turn,true)).toBe("relay");
+  expect(()=>iceTransportPolicy(stun,true)).toThrow(/TURN/);
 });
