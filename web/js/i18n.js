@@ -70,12 +70,6 @@ export function translateText(value) {
     }
   }
   if(!translated){
-    for(const [regex,render] of patterns) {
-      const match=trimmed.match(regex);
-      if(match){translated=render(match);break;}
-    }
-  }
-  if(!translated){
     // Dynamic errors include a runtime-supplied detail after a fixed prefix.
     // Translate only the interface prefix, never modify the detail itself.
     for(const [prefix,translation] of prefixTranslations){
@@ -83,6 +77,12 @@ export function translateText(value) {
         translated=translation.trimEnd()+" "+trimmed.slice(prefix.trimEnd().length+1);
         break;
       }
+    }
+  }
+  if(!translated){
+    for(const [regex,render] of patterns) {
+      const match=trimmed.match(regex);
+      if(match){translated=render(match);break;}
     }
   }
   if(!translated)return value;

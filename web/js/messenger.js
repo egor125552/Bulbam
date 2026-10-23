@@ -1,6 +1,6 @@
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
-import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
+import { chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -34,7 +34,7 @@ export function setupMessenger() {
   elements.newChatButton.addEventListener("click", toggleSearchPanel);
   elements.userSearchInput.addEventListener("input", scheduleUserSearch);
   elements.userSearchInput.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeSearchPanel();
+    if (event.key === "Escape") closeSearchPanel({ restoreFocus: true });
   });
   elements.messageForm.addEventListener("submit", sendCurrentMessage);
   elements.messageInput.addEventListener("keydown", (event) => {
@@ -109,15 +109,16 @@ function toggleSearchPanel() {
     elements.userSearchInput.focus();
     return;
   }
-  closeSearchPanel();
+  closeSearchPanel({ restoreFocus: true });
 }
 
-function closeSearchPanel() {
+function closeSearchPanel({ restoreFocus = false } = {}) {
   clearTimeout(searchTimer);
   elements.userSearchPanel.hidden = true;
   elements.newChatButton.setAttribute("aria-expanded", "false");
   elements.userSearchInput.value = "";
   elements.userSearchResults.replaceChildren();
+  if (restoreFocus) elements.newChatButton.focus();
 }
 
 function scheduleUserSearch() {
@@ -250,8 +251,13 @@ function renderChats() {
     presence.className="chat-presence";
     presence.dataset.presenceUserId=chat.peer.userId;
     presence.textContent=presenceLabel(chat.peer.userId);
-    button.append(name, time, username, presence, preview);
-    button.setAttribute("aria-label", peerChatLabel(chat));
+    // Use the visible descendants as the accessible name, in their real
+    // reading order. A separately constructed aria-label could rearrange
+    // them and fail WCAG 2.5.3 (Label in Name).
+    const screenReaderHint = document.createElement("span");
+    screenReaderHint.className = "visually-hidden";
+    screenReaderHint.textContent = [`@${chat.peer.username}`, translateText("Открыть чат")].filter(Boolean).join(". ");
+    button.append(name, time, username, presence, preview, screenReaderHint);
     button.addEventListener("click", () => void selectChat(chat, { focusHeading: true }));
     elements.chatList.append(button);
   }
@@ -320,10 +326,6 @@ function presenceLabel(userId) {
   return presenceByUserId.get(userId)?.label ?? translateText("Статус неизвестен");
 }
 
-function peerChatLabel(chat) {
-  return chatAccessibleLabel(chat, account?.userId) + ". " + presenceLabel(chat.peer.userId);
-}
-
 function updatePeerPresence() {
   if (!account)return;
   for (const chat of chats) {
@@ -332,7 +334,7 @@ function updatePeerPresence() {
     if (!button)continue;
     const span=button.querySelector(".chat-presence");
     if(span)span.textContent=presenceLabel(chat.peer.userId);
-    button.setAttribute("aria-label",peerChatLabel(chat));
+    // Native button accessible name updates automatically with descendants.
   }
   if(selectedChat)
     elements.conversationPeer.textContent=`@${selectedChat.peer.username} · ${presenceLabel(selectedChat.peer.userId)}`;
@@ -366,8 +368,9 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
     if (currentDay !== lastDay) {
       const separator = document.createElement("li");
       separator.className = "message-day";
-      separator.setAttribute("role", "separator");
-      separator.setAttribute("aria-label", dayLabel(message.createdAt));
+      // An <ol> must have list items as direct accessibility children.
+      // role=separator removes the <li> listitem semantics (WCAG list).
+      separator.setAttribute("role", "listitem");
       separator.textContent = dayLabel(message.createdAt);
       list.append(separator);
       lastDay = currentDay;
@@ -376,6 +379,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
     const item = document.createElement("li");
     const mine = message.senderUserId === account?.userId;
     item.className = `message ${mine ? "message-mine" : "message-theirs"}`;
+    item.setAttribute("role", "listitem");
     item.dataset.messageId = message.messageId;
     if (message.localState) item.classList.add(`message-${message.localState}`);
 

@@ -1,0 +1,89 @@
+name: AccessPilot autonomous audit
+on:
+  push:
+    branches:
+      - feature/accesspilot-virtual-accessibility
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'tools/accesspilot/**'
+      - 'test/accesspilot*'
+      - '.github/workflows/accesspilot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  autonomous-accessibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 48
+    steps:
+      - name: Checkout Bulbam
+        uses: actions/checkout@v4
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test source and universal browser explorer
+        run: |
+          npm run check
+          npm run check:web
+          ACCESSPILOT_FAKE_MEDIA=1 ACCESSPILOT_BROWSER_TESTS=1 npx vitest run test/accesspilot-browser.test.js test/accesspilot-audit.test.js test/accesspilot-bulbam-wcag.test.js test/accesspilot-coverage.test.js test/accesspilot-findings.test.js test/accesspilot-detailed-help.test.js test/accesspilot-project-config.test.js test/accesspilot-project-runner.test.js test/accesspilot-merge.test.js test/accesspilot-control-coverage.test.js test/accesspilot-voice-draft-focus.test.js test/accesspilot-action-coverage.test.js test/accesspilot-stale-replay.test.js test/accesspilot-call-replay.test.js test/accesspilot-readonly.test.js test/call-ice-route.test.js test/call-ice-diagnostics-browser.test.js --maxWorkers=2 --reporter=dot
+      - name: Explore signed-out screens
+        timeout-minutes: 6
+        env:
+          ACCESSPILOT_SCENARIOS: signed-out
+          ACCESSPILOT_EXHAUSTIVE: '1'
+          ACCESSPILOT_MAX_ACTIONS: '175'
+          ACCESSPILOT_MAX_STATES: '100'
+        run: npm run test:accessibility
+      - name: Explore signed-in screens and every discoverable button
+        timeout-minutes: 35
+        env:
+          ACCESSPILOT_SCENARIOS: signed-in
+          ACCESSPILOT_FAKE_MEDIA: '1'
+          ACCESSPILOT_EXHAUSTIVE: '1'
+          ACCESSPILOT_MAX_ACTIONS: '650'
+          ACCESSPILOT_MAX_STATES: '240'
+        run: npm run test:accessibility
+      - name: Combine scenarios and report every issue
+        if: always()
+        run: node tools/accesspilot/merge-reports.js --config tools/accesspilot/accesspilot.project.json --output accesspilot-report
+      - name: Print generic screen and action coverage
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import {existsSync,readFileSync} from "node:fs";
+          import {groupFindings} from "./tools/accesspilot/findings.js";
+          const reports=[];
+          for(const scenario of ["signed-out","signed-in"]){
+            const file="accesspilot-report/"+scenario+".json";
+            if(!existsSync(file)){console.log("MISSING SCENARIO",scenario);continue;}
+            const result=JSON.parse(readFileSync(file,"utf8"));
+            reports.push(result);
+            console.log("SCENARIO",scenario,result.summary);
+            for(const finding of result.findings)
+              console.log("FINDING",JSON.stringify(finding));
+          }
+          const summary=groupFindings(reports);
+          console.log("ALL ISSUES",JSON.stringify({
+            unique:summary.uniqueIssues,occurrences:summary.occurrences,
+            bySeverity:summary.bySeverity
+          }));
+          for(const group of summary.groups)
+            console.log("ISSUE",group.code,group.selector,group.occurrences,
+              group.screens.join("; "));
+          NODE
+      - name: Upload detailed accessibility reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accesspilot-reports
+          path: accesspilot-report/
+          if-no-files-found: warn

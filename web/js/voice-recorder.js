@@ -369,7 +369,9 @@ function syncPauseUi() {
   if (!available) return;
   const paused = state.clock.paused;
   pauseButton.textContent = paused ? "Продолжить запись" : "Пауза записи";
-  pauseButton.setAttribute("aria-label", paused ? "Продолжить запись голосового" : "Приостановить запись голосового");
+  pauseButton.setAttribute("aria-label", paused
+    ? "Продолжить запись голосового"
+    : "Пауза записи. Приостановить запись голосового");
   pauseButton.setAttribute("aria-pressed", String(paused));
   if (recordingStatus && paused) recordingStatus.textContent = "Запись на паузе";
 }
@@ -675,7 +677,17 @@ async function deleteRecoverableDraft() {
 }
 
 function hideDraftPanel() {
-  if (draftPanel) draftPanel.hidden = true;
+  if (!draftPanel) return;
+  const containedFocus = draftPanel.contains(document.activeElement);
+  draftPanel.hidden = true;
+  // The delete/send buttons disappear with the recovered draft. Transfer
+  // keyboard and screen-reader focus to the composer instead of leaving it
+  // attached to a hidden button.
+  if (containedFocus) {
+    const target = [recordButton, document.querySelector("#message-input")]
+      .find((node) => node && !node.disabled && !node.hidden && node.getClientRects().length > 0);
+    target?.focus({ preventScroll: true });
+  }
 }
 
 function setStartingUi(active) {
@@ -684,7 +696,7 @@ function setStartingUi(active) {
   recordButton.setAttribute("aria-busy", String(active));
   if (active) {
     recordButton.textContent = "Подготавливаю запись";
-    recordButton.setAttribute("aria-label", "Подготавливается запись голосового сообщения");
+    recordButton.setAttribute("aria-label", "Подготавливаю запись. Подготавливается запись голосового сообщения");
     return;
   }
   if (!current) setRecordingUi(false);
@@ -697,7 +709,7 @@ function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date
   recordButton.textContent = recording ? "Отправить голосовое" : "Записать голосовое";
   recordButton.setAttribute("aria-pressed", String(recording));
   recordButton.setAttribute("aria-label", recording
-    ? "Остановить и отправить голосовое. Запись идёт."
+    ? "Отправить голосовое. Остановить запись и отправить. Запись идёт."
     : "Записать голосовое");
   document.body.classList.toggle("voice-recording", recording);
   window.dispatchEvent(new CustomEvent("bulbam:voice-recording-changed", { detail: {recording} }));

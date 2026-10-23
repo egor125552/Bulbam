@@ -269,7 +269,7 @@
             </div>
             <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
-            <button id="voice-pause-button" class="button-with-icon" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-pause-button" class="button-with-icon" type="button" aria-pressed="false" aria-label="Пауза записи. Приостановить запись голосового" hidden>Пауза записи</button>
             <button id="voice-quality-cycle" type="button" class="button-with-icon" aria-label="Переключить качество голосовых сообщений">Качество голосового</button>
             <p id="message-send-hint" class="visually-hidden" data-detailed-help>Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
             <p id="voice-record-hint" class="visually-hidden" data-detailed-help>Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
@@ -293,7 +293,7 @@
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
-              <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
+              <button id="call-audio-cycle" class="button-with-icon" type="button" hidden>Режим микрофона</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
@@ -479,6 +479,17 @@
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
+            <h4 id="ice-diagnostics-title">Сетевой маршрут звонка</h4>
+            <p>Фактически выбранное WebRTC-соединение: <strong id="call-ice-route">Звонка нет, маршрут не выбран</strong></p>
+            <p>TURN в настройках звонков: <strong id="call-turn-availability">Не проверено</strong></p>
+            <label for="call-ice-mode">Маршрут для следующего звонка</label>
+            <select id="call-ice-mode" aria-describedby="call-ice-mode-hint">
+              <option value="all">Автоматически (прямое соединение или TURN)</option>
+              <option value="relay">Только TURN, временно</option>
+            </select>
+            <p id="call-ice-mode-hint" class="hint">Выбор действует только в текущей вкладке. Включайте «Только TURN» после проверки доступности TURN. Текущий звонок не прерывается.</p>
+            <p id="call-ice-mode-status" role="status" aria-live="polite"></p>
+            <button id="refresh-call-route" type="button">Проверить маршрут и TURN</button>
           </section>
         </details>
       </dialog>
@@ -535,7 +546,7 @@
       setupCanonicalInterface();
       document.querySelector("#logout")?.addEventListener("click", () =>
         document.querySelector("#settings-dialog")?.close?.());
-      await import("/app.js?v=20261019-settings-call-fix-1");
+      await import("/app.js?v=20261023-ice-route-diag-1");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

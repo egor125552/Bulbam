@@ -72,3 +72,18 @@ A full page reload deliberately does **not** silently reopen the microphone. The
 Incoming call Web Push points to `?chat=<conversationId>&call=<callId>`. After authentication the PWA can restore the CallRoom state and present **Ответить** / **Отклонить**. An already accepted call instead presents **Восстановить звук** so microphone access always follows an explicit user action.
 
 Call controls use semantic buttons and text status. VoiceOver does not need a separate visual-only control path. The call heading can receive focus when a call is explicitly opened from a push notification, while ordinary realtime state changes are announced through the existing polite status channel.
+
+## Диагностика реального маршрута (ICE)
+
+В настройках «Диагностика» теперь отображается **фактически выбранная пара ICE-кандидатов** текущего звонка через `RTCPeerConnection.getStats()`:
+
+- **TURN**: локальный или удалённый кандидат имеет тип `relay`.
+- **STUN / прямое соединение**: кандидат `srflx`, без `relay`.
+- **Прямое соединение**: оба кандидата `host`; другие пути ICE выводятся отдельно.
+- **Соединение ещё не установлено**: выбранная пара неизвестна. В этой ситуации нельзя объявлять TURN или STUN на основании списка серверов.
+
+Диагностика намеренно **не выводит IP-адреса, ICE-токены и пароли**. Можно вручную обновить фактический маршрут и проверить, выдал ли Worker временные TURN-учётные данные.
+
+Поле «Маршрут для следующего звонка» позволяет временно переключить режим на «Только TURN» (`iceTransportPolicy: "relay"`). Настройка хранится в `sessionStorage` текущей вкладки и применяется к следующему звонку, не разрывая текущий. Если `/api/v1/calls/ice` не возвращает аутентифицированный TURN-сервер, переключатель оставляет автоматический режим и показывает причину: иначе звонок не установился бы.
+
+**Наличие запущенного coturn на VPS не означает, что TURN уже выдан пользователям Cloudflare Worker.** Для рабочего контура нужны защищённые `WEBRTC_TURN_URLS` и `WEBRTC_TURN_SECRET` в Worker (или отдельный поддерживаемый провайдер TURN). После настройки проверить запрос ICE и успешный звонок между двумя независимыми сетями, в том числе маршрут с `relay`. Не размещать общий секрет coturn в коде, GitHub или браузерном HTML.
