@@ -478,6 +478,14 @@
               <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
+            <div class="call-route-diagnostics" aria-labelledby="ice-route-title">
+              <h4 id="ice-route-title">Маршрут аудиозвонка (WebRTC)</h4>
+              <p>Текущее соединение: <strong id="call-route-status">Нет активного аудиосоединения</strong></p>
+              <p>TURN от сервера: <span id="call-turn-available">ещё не проверено</span></p>
+              <p>Политика ICE: <strong id="call-ice-policy">Автоматически: STUN или TURN</strong></p>
+              <button id="call-turn-only" type="button" aria-pressed="false" aria-describedby="call-turn-help">Использовать только TURN для новых звонков</button>
+              <p id="call-turn-help" class="hint">Временная настройка действует только в этой вкладке. Включайте до начала звонка. Если сервер не выдаёт TURN, соединение не состоится. Можно вернуться к автоматическому режиму.</p>
+            </div>
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
           </section>
         </details>
