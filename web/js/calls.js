@@ -70,8 +70,18 @@ export function setupCalls() {
   document.querySelector("#call-discover")?.addEventListener("click",()=>void discoverActiveCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
   const turnOnlyButton=document.querySelector("#call-turn-only");
-  turnOnlyButton?.addEventListener("click",()=>{
+  turnOnlyButton?.addEventListener("click",async()=>{
     const enabled=!readTemporaryTurnMode();
+    if(enabled){
+      turnOnlyButton.disabled=true;
+      try{
+        const servers=await getIceServers({refresh:true});
+        if(!hasTurnServer(servers)){
+          announce("Принудительный TURN пока недоступен: API Бульбама не выдал TURN-адрес. Автоматический режим оставлен включённым.");
+          return;
+        }
+      }finally{turnOnlyButton.disabled=false;}
+    }
     if(!writeTemporaryTurnMode(enabled)){
       announce("Не удалось изменить режим TURN в этой вкладке.");
       return;
