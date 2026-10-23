@@ -8,6 +8,13 @@ export function hasTurnServer(iceServers=[]){
   );
 }
 
+export function iceTransportPolicy(iceServers,turnOnly){
+  if(turnOnly&&!hasTurnServer(iceServers)){
+    throw new Error("Режим TURN включён, но сервер не выдал TURN-адреса и временные учётные данные. Отключите «Только TURN» в диагностике или настройте TURN на сервере.");
+  }
+  return turnOnly?"relay":"all";
+}
+
 export function readTemporaryTurnMode(storage=globalThis.sessionStorage){
   try{return storage?.getItem(TEMP_TURN_KEY)==="1";}catch{return false;}
 }
