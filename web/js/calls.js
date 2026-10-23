@@ -268,14 +268,22 @@ async function startCall() {
 
 async function answerCall() {
   if (!account || !currentCall || currentCall.status !== "ringing" || currentCall.direction !== "incoming") return;
+  const answeringCallId = currentCall.callId;
   elements.callAnswerButton.disabled = true;
   answeredLocally = true;
   try {
     logCallEvent("запрос микрофона");
-    localStream = await requestMicrophone();
+    const microphone = await requestMicrophone();
+    if (currentCall?.callId !== answeringCallId) {
+      microphone.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    localStream = microphone;
     logCallEvent("микрофон доступен");
-    await ensurePeerConnection();
+    const pc = await ensurePeerConnection();
+    if (currentCall?.callId !== answeringCallId || pc !== peerConnection) return;
     const result = await api(callPath("/answer"), { method: "POST" });
+    if (currentCall?.callId !== answeringCallId) return;
     logCallEvent("звонок принят");
     playCallCue("answered");
     currentCall = result.call;
@@ -284,6 +292,7 @@ async function answerCall() {
     startCallPolling();
     announce(`Вы ответили ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
+    if (currentCall?.callId !== answeringCallId) return;
     answeredLocally = false;
     cleanupPeerConnection();
     stopLocalStream();
