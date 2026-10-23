@@ -479,6 +479,17 @@
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
+            <h4 id="ice-diagnostics-title">Сетевой маршрут звонка</h4>
+            <p>Фактически выбранное WebRTC-соединение: <strong id="call-ice-route">Звонка нет, маршрут не выбран</strong></p>
+            <p>TURN в настройках звонков: <strong id="call-turn-availability">Не проверено</strong></p>
+            <label for="call-ice-mode">Маршрут для следующего звонка</label>
+            <select id="call-ice-mode" aria-describedby="call-ice-mode-hint">
+              <option value="all">Автоматически (прямое соединение или TURN)</option>
+              <option value="relay">Только TURN, временно</option>
+            </select>
+            <p id="call-ice-mode-hint" class="hint">Выбор действует только в текущей вкладке. Включайте «Только TURN» после проверки доступности TURN. Текущий звонок не прерывается.</p>
+            <p id="call-ice-mode-status" role="status" aria-live="polite"></p>
+            <button id="refresh-call-route" type="button">Проверить маршрут и TURN</button>
           </section>
         </details>
       </dialog>
@@ -535,7 +546,7 @@
       setupCanonicalInterface();
       document.querySelector("#logout")?.addEventListener("click", () =>
         document.querySelector("#settings-dialog")?.close?.());
-      await import("/app.js?v=20261019-settings-call-fix-1");
+      await import("/app.js?v=20261023-ice-route-diag-1");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
