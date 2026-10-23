@@ -5,7 +5,8 @@
   "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "WEBRTC_TURN_URLS": "turn:169.58.224.216:3478?transport=udp,turn:169.58.224.216:3478?transport=tcp"
+    "WEBRTC_TURN_URLS": "turn:169.58.224.216:3478?transport=udp,turn:169.58.224.216:3478?transport=tcp",
+    "WEBRTC_RELAY_ISSUER_URL": "https://169-58-224-216.sslip.io/bulbam-relay-issuer/credentials"
   },
   "assets": {
     "directory": "./web",
