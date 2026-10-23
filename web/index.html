@@ -286,6 +286,12 @@
               <details id="call-diagnostics" open hidden>
                 <summary>Диагностика звонка, временно включена</summary>
                 <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
+                <label for="call-event-log">Журнал звонков в этой вкладке, сохраняет предыдущий звонок</label>
+                <textarea id="call-event-log" readonly rows="9" spellcheck="false" aria-live="off" aria-label="Журнал звонков"></textarea>
+                <div class="call-log-actions">
+                  <button id="call-copy-log" type="button">Скопировать журнал звонков</button>
+                  <button id="call-clear-log" type="button">Очистить журнал</button>
+                </div>
               </details>
             </div>
             <div class="call-screen-navigation">
