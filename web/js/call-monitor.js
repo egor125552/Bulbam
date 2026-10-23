@@ -56,3 +56,29 @@ export function describeCallDiagnostics(peer, stats) {
   // Never render candidate addresses, external IPs, user IDs or microphone details.
   return parts.join(". ") + ".";
 }
+
+const TURN_ONLY_SESSION_KEY="bulbam.turn.only.session.v1";
+
+// The setting applies only to the current tab. It is never stored on the
+// server and does not change the route of a call already in progress.
+export function isTemporaryTurnOnly(storage=null){
+  try{
+    const target=storage??globalThis.sessionStorage;
+    return target?.getItem(TURN_ONLY_SESSION_KEY)==="1";
+  }catch{return false;}
+}
+
+export function setTemporaryTurnOnly(enabled,storage=null){
+  try{
+    const target=storage??globalThis.sessionStorage;
+    if(enabled)target?.setItem(TURN_ONLY_SESSION_KEY,"1");
+    else target?.removeItem(TURN_ONLY_SESSION_KEY);
+    return true;
+  }catch{return false;}
+}
+
+export function callIcePolicy(iceServers,turnOnly){
+  if(turnOnly&&!turnAvailable(iceServers))
+    throw new Error("TURN недоступен: сервер звонков не выдал данные для ретрансляции.");
+  return turnOnly?"relay":"all";
+}
