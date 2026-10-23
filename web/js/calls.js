@@ -1,6 +1,7 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
+import {hasTurnServer,readTemporaryTurnMode,writeTemporaryTurnMode,selectedIceRoute} from "./call-route-diagnostics.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -68,6 +69,19 @@ export function setupCalls() {
   elements.callHandoffButton.addEventListener("click", () => void handoffCall());
   document.querySelector("#call-discover")?.addEventListener("click",()=>void discoverActiveCall());
   elements.callEndButton.addEventListener("click", () => void endCall());
+  const turnOnlyButton=document.querySelector("#call-turn-only");
+  turnOnlyButton?.addEventListener("click",()=>{
+    const enabled=!readTemporaryTurnMode();
+    if(!writeTemporaryTurnMode(enabled)){
+      announce("Не удалось изменить режим TURN в этой вкладке.");
+      return;
+    }
+    syncTurnModeUi();
+    announce(enabled
+      ? "Временный режим TURN включён для следующих звонков."
+      : "Восстановлен автоматический выбор STUN и TURN для следующих звонков.");
+  });
+  syncTurnModeUi();
   elements.callMuteButton.addEventListener("click", toggleMute);
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
   elements.callExpandButton.addEventListener("click", expandCall);
@@ -601,9 +615,13 @@ async function prewarmOutgoingPeerConnection() {
 }
 
 function createPeerConnectionWithRoutePool(iceServers) {
+  const turnOnly=readTemporaryTurnMode();
+  if(turnOnly&&!hasTurnServer(iceServers)){
+    throw new Error("Режим TURN включён, но сервер не выдал TURN-адреса и временные учётные данные. Отключите «Только TURN» в диагностике или настройте TURN на сервере.");
+  }
   const baseConfiguration = {
     iceServers,
-    iceTransportPolicy: "all"
+    iceTransportPolicy: turnOnly?"relay":"all"
   };
   try {
     return new RTCPeerConnection({
@@ -694,6 +712,7 @@ function handlePeerConnectionState(pc) {
     networkRecoveryActive = false;
     healthyQualitySamples = 0;
     startQualityMonitoring(pc);
+    document.querySelector("#call-route-status").textContent="Определяю выбранный маршрут ICE…";
     setCallStatus(remotePlaybackBlocked
       ? "Браузер заблокировал воспроизведение. Нажмите «Включить звук»."
       : `Разговор идёт. Режим: ${getSelectedAudioProfile().label}.`);
@@ -852,6 +871,9 @@ async function sampleInboundAudioQuality(pc) {
   if (peerConnection !== pc || pc.connectionState !== "connected" || typeof pc.getStats !== "function") return;
   try {
     const stats = await pc.getStats();
+    const route=selectedIceRoute(stats);
+    const routeStatus=document.querySelector("#call-route-status");
+    if(routeStatus)routeStatus.textContent=route.label;
     let inbound = null;
     stats.forEach((report) => {
       const kind = report.kind ?? report.mediaType;
@@ -1182,6 +1204,10 @@ async function getIceServers({ refresh = false } = {}) {
     .then((result) => {
       const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
       if (servers.length) lastIceServers = servers;
+      const available=document.querySelector("#call-turn-available");
+      if(available)available.textContent=hasTurnServer(servers)
+        ? "TURN-адреса получены от API (доступность проверяется при звонке)"
+        : "TURN-адресов нет (только STUN)";
       return lastIceServers ?? FALLBACK_ICE_SERVERS;
     })
     .catch(() => lastIceServers ?? FALLBACK_ICE_SERVERS);
@@ -1345,6 +1371,19 @@ function setCallStatus(text) {
   elements.callStatus.textContent = text;
 }
 
+function syncTurnModeUi(){
+  const turnOnly=readTemporaryTurnMode();
+  const button=document.querySelector("#call-turn-only");
+  const policy=document.querySelector("#call-ice-policy");
+  if(button){
+    button.setAttribute("aria-pressed",String(turnOnly));
+    button.textContent=turnOnly
+      ? "Отключить принудительный TURN для следующих звонков"
+      : "Использовать только TURN для новых звонков";
+  }
+  if(policy)policy.textContent=turnOnly?"Только TURN (relay)":"Автоматически: STUN или TURN";
+}
+
 function syncCallButton() {
   const chatSelected = Boolean(account) &&
     !elements.messageForm.hidden &&
@@ -1386,6 +1425,8 @@ function cleanupMedia() {
 }
 
 function cleanupPeerConnection() {
+  const routeStatus=document.querySelector("#call-route-status");
+  if(routeStatus)routeStatus.textContent="Нет активного аудиосоединения";
   peerCreationEpoch += 1;
   peerConnectionPromise = null;
   stopQualityMonitoring();
