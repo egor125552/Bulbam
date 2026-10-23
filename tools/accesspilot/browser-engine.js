@@ -87,20 +87,13 @@ export async function inspectBrowser(page) {
       }
       return document.body;
     }
-    const scopes=new Map();
+    // An action's local scope is the nearest stable semantic container,
+    // never its siblings. Dynamic banners, calls and form controls can appear
+    // without changing the identity of the existing navigation controls.
+    const scopeKeys=new Map();
     for(const element of elements){
       const root=scopeRoot(element);
-      if(!scopes.has(root))scopes.set(root,[]);
-      scopes.get(root).push(element);
-    }
-    const scopeKeys=new Map();
-    for(const [root,members] of scopes){
-      scopeKeys.set(root,JSON.stringify([
-        path(root),members.map(member=>[
-          path(member),role(member),member.tagName.toLowerCase(),
-          member.getAttribute('type')||'',!!member.disabled
-        ])
-      ]));
+      if(!scopeKeys.has(root))scopeKeys.set(root,path(root));
     }
     const state=elements.map(el=>{
       const issues=[];
