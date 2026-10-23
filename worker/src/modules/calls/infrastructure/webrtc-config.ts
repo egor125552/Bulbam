@@ -20,6 +20,9 @@ export async function makeIceServers(env: Env, identity: string): Promise<IceSer
   if (configured.some(server=>[server.urls].flat()
       .some(url=>/^turns?:/i.test(url)))) return configured;
 
+  const remote = await signedRelayIceServers(env, identity);
+  if (remote.length) return mergeStunFallback(env, remote);
+
   const cloudflare = await cloudflareTurnIceServers(env);
   if (cloudflare.length) return mergeStunFallback(env, cloudflare);
   return configured.length ? configured : DEFAULT_STUN_URLS.map((urls) => ({ urls }));
@@ -62,6 +65,73 @@ function mergeStunFallback(env: Env, turnServers: IceServer[]): IceServer[] {
   const extra = cleanCSV(env.WEBRTC_EXTRA_STUN_URLS || "");
   const stun = [...new Set([...stunUrls, ...extra])].map((urls) => ({ urls }));
   return [...turnServers, ...stun];
+}
+
+
+async function signedRelayIceServers(env: Env, identity: string): Promise<IceServer[]> {
+  const endpoint = String(env.WEBRTC_RELAY_ISSUER_URL || "").trim();
+  if (!endpoint || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return [];
+  try {
+    const destination = new URL(endpoint);
+    if (destination.protocol !== "https:") return [];
+    const publicRaw = decodeBase64Url(env.VAPID_PUBLIC_KEY);
+    const secretRaw = decodeBase64Url(env.VAPID_PRIVATE_KEY);
+    if (publicRaw.length !== 65 || publicRaw[0] !== 4 || secretRaw.length !== 32) return [];
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      {
+        kty: "EC", crv: "P-256",
+        x: encodeBase64Url(publicRaw.slice(1, 33)),
+        y: encodeBase64Url(publicRaw.slice(33, 65)),
+        d: encodeBase64Url(secretRaw)
+      },
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"]
+    );
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const nonce = crypto.randomUUID();
+    const payload = `bulbam-turn-v1\n${timestamp}\n${identity}\n${nonce}`;
+    const signature = encodeBase64Url(new Uint8Array(await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(payload)
+    )));
+    const response = await fetch(destination.toString(), {
+      method: "POST",
+      headers: {
+        "x-bulbam-timestamp": timestamp,
+        "x-bulbam-user": identity,
+        "x-bulbam-nonce": nonce,
+        "x-bulbam-signature": signature
+      },
+      signal: AbortSignal.timeout(6_000)
+    });
+    if (!response.ok) {
+      console.warn(`[Calls] VPS TURN issuer returned HTTP ${response.status}`);
+      return [];
+    }
+    const body = await response.json() as { iceServers?: unknown };
+    if (!Array.isArray(body.iceServers)) return [];
+    return body.iceServers.filter((candidate): candidate is IceServer =>
+      isIceServer(candidate) && typeof candidate.username === "string" &&
+      typeof candidate.credential === "string" &&
+      [candidate.urls].flat().some((url) => typeof url === "string" && /^turns?:/i.test(url))
+    );
+  } catch {
+    console.warn("[Calls] VPS TURN issuer not available, retaining STUN fallback");
+    return [];
+  }
+}
+
+function decodeBase64Url(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+}
+
+function encodeBase64Url(value: Uint8Array): string {
+  let binary = "";
+  for (const char of value) binary += String.fromCharCode(char);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 async function cloudflareTurnIceServers(env: Env): Promise<IceServer[]> {

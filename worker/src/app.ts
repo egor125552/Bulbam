@@ -34,7 +34,7 @@ function voiceBindingMissing(): Response {
   return json({ ok: false, error: { code: "voice_binding_missing", message: "VoiceUploadRoom Durable Object не подключён к Worker." } }, { status: 503 });
 }
 function turnConfigured(env: Env): boolean {
-  return Boolean(
+  return Boolean(env.WEBRTC_RELAY_ISSUER_URL && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) || Boolean(
     (env.WEBRTC_CLOUDFLARE_TURN_KEY_ID || env.TURN_KEY_ID) &&
     (env.WEBRTC_CLOUDFLARE_TURN_API_TOKEN || env.TURN_KEY_API_TOKEN)
   ) || Boolean(env.WEBRTC_TURN_SECRET && env.WEBRTC_TURN_URLS) || Boolean(
@@ -52,6 +52,10 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
 async function handleRequestInternal(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
   try {
+    if (url.pathname === "/api/relay/public-key") {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
+      return json({ ok: Boolean(env.VAPID_PUBLIC_KEY), publicKey: env.VAPID_PUBLIC_KEY ?? null }, { status: env.VAPID_PUBLIC_KEY ? 200 : 503 });
+    }
     if (url.pathname === "/api/health") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
       return json({
