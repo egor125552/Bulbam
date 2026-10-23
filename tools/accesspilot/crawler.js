@@ -152,7 +152,12 @@ export async function crawlBrowser({
       await onCheckpoint(checkpoint());
       continue;
     }
-    const targets=[...view.elements].sort((a,b)=>priority(a)-priority(b));
+    // A read-only field remains in the accessibility inventory but is
+    // content, not an editing action. Likewise disabled controls cannot be
+    // activated, so never record their expected refusal as an app failure.
+    const targets=view.elements.filter(el=>
+      !el.disabled && !(el.kind==="fill" && el.readOnly)
+    ).sort((a,b)=>priority(a)-priority(b));
     // An unrelated control or banner may have changed since this screen
     // was first discovered. If our target still exists, try the actual
     // control instead of requiring an identical complete DOM snapshot.
