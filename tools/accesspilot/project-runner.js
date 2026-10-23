@@ -55,8 +55,9 @@ function reportText(config,report){
     "Режим: "+config.mode+". Тестирование проводится в Chromium, не в VoiceOver.",
     "Состояний: "+report.summary.states+". Действий: "+report.summary.actions+
       ". Проверенных доступных состояний: "+report.summary.auditedStates,
-    "Непроверенных действий: "+report.summary.untested+
-      ". Завершён: "+(report.summary.complete?"да":"нет"),
+    "Непроверенных достижимых действий: "+report.summary.untested+
+      ". Обход обнаруженных состояний завершён: "+(report.summary.complete?"да":"нет"),
+    "ВНИМАНИЕ: завершение обхода не гарантирует доступность во всех условных экранах, браузерах и VoiceOver.",
     "Уникальных проблем: "+report.findings.uniqueIssues+
       ". Срабатываний проверок: "+report.findings.occurrences,
     "Всего обнаружено элементов в DOM: "+report.coverage.total,
@@ -64,7 +65,10 @@ function reportText(config,report){
     "Были доступны скринридеру: "+report.coverage.exposed,
     "Попытка действия: "+report.coverage.attempted,
     "Успешно активированы: "+report.coverage.activated,
-    "Ни разу не появились: "+report.coverage.neverVisible.length,"",
+    "Ни разу не появились (требуются дополнительные сценарии): "+report.coverage.neverVisible.length,
+    "Поля только для чтения (не предназначены для ввода): "+(report.coverage.readOnly?.length??0),
+    "Обнаружены, но не проверены: "+report.coverage.untested.length,
+    "Попытка неуспешна: "+report.coverage.failed.length,"",
     "ОПИСАННЫЕ ЭКРАНЫ:"
   ];
   for(const s of report.summary.screens)
@@ -218,7 +222,10 @@ export async function runProject(config,{
       ...summary,uniqueIssues:findings.uniqueIssues,
       occurrences:findings.occurrences,
       controls:coverage.total,activated:coverage.activated,
-      neverVisible:coverage.neverVisible.length
+      neverVisible:coverage.neverVisible.length,
+      untestedControls:coverage.untested.length,
+      failedControls:coverage.failed.length,
+      readOnlyControls:coverage.readOnly?.length??0
     }));
     return all;
   }finally{
