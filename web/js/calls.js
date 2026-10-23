@@ -2,6 +2,7 @@ import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js
 import { prepareCallCues, playCallCue, stopCallCues } from "./call-cues.js";
 import { startCallTrace, logCallEvent, subscribeCallLog, getCallLogText, clearCallLog } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
+import { createRecoveryGate } from "./call-recovery-gate.js";
 import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
@@ -54,8 +55,8 @@ let signalPollRequestId = 0;
 const iceRequestEpoch = createRequestEpoch();
 let localNegotiationId = null;
 let remoteNegotiationId = null;
-let queuedRecoveryRequest = null;
 let remotePlaybackBlocked = false;
+let relayCandidateSeen = false;
 
 const DISCONNECT_RECOVERY_GRACE_MS = 2_500;
 // Mobile ICE/TURN negotiation may take longer than 7 seconds after a radio handover.
@@ -65,10 +66,16 @@ const JITTER_BUFFER_DEGRADED_MS = 180;
 const JITTER_BUFFER_SEVERE_MS = 300;
 const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 const ICE_CANDIDATE_POOL_SIZE = 4;
+const recoveryGate = createRecoveryGate();
 const initialConnectionWatchdog = createCallConnectionWatchdog((callId) => {
   if (currentCall?.callId !== callId || currentCall.status !== "accepted" || isPeerConnected()) return;
   logCallEvent("таймер подключения истёк", "12 s");
-  setCallStatus("Соединение зависло. Автоматически восстанавливаю аудио…");
+  if (isTemporaryTurnOnly() && !relayCandidateSeen) {
+    logCallEvent("TURN не дал relay", "нет кандидата за 12 секунд");
+    setCallStatus("TURN не отвечает в этой сети. Переподключаюсь через запасной TLS-маршрут…");
+  } else {
+    setCallStatus("Соединение зависло. Автоматически восстанавливаю аудио…");
+  }
   void recoverCallConnection({ hard: false, reason: "initial-connection-timeout" });
 });
 
@@ -166,6 +173,9 @@ export function setupCalls() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     if (account && !callSocket) connectCallRealtime();
+    // A backgrounded iPhone may miss the remote hang-up WebSocket event.
+    // Reconcile server state as soon as the app is visible again.
+    if (currentCall) void pollCallState();
     if (currentCall?.status === "accepted" && networkRecoveryActive && !recoveryPending &&
         !isPeerConnected() && !restartInFlight) {
       void recoverCallConnection({ hard: true, reason: "page-returned" });
@@ -420,22 +430,36 @@ async function declineCall() {
 
 async function endCall() {
   if (!currentCall) return;
+  // Release the mic, speakers, and RTCPeerConnection immediately, regardless
+  // of mobile network latency. The room update then ends it on every device.
+  const path = callPath("/end");
   elements.callEndButton.disabled = true;
-  try {
-    await api(callPath("/end"), { method: "POST" });
-  } catch {
-    // Local microphone must still stop if the network disappears during hangup.
-  } finally {
-    finishCall("Звонок завершён.");
-    announce("Звонок завершён.");
-    elements.callEndButton.disabled = false;
+  finishCall("Звонок завершён.");
+  announce("Звонок завершён.");
+  elements.callEndButton.disabled = false;
+  await deliverCallTermination(path);
+}
+
+async function deliverCallTermination(path) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await api(path, { method: "POST" });
+      return;
+    } catch (error) {
+      logCallEvent("завершение не доставлено", "повтор отправки");
+      // Retry only on an intermittent network failure, not a permission denial.
+      const status = Number(error?.status);
+      if (status && status < 500 && status !== 408 && status !== 429) return;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
+    }
   }
 }
 
 async function timeoutRinging() {
   if (!currentCall || currentCall.status !== "ringing" || currentCall.direction !== "outgoing") return;
-  try { await api(callPath("/end"), { method: "POST" }); } catch {}
+  const path = callPath("/end");
   finishCall("Нет ответа.");
+  void deliverCallTermination(path);
   announce("На звонок не ответили.");
 }
 
@@ -620,16 +644,13 @@ async function beginOfferIfNeeded() {
 
 async function restartOffer({ rebuild = false, refreshIce = true, automatic = false } = {}) {
   if (!currentCall || currentCall.direction !== "outgoing" || currentCall.status !== "accepted") return false;
-  if (restartInFlight) {
-    queuedRecoveryRequest = { hard: rebuild, reason: "queued-peer-reconnect" };
-    return true;
-  }
+  if (restartInFlight) return false;
   restartInFlight = true;
   try {
     const freshIceServers = refreshIce ? await getIceServers({ refresh: true }) : await getIceServers();
     let pc = peerConnection;
 
-    if (rebuild || !pc || pc.signalingState === "closed") {
+    if (rebuild || !pc || pc.signalingState !== "stable") {
       cleanupPeerConnection();
       remoteCandidates = [];
       pc = await ensurePeerConnection({ iceServers: freshIceServers });
@@ -663,16 +684,8 @@ async function restartOffer({ rebuild = false, refreshIce = true, automatic = fa
     return false;
   } finally {
     restartInFlight = false;
-    // A peer reconnect request arriving while an offer is being sent must
-    // trigger a fresh offer, not disappear behind restartInFlight.
-    if (queuedRecoveryRequest) {
-      const pending = queuedRecoveryRequest;
-      queuedRecoveryRequest = null;
-      queueMicrotask(() => {
-        if (currentCall?.status === "accepted" && !recoveryPending)
-          void recoverCallConnection(pending);
-      });
-    }
+    // Wait for the watchdog before trying another ICE negotiation. Multiple
+    // immediate offers race and invalidate each other's candidates.
   }
 }
 
@@ -729,6 +742,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   const pc = createPeerConnectionWithRoutePool(iceServers);
+  relayCandidateSeen = false;
   const discoveredCandidateTypes = new Set();
   logCallEvent("новый WebRTC создан", `маршрут ${callIcePolicy(iceServers, isTemporaryTurnOnly())}`);
   peerConnection = pc;
@@ -751,6 +765,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     if (!event.candidate || !currentCall || peerConnection !== pc) return;
     const candidate = event.candidate;
     const candidateType = /\btyp (host|srflx|prflx|relay)\b/.exec(candidate.candidate)?.[1] ?? "неизвестно";
+    if (candidateType === "relay") relayCandidateSeen = true;
     if (!discoveredCandidateTypes.has(candidateType)) {
       discoveredCandidateTypes.add(candidateType);
       logCallEvent("ICE получен", candidateType);
@@ -768,7 +783,13 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     if (peerConnection === pc) logCallEvent("ICE ошибка", Number.isInteger(code) ? String(code) : "неизвестно");
   });
   pc.addEventListener("icegatheringstatechange", () => {
-    if (peerConnection === pc) logCallEvent("ICE состояние", `сбор ${pc.iceGatheringState}`);
+    if (peerConnection !== pc) return;
+    logCallEvent("ICE состояние", `сбор ${pc.iceGatheringState}`);
+    if (pc.iceGatheringState === "complete" && !discoveredCandidateTypes.has("relay") &&
+        pc.getConfiguration?.().iceTransportPolicy === "relay") {
+      logCallEvent("TURN не дал relay", "кандидаты не получены");
+      setCallStatus("TURN не предоставил маршрут. Проверьте подключение к серверу TURN в этой сети.");
+    }
   });
   pc.addEventListener("signalingstatechange", () => {
     if (peerConnection === pc) logCallEvent("состояние звонка", pc.signalingState);
@@ -812,6 +833,7 @@ function handlePeerConnectionState(pc) {
   updateCallDiagnostics(pc);
   if (pc.connectionState === "connected") {
     initialConnectionWatchdog.disarm();
+    recoveryGate.reset();
     const recovered = networkRecoveryActive;
     clearAutomaticRecoveryTimers();
     recoveryAttempt = 0;
@@ -878,8 +900,8 @@ function scheduleAutomaticRecovery(pc, reason) {
 
 async function recoverCallConnection({ hard, reason }) {
   if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
-  if (restartInFlight) {
-    queuedRecoveryRequest = { hard, reason };
+  if (restartInFlight || !recoveryGate.admit(currentCall.callId)) {
+    logCallEvent("восстановление пропущено", "ожидаю текущую попытку");
     return;
   }
 
@@ -1586,6 +1608,7 @@ function toggleMute() {
 
 function cleanupMedia() {
   initialConnectionWatchdog.disarm();
+  recoveryGate.reset();
   logCallEvent("очистка звонка");
   stopCallTimer();
   stopRingback();
@@ -1602,7 +1625,6 @@ function cleanupMedia() {
   signalPollRequestId++;
   remoteCandidates = [];
   remotePlaybackBlocked = false;
-  queuedRecoveryRequest = null;
   elements.callResumeButton.textContent = "Восстановить звук";
   muted = false;
   restartInFlight = false;
@@ -1628,6 +1650,7 @@ function cleanupPeerConnection() {
     try { peerConnection.close(); } catch {}
   }
   peerConnection = null;
+  relayCandidateSeen = false;
   remoteCandidates = [];
   localNegotiationId = null;
   remoteNegotiationId = null;
@@ -1651,6 +1674,7 @@ function stopLocalStream() {
 
 function resetCallRuntime() {
   initialConnectionWatchdog.disarm();
+  recoveryGate.reset();
   stopCallTimer();
   clearTimeout(ringTimeout);
   ringTimeout = null;
@@ -1663,7 +1687,6 @@ function resetCallRuntime() {
   signalPollInFlight = false;
   signalPollRequestId++;
   remotePlaybackBlocked = false;
-  queuedRecoveryRequest = null;
   elements.callResumeButton.textContent = "Восстановить звук";
   answeredLocally = false;
   offerStarted = false;

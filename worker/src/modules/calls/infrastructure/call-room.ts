@@ -145,10 +145,9 @@ export class CallRoom {
 
     if (action === "end") {
       if (!isActive(call)) return result({ ok: true, call: publicCall(call, actorUserId) });
-      const activeSession = actorUserId===call.callerUserId ? call.callerSessionId : call.calleeSessionId;
-      if(activeSession && activeSession!==stringValue(body.actorSessionId)){
-        return forbidden("call_moved","Звонок перенесён на другое ваше устройство.");
-      }
+      // Hanging up is user-wide. A signed-in user may stop their call from
+      // any device; session ownership limits who can transmit media, not
+      // who can close the call and release the other participant.
       const updated = endRecord(call, "ended", actorUserId);
       await Promise.all([
         this.state.storage.put(CALL_KEY, updated),

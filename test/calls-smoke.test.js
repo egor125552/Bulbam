@@ -284,10 +284,15 @@ describe("one-to-one audio call signaling", () => {
     expect(switched.call.sessionOwnerId).not.toBe(stillOnA.call.sessionOwnerId);
     const offer={kind:"offer",payload:{type:"offer",sdp:"v=0\r\nnew-device-offer"}};
     expect((await api(path+"/signals",a.cookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(403);
-    expect((await api(path+"/end",a.cookie,{method:"POST"})).status).toBe(403);
-    expect((await api(path+"/signals",secondCookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(201);
+    // Media handoff restricts offers, but a user must be able to hang up
+    // from every signed-in device. This releases both users immediately.
+    await expectStatus(await api(path+"/end",a.cookie,{method:"POST"}),200);
+    expect(await activeCallFor(a.account.userId)).toBeNull();
+    expect(await activeCallFor(b.account.userId)).toBeNull();
+    expect((await api(path+"/signals",secondCookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(409);
     expect((await api(path,b.cookie)).status).toBe(200);
-    expect((await api(path+"/handoff",secondCookie,{method:"POST"})).status).toBe(200);
+    expect((await api(path+"/handoff",secondCookie,{method:"POST"})).status).toBe(409);
+    // Idempotent remote hang-up: it is still ended for both parties.
     await expectStatus(await api(path+"/end",b.cookie,{method:"POST"}),200);
     expect((await api(path+"/handoff",a.cookie,{method:"POST"})).status).toBe(409);
   });
