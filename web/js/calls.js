@@ -4,7 +4,7 @@ import { startCallTrace, logCallEvent, subscribeCallLog, getCallLogText, clearCa
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
-import { describeCallDiagnostics, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
+import { describeCallDiagnostics, selectedCallRoute, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
 import { api } from "./api.js";
 import {
   applySelectedAudioProfileToTrack,
@@ -42,6 +42,7 @@ let recoveryAttempt = 0;
 let qualityMonitorTimer = null;
 let callTimerInterval = null;
 let lastInboundAudioStats = null;
+let lastSelectedCallRoute = null;
 let healthyQualitySamples = 0;
 let jitterBufferTargetMs = null;
 let audioConnectedOnce = false;
@@ -960,6 +961,7 @@ function stopQualityMonitoring() {
   clearInterval(qualityMonitorTimer);
   qualityMonitorTimer = null;
   lastInboundAudioStats = null;
+  lastSelectedCallRoute = null;
   healthyQualitySamples = 0;
 }
 
@@ -969,6 +971,11 @@ async function sampleInboundAudioQuality(pc) {
     const stats = await pc.getStats();
     if (peerConnection === pc && currentCall) {
       elements.callDiagnosticsText.textContent = describeCallDiagnostics(pc, stats);
+      const selected = selectedCallRoute(stats);
+      if (selected !== lastSelectedCallRoute && selected !== "определяется") {
+        lastSelectedCallRoute = selected;
+        logCallEvent("проверка качества", selected === "через TURN-сервер" ? "маршрут turn" : "маршрут прямой");
+      }
     }
     let inbound = null;
     stats.forEach((report) => {
