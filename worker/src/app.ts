@@ -1,6 +1,7 @@
 import { handleError, json, methodNotAllowed } from "./core/http";
 import { localizeApiResponse } from "./i18n";
 import { CallService } from "./modules/calls/application/call-service";
+import { signedRelayIceServers } from "./modules/calls/infrastructure/webrtc-config";
 import { handleCallHttp } from "./modules/calls/transport/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
 import { AdminRecoveryService } from "./modules/identity/application/admin-recovery-service";
