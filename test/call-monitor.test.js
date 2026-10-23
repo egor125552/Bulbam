@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { describeCallDiagnostics, formatCallDuration, turnAvailable } from "../web/js/call-monitor.js";
+import { describeCallDiagnostics, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "../web/js/call-monitor.js";
 
 describe("Call clock", () => {
   test("counts from server answer time and does not count waiting for an answer", () => {
@@ -30,5 +30,29 @@ describe("Call network diagnostics", () => {
     expect(text).not.toContain("192.0.2.22");
     stats.set("local", { candidateType: "host" });
     expect(describeCallDiagnostics({ connectionState: "connected" }, stats)).toContain("прямое соединение");
+  });
+});
+
+describe("Temporary relay-only call routing",()=>{
+  test("refuses relay policy unless backend actually returns TURN ICE URLs",()=>{
+    const stun=[{urls:"stun:stun.cloudflare.com:3478"}];
+    const turn=[{urls:["stun:x","turn:169.58.224.216:3478?transport=udp"],
+      username:"temporary-user",credential:"test-value"}];
+    expect(callIcePolicy(stun,false)).toBe("all");
+    expect(()=>callIcePolicy(stun,true)).toThrow(/TURN/);
+    expect(callIcePolicy(turn,true)).toBe("relay");
+  });
+  test("setting is reversible and scoped to a single tab's session storage",()=>{
+    const entries=new Map();
+    const storage={
+      getItem:key=>entries.get(key)??null,
+      setItem:(key,value)=>entries.set(key,value),
+      removeItem:key=>entries.delete(key)
+    };
+    expect(isTemporaryTurnOnly(storage)).toBe(false);
+    expect(setTemporaryTurnOnly(true,storage)).toBe(true);
+    expect(isTemporaryTurnOnly(storage)).toBe(true);
+    expect(setTemporaryTurnOnly(false,storage)).toBe(true);
+    expect(isTemporaryTurnOnly(storage)).toBe(false);
   });
 });
