@@ -3,6 +3,8 @@ import { prepareCallCues, playCallCue, stopCallCues } from "./call-cues.js";
 import { startCallTrace, logCallEvent, subscribeCallLog, getCallLogText, clearCallLog } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
+import { createCallHeadsetControls } from "./call-headset-controls.js";
+import { createCallNetworkRestoration } from "./call-network-restoration.js";
 import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
@@ -57,6 +59,31 @@ let localNegotiationId = null;
 let remoteNegotiationId = null;
 let remotePlaybackBlocked = false;
 let relayCandidateSeen = false;
+let headsetControls = null;
+let pendingFastRecovery = null;
+const networkRestoration = createCallNetworkRestoration(({ reason, freshNetwork }) => {
+  if (freshNetwork) recoveryGate.reset();
+  if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
+  networkRecoveryActive = true;
+  logCallEvent("восстановление", freshNetwork ? "сеть вернулась" : "маршрут изменился");
+  initialConnectionWatchdog.disarm();
+  clearTimeout(recoveryWatchdogTimer);
+  recoveryWatchdogTimer = null;
+  const desired = { hard: freshNetwork || recoveryAttempt > 0, reason };
+  if (restartInFlight) {
+    pendingFastRecovery = { ...desired, callId: currentCall.callId };
+    return;
+  }
+  void recoverCallConnection(desired);
+});
+
+function onNetworkAvailable(reason) {
+  if (navigator.onLine === false) return;
+  networkRestoration.available(reason, {
+    active: currentCall?.status === "accepted" && !recoveryPending,
+    connected: isPeerConnected() && !networkRecoveryActive
+  });
+}
 
 const DISCONNECT_RECOVERY_GRACE_MS = 2_500;
 // Mobile ICE/TURN negotiation may take longer than 7 seconds after a radio handover.
@@ -80,6 +107,10 @@ const initialConnectionWatchdog = createCallConnectionWatchdog((callId) => {
 });
 
 export function setupCalls() {
+  headsetControls = createCallHeadsetControls(navigator, {
+    onMute: (next) => setMuted(next),
+    onHangup: () => { if (currentCall) void endCall(); }
+  });
   elements.callStartButton.addEventListener("click", () => {
     prepareRingback();
     prepareCallCues();
@@ -158,17 +189,19 @@ export function setupCalls() {
   });
   window.addEventListener("offline", () => {
     if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
+    networkRestoration.offline();
     networkRecoveryActive = true;
     raiseJitterBufferForNetworkStress(peerConnection, "severe");
     setCallStatus("Сеть недоступна. Сохраняю звонок и жду восстановления подключения…");
   });
-  window.addEventListener("online", () => {
-    if (!currentCall || currentCall.status !== "accepted" || recoveryPending || !networkRecoveryActive) return;
-    void recoverCallConnection({
-      hard: recoveryAttempt > 0,
-      reason: "browser-online"
-    });
-  });
+  window.addEventListener("online", () => onNetworkAvailable("online"));
+  window.addEventListener("pageshow", () => onNetworkAvailable("page-returned"));
+  window.addEventListener("focus", () => onNetworkAvailable("page-returned"));
+  // NetworkInformation is optional in Safari; the ICE watchdog covers devices
+  // where the browser never emits a network-change notification.
+  try {
+    navigator.connection?.addEventListener?.("change", () => onNetworkAvailable("connection-change"));
+  } catch {}
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
@@ -176,10 +209,7 @@ export function setupCalls() {
     // A backgrounded iPhone may miss the remote hang-up WebSocket event.
     // Reconcile server state as soon as the app is visible again.
     if (currentCall) void pollCallState();
-    if (currentCall?.status === "accepted" && networkRecoveryActive && !recoveryPending &&
-        !isPeerConnected() && !restartInFlight) {
-      void recoverCallConnection({ hard: true, reason: "page-returned" });
-    }
+    onNetworkAvailable("page-returned");
   });
 
   if ("serviceWorker" in navigator) {
@@ -684,8 +714,17 @@ async function restartOffer({ rebuild = false, refreshIce = true, automatic = fa
     return false;
   } finally {
     restartInFlight = false;
-    // Wait for the watchdog before trying another ICE negotiation. Multiple
-    // immediate offers race and invalidate each other's candidates.
+    // A radio coming back while an offer was being sent deserves an immediate
+    // retry after that offer settles, never an overlapping second offer.
+    if (pendingFastRecovery) {
+      const pending = pendingFastRecovery;
+      pendingFastRecovery = null;
+      queueMicrotask(() => {
+        if (currentCall?.callId === pending.callId && currentCall.status === "accepted" &&
+            !recoveryPending && !isPeerConnected())
+          void recoverCallConnection({ hard: pending.hard, reason: pending.reason });
+      });
+    }
   }
 }
 
@@ -1390,8 +1429,11 @@ function callPath(suffix = "") {
   return `/api/v1/chats/${encodeURIComponent(currentCall.conversationId)}/calls/${encodeURIComponent(currentCall.callId)}${suffix}`;
 }
 
-function requestMicrophone() {
-  return requestCallMicrophone();
+async function requestMicrophone() {
+  const stream = await requestCallMicrophone();
+  // Keep the caller muted even if iOS replaces a capture track on recovery.
+  if (muted) for (const track of stream.getAudioTracks()) track.enabled = false;
+  return stream;
 }
 
 function showIncoming(call) {
@@ -1424,6 +1466,8 @@ function showOutgoing(call) {
   elements.callResumeButton.hidden = true;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
+  headsetControls?.activate(muted);
+  elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
@@ -1444,6 +1488,8 @@ function showConnectedControls(status) {
   elements.callResumeButton.hidden = !remotePlaybackBlocked;
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
+  headsetControls?.activate(muted);
+  elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = false;
   elements.callEndButton.hidden = false;
   syncCallButton();
@@ -1598,17 +1644,26 @@ function syncCallButton() {
   elements.callStartButton.hidden = !chatSelected || Boolean(currentCall);
 }
 
-function toggleMute() {
-  if (!localStream) return;
-  muted = !muted;
+function toggleMute() { setMuted(!muted); }
+
+function setMuted(nextMuted) {
+  if (!localStream || currentCall?.status !== "accepted") return;
+  const next = Boolean(nextMuted);
+  if (next === muted) return;
+  muted = next;
   for (const track of localStream.getAudioTracks()) track.enabled = !muted;
   elements.callMuteButton.textContent = muted ? "Включить микрофон" : "Выключить микрофон";
+  elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
+  headsetControls?.updateMuted(muted);
   announce(muted ? "Микрофон выключен." : "Микрофон включён.");
 }
 
 function cleanupMedia() {
   initialConnectionWatchdog.disarm();
   recoveryGate.reset();
+  networkRestoration.reset();
+  pendingFastRecovery = null;
+  headsetControls?.deactivate();
   logCallEvent("очистка звонка");
   stopCallTimer();
   stopRingback();
@@ -1632,6 +1687,7 @@ function cleanupMedia() {
   iceServersPromise = null;
   lastIceServers = null;
   elements.callMuteButton.textContent = "Выключить микрофон";
+  elements.callMuteButton.setAttribute?.("aria-pressed", "false");
   try { elements.callRemoteAudio.pause(); } catch {}
   elements.callRemoteAudio.srcObject = null;
 }
@@ -1675,6 +1731,9 @@ function stopLocalStream() {
 function resetCallRuntime() {
   initialConnectionWatchdog.disarm();
   recoveryGate.reset();
+  networkRestoration.reset();
+  pendingFastRecovery = null;
+  headsetControls?.deactivate();
   stopCallTimer();
   clearTimeout(ringTimeout);
   ringTimeout = null;
