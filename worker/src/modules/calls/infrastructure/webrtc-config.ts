@@ -13,11 +13,17 @@ const DEFAULT_STUN_URLS = [
 ];
 
 export async function makeIceServers(env: Env, identity: string): Promise<IceServer[]> {
-  const cloudflare = await cloudflareTurnIceServers(env);
-  if (cloudflare.length) return mergeStunFallback(env, cloudflare);
-
   const shared = await sharedSecretTurn(env, identity);
   const configured = defaultIceServers(env, shared);
+  // Prefer the user's VPS relay when its TURN URL and matching secret are
+  // configured; do not consume or expose Cloudflare TURN credentials in that case.
+  const hasConfiguredTurn = configured.some(server=>
+    [server.urls].flat().some(url=>/^turns?:/i.test(url))
+  );
+  if (hasConfiguredTurn) return configured;
+
+  const cloudflare = await cloudflareTurnIceServers(env);
+  if (cloudflare.length) return mergeStunFallback(env, cloudflare);
   return configured.length ? configured : DEFAULT_STUN_URLS.map((urls) => ({ urls }));
 }
 
