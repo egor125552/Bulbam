@@ -2,6 +2,7 @@ import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js
 import { prepareCallCues, playCallCue, stopCallCues } from "./call-cues.js";
 import { startCallTrace, logCallEvent, subscribeCallLog, getCallLogText, clearCallLog } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
+import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
 import { describeCallDiagnostics, selectedCallRoute, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
@@ -49,6 +50,8 @@ let audioConnectedOnce = false;
 let networkRecoveryActive = false;
 let signalProcessingQueue = Promise.resolve();
 let signalPollInFlight = false;
+let signalPollRequestId = 0;
+const iceRequestEpoch = createRequestEpoch();
 let localNegotiationId = null;
 let remoteNegotiationId = null;
 let queuedRecoveryRequest = null;
@@ -1228,9 +1231,11 @@ function stopCallPolling() {
 async function pollSignals() {
   if (!currentCall || currentCall.status !== "accepted" || recoveryPending || signalPollInFlight) return;
   signalPollInFlight = true;
+  const requestId = ++signalPollRequestId;
   try {
     const callId = currentCall.callId;
     const result = await api(`${callPath("/signals")}?after=${signalPollCursor}`);
+    if (currentCall?.callId !== callId) return;
     for (const signal of result.signals ?? []) {
       if (currentCall?.callId !== callId || recoveryPending) break;
       const processed = await enqueueSignal(signal);
@@ -1242,16 +1247,18 @@ async function pollSignals() {
     if (currentCall?.status === "accepted")
       logCallEvent("ошибка опроса", String(error?.name || "network"));
   } finally {
-    signalPollInFlight = false;
+    if (signalPollRequestId === requestId) signalPollInFlight = false;
   }
 }
 
 async function pollCallState() {
   if (!currentCall) return;
+  const polledCallId = currentCall.callId;
+  const path = callPath();
   try {
-    const result = await api(callPath());
+    const result = await api(path);
     const latest = result.call;
-    if (!latest) return;
+    if (!matchesCallResponse(currentCall, polledCallId, latest)) return;
 
     if (latest.status === "accepted" && currentCall.status === "ringing") {
       stopRingback();
@@ -1323,19 +1330,27 @@ async function restoreCallFromUrl() {
 }
 
 async function getIceServers({ refresh = false } = {}) {
-  if (refresh) iceServersPromise = null;
-  if (!iceServersPromise) logCallEvent("запрос TURN", "обновление серверов");
-  iceServersPromise = iceServersPromise ?? api("/api/v1/calls/ice")
-    .then((result) => {
-      const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
-      if (servers.length) lastIceServers = servers;
-      setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
-      return lastIceServers ?? FALLBACK_ICE_SERVERS;
-    })
-    .catch((error) => {
-      logCallEvent("TURN недоступен", String(error?.name || "network"));
-      return lastIceServers ?? FALLBACK_ICE_SERVERS;
-    });
+  if (refresh) {
+    iceRequestEpoch.invalidate();
+    iceServersPromise = null;
+  }
+  if (!iceServersPromise) {
+    const requestToken = iceRequestEpoch.token();
+    logCallEvent("запрос TURN", "обновление серверов");
+    iceServersPromise = api("/api/v1/calls/ice")
+      .then((result) => {
+        if (!iceRequestEpoch.isCurrent(requestToken)) return FALLBACK_ICE_SERVERS;
+        const servers = Array.isArray(result.iceServers) ? result.iceServers : [];
+        if (servers.length) lastIceServers = servers;
+        setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
+        return lastIceServers ?? FALLBACK_ICE_SERVERS;
+      })
+      .catch((error) => {
+        if (!iceRequestEpoch.isCurrent(requestToken)) return FALLBACK_ICE_SERVERS;
+        logCallEvent("TURN недоступен", String(error?.name || "network"));
+        return lastIceServers ?? FALLBACK_ICE_SERVERS;
+      });
+  }
   return iceServersPromise;
 }
 
@@ -1575,12 +1590,14 @@ function cleanupMedia() {
   signalPollCursor = 0;
   signalProcessingQueue = Promise.resolve();
   signalPollInFlight = false;
+  signalPollRequestId++;
   remoteCandidates = [];
   remotePlaybackBlocked = false;
   queuedRecoveryRequest = null;
   elements.callResumeButton.textContent = "Восстановить звук";
   muted = false;
   restartInFlight = false;
+  iceRequestEpoch.invalidate();
   iceServersPromise = null;
   lastIceServers = null;
   elements.callMuteButton.textContent = "Выключить микрофон";
@@ -1635,6 +1652,7 @@ function resetCallRuntime() {
   signalPollCursor = 0;
   signalProcessingQueue = Promise.resolve();
   signalPollInFlight = false;
+  signalPollRequestId++;
   remotePlaybackBlocked = false;
   queuedRecoveryRequest = null;
   elements.callResumeButton.textContent = "Восстановить звук";
@@ -1643,6 +1661,7 @@ function resetCallRuntime() {
   restartInFlight = false;
   recoveryPending = false;
   muted = false;
+  iceRequestEpoch.invalidate();
   iceServersPromise = null;
   lastIceServers = null;
   clearNetworkRecoveryState();
