@@ -483,6 +483,13 @@
               <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
+            <label for="turn-route-preference">Маршрут для следующего звонка</label>
+            <select id="turn-route-preference" aria-describedby="turn-route-help turn-route-availability">
+              <option value="auto">Автоматически (STUN или TURN)</option>
+              <option value="relay">Только TURN (временно)</option>
+            </select>
+            <p id="turn-route-help" class="hint">Временная настройка только для этой вкладки. На текущий звонок не влияет. Если сервер не выдаёт TURN, автоматический режим сохранится.</p>
+            <p id="turn-route-availability" role="status" aria-live="polite">TURN ещё не проверен.</p>
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
           </section>
         </details>
