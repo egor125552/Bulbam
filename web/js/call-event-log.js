@@ -19,7 +19,7 @@ const ALLOWED = new Set([
   "пауза сигналов", "ошибка опроса", "устройство вернулось",
   "новый звонок", "состояние звонка", "очистка звонка", "смена аккаунта"
 ]);
-const SAFE_DETAILS = /^[a-zа-яё0-9 :(),./+_=-]{0,90}$/iu;
+const SAFE_DETAILS = /^[a-zа-яё0-9№ :(),./+_=-]{0,90}$/iu;
 
 export function startCallTrace(direction) {
   callNumber++;
