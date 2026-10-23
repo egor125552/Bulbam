@@ -68,7 +68,7 @@ function mergeStunFallback(env: Env, turnServers: IceServer[]): IceServer[] {
 }
 
 
-export async function signedRelayIceServers(env: Env, identity: string): Promise<IceServer[]> {
+async function signedRelayIceServers(env: Env, identity: string): Promise<IceServer[]> {
   const endpoint = String(env.WEBRTC_RELAY_ISSUER_URL || "").trim();
   if (!endpoint || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return [];
   try {
