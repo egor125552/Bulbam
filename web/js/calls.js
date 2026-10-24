@@ -1,9 +1,11 @@
 import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
 import { prepareCallCues, playCallCue, stopCallCues } from "./call-cues.js";
-import { startCallTrace, logCallEvent, subscribeCallLog, getCallLogText, clearCallLog } from "./call-event-log.js";
+import { startCallTrace, logCallEvent } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
 import { createCallHeadsetControls } from "./call-headset-controls.js";
+import { replaceCallCapture } from "./call-microphone-replacement.js";
+import { logDiagnostic } from "./diagnostics-log.js";
 import { createCallNetworkRestoration } from "./call-network-restoration.js";
 import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
@@ -63,6 +65,8 @@ let remotePlaybackBlocked = false;
 let relayCandidateSeen = false;
 let headsetControls = null;
 let pendingFastRecovery = null;
+let profileSwitchEpoch = 0;
+let profileSwitchQueue = Promise.resolve();
 const networkRestoration = createCallNetworkRestoration(({ reason, freshNetwork }) => {
   if (freshNetwork) recoveryGate.reset();
   if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
@@ -159,25 +163,6 @@ export function setupCalls() {
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
   elements.callExpandButton.addEventListener("click", expandCall);
   elements.callDismissButton.addEventListener("click", dismissFinishedCall);
-  subscribeCallLog((value) => {
-    const field = document.querySelector("#call-event-log");
-    if (field && field.value !== value) field.value = value;
-  });
-  document.querySelector("#call-clear-log")?.addEventListener("click", () => {
-    clearCallLog();
-    announce("Журнал звонков очищен.");
-  });
-  document.querySelector("#call-copy-log")?.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(getCallLogText());
-      announce("Журнал звонков скопирован.");
-    } catch {
-      const field = document.querySelector("#call-event-log");
-      field?.focus();
-      field?.select();
-      announce("Журнал выделен. Скопируйте выделенный текст.");
-    }
-  });
 
   const observer = new MutationObserver(syncCallButton);
   observer.observe(elements.conversationPeer, { childList: true, characterData: true, subtree: true });
@@ -1131,25 +1116,48 @@ function applyJitterBufferTargetToReceiver(receiver, targetMs) {
   try { receiver.jitterBufferTarget = targetMs; } catch {}
 }
 
-async function applyAudioProfileDuringCall() {
-  const track = localStream?.getAudioTracks?.()[0];
-  if (!track) return;
+function applyAudioProfileDuringCall() {
+  const epoch = ++profileSwitchEpoch;
   const profile = getSelectedAudioProfile();
-  try {
-    const result = await applySelectedAudioProfileToTrack(track);
-    const sender = peerConnection?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
-    if (sender) {
-      try { await tuneAudioSender(sender); } catch {}
+  // Queuing rather than racing gUM requests avoids Android's old settings
+  // appearing to apply only on the *next* quality change.
+  profileSwitchQueue = profileSwitchQueue.catch(() => {}).then(async () => {
+    if (epoch !== profileSwitchEpoch) return;
+    const oldStream = localStream;
+    const track = oldStream?.getAudioTracks?.()[0];
+    if (!track || !currentCall) return;
+    const callId = currentCall.callId;
+    const pc = peerConnection;
+    const sender = pc?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
+    logDiagnostic("Микрофон", "переключение в звонке", profile.id);
+    try {
+      let result;
+      if (sender?.replaceTrack) {
+        const replacement = await replaceCallCapture({
+          oldStream, sender,
+          acquire: () => requestCallMicrophone(profile.id),
+          isCurrent: () => epoch === profileSwitchEpoch && currentCall?.callId === callId &&
+            peerConnection === pc && localStream === oldStream,
+          muted
+        });
+        if (!replacement.changed) return;
+        localStream = replacement.stream;
+        result = updateAudioProfileStatus(replacement.track, profile.id);
+      } else {
+        result = await applySelectedAudioProfileToTrack(track, profile.id);
+      }
+      if (epoch !== profileSwitchEpoch || currentCall?.callId !== callId) return;
+      if (sender) { try { await tuneAudioSender(sender, profile.id); } catch {} }
+      logDiagnostic("Микрофон", result?.mismatches?.length ? "режим применён частично" : "режим применён", profile.id);
+      announce(result?.mismatches?.length
+        ? `Режим «${profile.label}» применён частично. Проверьте фактические параметры в настройках звука.`
+        : `Режим звука «${profile.label}» применён к текущему микрофону.`);
+    } catch (error) {
+      logDiagnostic("Микрофон", "ошибка переключения");
+      if (currentCall?.callId === callId) announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
     }
-
-    if (result?.mismatches?.length) {
-      announce(`Режим «${profile.label}» применён частично. Проверьте фактические параметры в настройках звука.`);
-    } else {
-      announce(`Режим звука «${profile.label}» применён к текущему микрофону.`);
-    }
-  } catch (error) {
-    announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
-  }
+  });
+  return profileSwitchQueue;
 }
 
 async function sendSignal(kind, payload) {
@@ -1693,6 +1701,7 @@ function cleanupMedia() {
   networkRestoration.reset();
   pendingFastRecovery = null;
   headsetControls?.deactivate();
+  profileSwitchEpoch += 1;
   logCallEvent("очистка звонка");
   stopCallTimer();
   stopRingback();
@@ -1763,6 +1772,7 @@ function resetCallRuntime() {
   networkRestoration.reset();
   pendingFastRecovery = null;
   headsetControls?.deactivate();
+  profileSwitchEpoch += 1;
   stopCallTimer();
   clearTimeout(ringTimeout);
   ringTimeout = null;

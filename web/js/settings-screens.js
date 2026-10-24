@@ -1,3 +1,4 @@
+import { logDiagnostic } from "./diagnostics-log.js";
 import { translateText } from "./i18n.js";
 
 const CATEGORIES = [
@@ -203,6 +204,7 @@ export function openSettingsScreen(id) {
   const category = CATEGORIES.find((item) => item.id === id);
   const parent = SUBPAGES[id]?.parent ?? null;
   active = id;
+  logDiagnostic("Навигация", "раздел настроек", id);
 
   chooser.hidden = true;
   screens.hidden = false;
