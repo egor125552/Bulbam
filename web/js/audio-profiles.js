@@ -1,5 +1,6 @@
 import { announce, elements } from "./ui.js";
 import { preferMonoCallCapture } from "./call-audio-channels.js";
+import { applyCallConstraintsBestEffort } from "./call-constraint-fallback.js";
 import { configureAdaptiveBitrate } from "./call-bitrate-controller.js";
 import { logDiagnostic } from "./diagnostics-log.js";
 import {
@@ -86,10 +87,8 @@ export async function applySelectedAudioProfileToTrack(track, profileId = select
   const supported = navigator.mediaDevices?.getSupportedConstraints?.() ?? null;
   const constraints = buildAudioConstraints(profileId, supported);
 
-  if (typeof track.applyConstraints === "function") {
-    await track.applyConstraints(constraints);
-  }
-  await preferMonoCallCapture(track, profileId, constraints);
+  const application = await applyCallConstraintsBestEffort(track, constraints);
+  if (!application.reduced) await preferMonoCallCapture(track, profileId, constraints);
   applyContentHint(track, profileId);
   return updateAudioProfileStatus(track, profileId);
 }
