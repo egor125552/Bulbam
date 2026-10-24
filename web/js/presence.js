@@ -1,3 +1,4 @@
+import {logTraceEvent,logDiagnostic,diagnosticErrorName} from "./diagnostics-log.js";
 import { api } from "./api.js";
 import { language } from "./i18n.js";
 import { formatPresence } from "./presence-format.js";
@@ -105,13 +106,16 @@ async function loadSettings(currentGeneration) {
 async function refreshPresence() {
   if (!accountId || requestInFlight || document.visibilityState!=="visible")return;
   requestInFlight=true;
+  logDiagnostic('Сеть','проверка присутствия запущена');
   const currentGeneration=generation;
   try {
     const result=await api("/api/v1/presence");
     if(currentGeneration!==generation)return;
     statusList=Array.isArray(result.users)?result.users:[];
+    logTraceEvent('Сеть','проверка присутствия завершена','',{count:statusList.length});
     publishPresence();
-  } catch {
+  } catch (error) {
+    logDiagnostic('Ошибки','не удалось проверить присутствие',diagnosticErrorName(error));
     // Do not falsely claim someone is online if their status cannot be read.
     if(currentGeneration===generation){statusList=[];publishPresence();}
   } finally {

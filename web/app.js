@@ -1,5 +1,6 @@
 import { setupI18n } from "./js/i18n.js";
 import { setupDiagnostics } from "./js/diagnostics-ui.js";
+import { setupDetailedDiagnostics } from "./js/diagnostics-runtime.js";
 import { setupDetailedHelp } from "./js/accessibility-help.js";
 import { setupSettingsScreens } from "./js/settings-screens.js";
 import { setupWelcome } from "./js/welcome.js";
@@ -25,6 +26,7 @@ import { setupVoiceWebKitTimelineFix } from "./js/voice-webkit-timeline.js";
 export function startApp() {
   setupI18n();
   setupDiagnostics();
+  setupDetailedDiagnostics();
   setupDetailedHelp();
   setupSettingsScreens();
   setupHealth();

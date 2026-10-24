@@ -36,13 +36,13 @@ describe("unified safe diagnostics", () => {
     expect(describeApiOperation("/api/v1/auth/me")).toBe("GET проверка сеанса");
   });
   test("keeps bounded trace in memory", () => {
-    for (let i=0;i<1100;i++) logDiagnostic("Сеть", "соединение работает");
-    expect(diagnosticText().split("\n")).toHaveLength(900);
+    for (let i=0;i<12040;i++) logDiagnostic("Сеть", "соединение работает");
+    expect(diagnosticText().split("\n")).toHaveLength(12000);
   });
 });
 
 describe("diagnostic response sampling for very long calls", () => {
-  test("retains errors and important requests but compresses repetitive healthy call polling", async () => {
+  test("retains every background request and response for complete chronology", async () => {
     const {logApiStart, logApiResult} = await import("../web/js/diagnostics-log.js");
     for(let i=0; i<43; i++) {
       logApiStart("GET сигналы звонка");
@@ -50,8 +50,8 @@ describe("diagnostic response sampling for very long calls", () => {
     }
     const sampled = diagnosticText();
     expect(sampled).toContain("GET сигналы звонка");
-    expect(sampled.split("\n").length).toBeLessThan(10);
-    expect(sampled).toContain("40 проверок");
+    expect(sampled.split("\n")).toHaveLength(86);
+    expect(sampled.match(/фоновый опрос/g)).toHaveLength(43);
     logApiResult("GET сигналы звонка", 503, 500);
     expect(diagnosticText()).toContain("503 500 ms");
     logApiStart("POST ответ на звонок");

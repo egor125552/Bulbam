@@ -2,7 +2,7 @@ import { announce, elements } from "./ui.js";
 import { preferMonoCallCapture } from "./call-audio-channels.js";
 import { applyCallConstraintsBestEffort } from "./call-constraint-fallback.js";
 import { configureAdaptiveBitrate } from "./call-bitrate-controller.js";
-import { logDiagnostic } from "./diagnostics-log.js";
+import { logDiagnostic, diagnosticErrorName, logTraceEvent } from "./diagnostics-log.js";
 import {
   AUDIO_PROFILES,
   buildAudioConstraints,
@@ -66,10 +66,15 @@ export async function requestCallMicrophone(profileId = selectedProfileId) {
 
   const supported = navigator.mediaDevices.getSupportedConstraints?.() ?? null;
   const constraints = buildAudioConstraints(profileId, supported);
-  const stream = await navigator.mediaDevices.getUserMedia({
+  logDiagnostic('Микрофон','запрос новой дорожки',profileId);
+  const started=Date.now();
+  let stream;
+  try {stream=await navigator.mediaDevices.getUserMedia({
     audio: constraints,
     video: false
   });
+    logTraceEvent('Микрофон','микрофон получен','',{durationMs:Date.now()-started});
+  }catch(error){logDiagnostic('Микрофон','захват микрофона ошибка',diagnosticErrorName(error));throw error;}
   const track = stream.getAudioTracks()[0];
   if (!track) {
     stopStream(stream);
@@ -87,8 +92,10 @@ export async function applySelectedAudioProfileToTrack(track, profileId = select
   const supported = navigator.mediaDevices?.getSupportedConstraints?.() ?? null;
   const constraints = buildAudioConstraints(profileId, supported);
 
-  const application = await applyCallConstraintsBestEffort(track, constraints);
+  logDiagnostic('Микрофон','проверка ограничений дорожки',profileId);
+  const application = await applyCallConstraintsBestEffort(track,constraints,(stage,detail='')=>logDiagnostic('Микрофон',stage,detail));
   if (!application.reduced) await preferMonoCallCapture(track, profileId, constraints);
+  logTraceEvent('Микрофон','ограничения применены','',{active:application.applied,step:application.reduced?1:0});
   applyContentHint(track, profileId);
   return updateAudioProfileStatus(track, profileId);
 }
