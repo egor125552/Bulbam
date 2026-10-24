@@ -1,4 +1,4 @@
-import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics } from "./diagnostics-log.js";
+import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, diagnosticErrorName } from "./diagnostics-log.js";
 
 const IGNORE = /password|secret|token|recovery|code|passkey|key|username|message|text|search|invite|profile|auth/i;
 function eventTargetId(node) {
@@ -38,8 +38,10 @@ export function setupDiagnostics() {
   window.addEventListener("online", () => logDiagnostic("Сеть", "интернет появился"));
   window.addEventListener("offline", () => logDiagnostic("Сеть", "интернет пропал"));
   document.addEventListener("visibilitychange", () => logDiagnostic("Навигация", document.visibilityState === "visible" ? "страница открыта" : "страница скрыта"));
-  window.addEventListener("error", () => logDiagnostic("Ошибки", "ошибка выполнения JavaScript"));
-  window.addEventListener("unhandledrejection", () => logDiagnostic("Ошибки", "необработанная ошибка Promise"));
+  window.addEventListener("error", (event) =>
+    logDiagnostic("Ошибки", "ошибка выполнения JavaScript", diagnosticErrorName(event.error)));
+  window.addEventListener("unhandledrejection", (event) =>
+    logDiagnostic("Ошибки", "необработанная ошибка Promise", diagnosticErrorName(event.reason)));
   document.querySelector("#diagnostics-clear")?.addEventListener("click", () => {
     clearDiagnostics();
     if (status) status.textContent = "Журнал очищен.";

@@ -4,8 +4,8 @@ import { startCallTrace, logCallEvent } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
 import { createCallHeadsetControls } from "./call-headset-controls.js";
-import { replaceCallCapture } from "./call-microphone-replacement.js";
-import { logDiagnostic } from "./diagnostics-log.js";
+import { switchCallAudioProfile, mediaErrorCategory } from "./call-audio-switch.js";
+import { logDiagnostic, diagnosticErrorName } from "./diagnostics-log.js";
 import { createCallNetworkRestoration } from "./call-network-restoration.js";
 import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
@@ -528,7 +528,9 @@ function connectCallRealtime() {
   callSocket.addEventListener("message", (event) => {
     let payload;
     try { payload = JSON.parse(String(event.data)); } catch { return; }
-    void handleCallEvent(payload);
+    void handleCallEvent(payload).catch((error) => {
+      logDiagnostic("Ошибки", "обработка события звонка", diagnosticErrorName(error));
+    });
   });
   callSocket.addEventListener("close", () => {
     callSocket = null;
@@ -1131,29 +1133,36 @@ function applyAudioProfileDuringCall() {
     const sender = pc?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
     logDiagnostic("Микрофон", "переключение в звонке", profile.id);
     try {
-      let result;
-      if (sender?.replaceTrack) {
-        const replacement = await replaceCallCapture({
-          oldStream, sender,
-          acquire: () => requestCallMicrophone(profile.id),
-          isCurrent: () => epoch === profileSwitchEpoch && currentCall?.callId === callId &&
-            peerConnection === pc && localStream === oldStream,
-          muted
-        });
-        if (!replacement.changed) return;
-        localStream = replacement.stream;
-        result = updateAudioProfileStatus(replacement.track, profile.id);
-      } else {
-        result = await applySelectedAudioProfileToTrack(track, profile.id);
+      const switchResult = await switchCallAudioProfile({
+        oldStream, sender,
+        acquire: () => requestCallMicrophone(profile.id),
+        applyExisting: (oldTrack) => applySelectedAudioProfileToTrack(oldTrack, profile.id),
+        isCurrent: () => epoch === profileSwitchEpoch && currentCall?.callId === callId &&
+          peerConnection === pc && localStream === oldStream,
+        muted
+      });
+      if (switchResult.status === "stale") return;
+      if (switchResult.captureError) logDiagnostic("Микрофон", "новая дорожка недоступна", switchResult.captureError);
+      if (switchResult.status === "failed") {
+        logDiagnostic("Микрофон", "ошибка переключения", switchResult.fallbackError);
+        announce(`Не удалось переключить режим «${profile.label}». Предыдущий звук сохранён.`);
+        return;
       }
+      if (switchResult.status === "replaced") {
+        localStream = switchResult.stream;
+      }
+      const result = switchResult.status === "replaced"
+        ? updateAudioProfileStatus(switchResult.track, profile.id)
+        : switchResult.result;
       if (epoch !== profileSwitchEpoch || currentCall?.callId !== callId) return;
       if (sender) { try { await tuneAudioSender(sender, profile.id); } catch {} }
-      logDiagnostic("Микрофон", result?.mismatches?.length ? "режим применён частично" : "режим применён", profile.id);
-      announce(result?.mismatches?.length
-        ? `Режим «${profile.label}» применён частично. Проверьте фактические параметры в настройках звука.`
+      const partial = switchResult.status === "fallback" || result?.mismatches?.length || result?.unknown?.length;
+      logDiagnostic("Микрофон", partial ? "режим применён частично" : "режим применён", profile.id);
+      announce(partial
+        ? `Режим «${profile.label}» применён к действующему микрофону, но браузер не подтвердил все параметры.`
         : `Режим звука «${profile.label}» применён к текущему микрофону.`);
     } catch (error) {
-      logDiagnostic("Микрофон", "ошибка переключения");
+      logDiagnostic("Микрофон", "ошибка переключения", mediaErrorCategory(error));
       if (currentCall?.callId === callId) announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
     }
   });

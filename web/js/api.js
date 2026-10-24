@@ -1,11 +1,11 @@
-import { logDiagnostic, describeApiOperation } from "./diagnostics-log.js";
+import { logDiagnostic, describeApiOperation, logApiStart, logApiResult } from "./diagnostics-log.js";
 import { language, translateText } from "./i18n.js";
 const responseObservers = new Set();
 
 export async function api(path, options = {}) {
   const operation = describeApiOperation(path, String(options.method ?? "GET").toUpperCase());
   const started = Date.now();
-  logDiagnostic("Сервер", "запрос", operation);
+  logApiStart(operation);
   let response;
   try {
     response = await fetch(path, {
@@ -23,8 +23,7 @@ export async function api(path, options = {}) {
     logDiagnostic("Сервер", "сбой сети", operation);
     throw error;
   }
-  logDiagnostic("Сервер", "ответ", `${response.status} ${Date.now()-started} ms`);
-  logDiagnostic("Сервер", "операция", operation);
+  logApiResult(operation, response.status, Date.now()-started);
 
   let payload = null;
   try {

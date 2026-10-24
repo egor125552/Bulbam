@@ -40,3 +40,28 @@ describe("unified safe diagnostics", () => {
     expect(diagnosticText().split("\n")).toHaveLength(900);
   });
 });
+
+describe("diagnostic response sampling for very long calls", () => {
+  test("retains errors and important requests but compresses repetitive healthy call polling", async () => {
+    const {logApiStart, logApiResult} = await import("../web/js/diagnostics-log.js");
+    for(let i=0; i<43; i++) {
+      logApiStart("GET сигналы звонка");
+      logApiResult("GET сигналы звонка", 200, 150);
+    }
+    const sampled = diagnosticText();
+    expect(sampled).toContain("GET сигналы звонка");
+    expect(sampled.split("\n").length).toBeLessThan(10);
+    expect(sampled).toContain("40 проверок");
+    logApiResult("GET сигналы звонка", 503, 500);
+    expect(diagnosticText()).toContain("503 500 ms");
+    logApiStart("POST ответ на звонок");
+    logApiResult("POST ответ на звонок", 201, 250);
+    expect(diagnosticText()).toContain("201 250 ms");
+  });
+  test("every failed HTTP request is recorded immediately", async () => {
+    const {logApiResult} = await import("../web/js/diagnostics-log.js");
+    logApiResult("GET состояние звонка", 408, 10000);
+    logApiResult("GET состояние звонка", 408, 10000);
+    expect(diagnosticText().split("\n")).toHaveLength(2);
+  });
+});
