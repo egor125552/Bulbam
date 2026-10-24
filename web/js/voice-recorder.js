@@ -1,3 +1,4 @@
+import { renderVoiceRecorderVisual, renderVoiceDeliveryVisual } from "./voice-recorder-visual.js";
 import { rawVoiceConstraints, keepVoiceRaw } from "./voice-raw-capture.js";
 import { logDiagnostic } from "./diagnostics-log.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
@@ -31,6 +32,10 @@ const MIME_CANDIDATES = /android/i.test(navigator.userAgent)
 
 let recordButton = null;
 let pauseButton = null;
+let cancelButton = null;
+let visualControls = null;
+let deliveryVisual = null;
+let deliveryHideTimer = null;
 let detailedHelp = true;
 let draftPanel = null;
 let draftStatus = null;
@@ -48,6 +53,17 @@ let optionHeld = false;
 export function setupVoiceRecorder() {
   recordButton = document.querySelector("#voice-record-button");
   pauseButton = document.querySelector("#voice-pause-button");
+  cancelButton = document.querySelector("#voice-cancel-button");
+  deliveryVisual = document.querySelector("#voice-delivery-visual");
+  visualControls = {
+    body: document.body,
+    panel: document.querySelector("#voice-recording-panel"),
+    label: document.querySelector("#voice-recording-visual-label"),
+    timer: document.querySelector("#voice-recording-visual-timer"),
+    hint: document.querySelector("#voice-recording-visual-hint"),
+    cancelButton,
+    recordButton
+  };
   detailedHelp = isDetailedHelpEnabled();
   window.addEventListener("bulbam:detailed-help-changed", (event) => {
     detailedHelp = event.detail?.enabled !== false;
@@ -64,6 +80,7 @@ export function setupVoiceRecorder() {
     void toggleButtonRecording();
   });
   pauseButton?.addEventListener("click", () => togglePauseRecording());
+  cancelButton?.addEventListener("click", () => void cancelRecording());
   draftSendButton?.addEventListener("click", () => void sendRecoverableDraft());
   draftDeleteButton?.addEventListener("click", () => void deleteRecoverableDraft());
 
@@ -126,6 +143,7 @@ async function startRecording(trigger) {
   if (!account || !chat || current || starting) return;
 
   starting = true;
+  showVoiceDelivery("");
   logDiagnostic("Голосовые", "запрос на запись");
   setStartingUi(true);
   const expectedAccountId = account.userId;
@@ -375,7 +393,9 @@ function syncPauseUi() {
   pauseButton.textContent = paused ? "Продолжить запись" : "Пауза записи";
   pauseButton.setAttribute("aria-label", paused ? "Продолжить запись голосового" : "Приостановить запись голосового");
   pauseButton.setAttribute("aria-pressed", String(paused));
+  pauseButton.dataset.icon = paused ? "play" : "pause";
   if (recordingStatus && paused) recordingStatus.textContent = "Запись на паузе";
+  updateVisualRecording();
 }
 
 async function stopAndSend() {
@@ -385,6 +405,7 @@ async function stopAndSend() {
   logDiagnostic("Голосовые", "запись остановлена");
   state.finishing = true;
   setRecordingUi(false);
+  showVoiceDelivery("Подготавливаю отправку голосового…");
   announce("Запись остановлена. Подготавливаю отправку голосового.");
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
@@ -396,6 +417,7 @@ async function cancelRecording() {
   logDiagnostic("Голосовые", "запись отменяется");
   state.finishing = true;
   setRecordingUi(false);
+  showVoiceDelivery("Отменяю запись…");
   announce("Останавливаю и отменяю запись голосового.");
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
@@ -429,6 +451,7 @@ async function finishStoppedRecorder(state) {
     await abortRemoteUpload(state.draft);
     await deleteVoiceDraft(state.draft.id).catch(() => undefined);
     await playVoiceCue("cancel");
+    showVoiceDelivery("Запись отменена.", "success", true);
     announce("Запись голосового отменена.");
   } else if (mode === "interrupted") {
     state.transport?.close();
@@ -456,6 +479,7 @@ async function sendDraftById(id, existingTransport = null) {
   if (!draft) return;
   let transport = existingTransport;
   try {
+    showVoiceDelivery("Отправляю голосовое сообщение…");
     const totalBytes = Number(draft.totalBytes ?? 0);
     if (!totalBytes) throw new Error("запись пустая");
 
@@ -515,9 +539,11 @@ async function sendDraftById(id, existingTransport = null) {
     hideDraftPanel();
     acceptExternalMessage(result.message);
     await refreshChatsAfterExternalMessage();
+    showVoiceDelivery("Голосовое сообщение отправлено.", "success", true);
     announce("Голосовое сообщение отправлено.");
   } catch (error) {
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
+    showVoiceDelivery("Не удалось отправить. Запись сохранена, можно повторить.", "error");
     announce(`Голосовое не отправлено: ${error.message}. Запись сохранена, можно повторить.`);
     await playVoiceCue("error");
   } finally {
@@ -705,6 +731,11 @@ function setStartingUi(active) {
 function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date.now()) {
   if (!recordButton) return;
   syncPauseUi();
+  renderVoiceRecorderVisual(visualControls, {
+    recording,
+    paused: current?.clock?.paused ?? false,
+    elapsedMs: current?.clock?.elapsed() ?? Date.now() - startedAt
+  });
   recordButton.textContent = recording ? "Отправить голосовое" : "Записать голосовое";
   recordButton.setAttribute("aria-pressed", String(recording));
   recordButton.setAttribute("aria-label", recording
@@ -721,9 +752,31 @@ function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date
     recordingStatus.textContent = current?.clock?.paused
       ? "Запись на паузе"
       : `Запись ${formatClock(current?.clock?.elapsed() ?? Date.now() - startedAt)}`;
+    updateVisualRecording();
   };
   update();
   recordingTimer = setInterval(update, 1000);
+}
+
+function showVoiceDelivery(message, state = "progress", temporary = false) {
+  clearTimeout(deliveryHideTimer);
+  deliveryHideTimer = null;
+  renderVoiceDeliveryVisual(deliveryVisual, message, state);
+  if (temporary) {
+    deliveryHideTimer = setTimeout(() => {
+      renderVoiceDeliveryVisual(deliveryVisual, "");
+      deliveryHideTimer = null;
+    }, 5000);
+  }
+}
+
+function updateVisualRecording() {
+  if (!visualControls || !current || current.finishing) return;
+  renderVoiceRecorderVisual(visualControls, {
+    recording: true,
+    paused: current.clock.paused,
+    elapsedMs: current.clock.elapsed()
+  });
 }
 
 function handleOptionKeyDown(event) {
