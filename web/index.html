@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.0ed71f757aec.js">
+  <link rel="modulepreload" href="/boot.fe41c6168c8b.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -284,16 +284,6 @@
               <p id="call-peer"></p>
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
               <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
-              <details id="call-diagnostics" open hidden>
-                <summary>Диагностика звонка, временно включена</summary>
-                <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
-                <label for="call-event-log">Журнал звонков в этой вкладке, сохраняет предыдущий звонок</label>
-                <textarea id="call-event-log" readonly rows="9" spellcheck="false" aria-live="off" aria-label="Журнал звонков"></textarea>
-                <div class="call-log-actions">
-                  <button id="call-copy-log" type="button">Скопировать журнал звонков</button>
-                  <button id="call-clear-log" type="button">Очистить журнал</button>
-                </div>
-              </details>
             </div>
             <div class="call-screen-navigation">
               <button id="call-minimize" type="button" hidden>Свернуть звонок</button>
@@ -431,8 +421,10 @@
               <option value="32000">Экономия интернета</option>
               <option value="48000">Обычное качество</option>
               <option value="64000">Хорошее качество</option>
-              <option value="96000">Максимальное качество</option>
+              <option value="96000">Высокое качество</option>
+              <option value="192000">Самое высокое качество</option>
             </select>
+            <p class="hint">Все голосовые записываются с выключенными эхоподавлением, шумоподавлением и автогромкостью, насколько это разрешает система. Частота 48 кГц, стерео при поддержке микрофона. Качество кодирования влияет на следующие записи, а не меняет уже записанное.</p>
             <label class="switch-row">
               <input id="voice-share-listening" type="checkbox" checked>
               Показывать собеседникам прогресс прослушивания
@@ -498,6 +490,22 @@
             <p id="turn-route-help" class="hint">Временная настройка только для этой вкладки. На текущий звонок не влияет. Если сервер не выдаёт TURN, автоматический режим сохранится.</p>
             <p id="turn-route-availability" role="status" aria-live="polite">TURN ещё не проверен.</p>
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
+            <section aria-labelledby="diagnostics-journal-title" class="diagnostics-journal">
+              <h3 id="diagnostics-journal-title">Полный журнал диагностики</h3>
+              <p class="hint">Действия интерфейса, переходы, запросы к серверу, звонки, микрофон и этапы голосовых. Хранится только в памяти этой вкладки; личные сообщения, пароли, токены и звук не сохраняются. Для анализа сервера показаны запросы и его ответы, а не внутренние журналы Cloudflare.</p>
+              <label for="diagnostics-log">События в порядке времени</label>
+              <textarea id="diagnostics-log" readonly rows="13" spellcheck="false" aria-live="off" aria-label="Полный журнал событий Бульбама"></textarea>
+              <div class="call-log-actions" data-diagnostics-private="true">
+                <button id="diagnostics-copy" type="button">Скопировать журнал</button>
+                <button id="diagnostics-download" type="button">Скачать журнал TXT</button>
+                <button id="diagnostics-clear" type="button">Очистить журнал</button>
+              </div>
+              <p id="diagnostics-log-status" role="status" aria-live="polite"></p>
+              <details id="call-diagnostics" hidden>
+                <summary>Текущие параметры соединения звонка</summary>
+                <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
+              </details>
+            </section>
           </section>
         </details>
       </dialog>
@@ -554,7 +562,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.0ed71f757aec.js");
+      await import("/boot.fe41c6168c8b.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

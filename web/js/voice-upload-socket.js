@@ -1,3 +1,4 @@
+import { logDiagnostic } from "./diagnostics-log.js";
 const CONNECT_TIMEOUT_MS = 10_000;
 const ACK_TIMEOUT_MS = 15_000;
 const MAX_SEND_ATTEMPTS = 3;
@@ -106,6 +107,7 @@ export class VoiceUploadSocket {
     socket.binaryType = "arraybuffer";
     this.socket = socket;
 
+    logDiagnostic("Голосовые", "подключение сокета загрузки");
     return new Promise((resolve, reject) => {
       let ready = false;
       const timeout = setTimeout(() => {
@@ -122,6 +124,7 @@ export class VoiceUploadSocket {
         catch { return; }
 
         if (message.type === "voice.upload.ready") {
+          logDiagnostic("Сервер", "сокет загрузки готов");
           ready = true;
           clearTimeout(timeout);
           this.chunkSizeBytes = Number(message.chunkSizeBytes) || null;
@@ -135,6 +138,7 @@ export class VoiceUploadSocket {
         }
 
         if (message.type === "voice.upload.ack") {
+          logDiagnostic("Сервер", "часть голосового подтверждена");
           const partNumber = Number(message.partNumber);
           this.receivedParts.add(partNumber);
           const waiter = this.waiters.get(partNumber);
@@ -150,6 +154,7 @@ export class VoiceUploadSocket {
         }
 
         if (message.type === "voice.upload.error") {
+          logDiagnostic("Сервер", "ошибка загрузки голосового");
           const code = typeof message.code === "string" ? message.code : "voice_upload_failed";
           const rawMessage = typeof message.message === "string" ? message.message : "Ошибка WebSocket-загрузки голосового";
           const text = rawMessage.includes("SQLITE_FULL")

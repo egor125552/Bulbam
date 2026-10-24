@@ -1,8 +1,14 @@
+import { logDiagnostic, describeApiOperation } from "./diagnostics-log.js";
 import { language, translateText } from "./i18n.js";
 const responseObservers = new Set();
 
 export async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const operation = describeApiOperation(path, String(options.method ?? "GET").toUpperCase());
+  const started = Date.now();
+  logDiagnostic("Сервер", "запрос", operation);
+  let response;
+  try {
+    response = await fetch(path, {
     cache: "no-store",
     credentials: "same-origin",
     ...options,
@@ -12,7 +18,13 @@ export async function api(path, options = {}) {
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.headers || {})
     }
-  });
+    });
+  } catch (error) {
+    logDiagnostic("Сервер", "сбой сети", operation);
+    throw error;
+  }
+  logDiagnostic("Сервер", "ответ", `${response.status} ${Date.now()-started} ms`);
+  logDiagnostic("Сервер", "операция", operation);
 
   let payload = null;
   try {

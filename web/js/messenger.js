@@ -1,3 +1,4 @@
+import { logDiagnostic } from "./diagnostics-log.js";
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
@@ -181,6 +182,7 @@ async function openDirectChat(user) {
     await loadChats({ quiet: true });
     const chat = chats.find((candidate) => candidate.conversationId === result.chat.conversationId) ?? result.chat;
     await selectChat(chat, { focusHeading: true });
+    logDiagnostic("Навигация", "чат открыт");
   } catch (error) {
     announce(`Не удалось открыть чат: ${error.message}`);
   }
@@ -544,6 +546,7 @@ function connectRealtime() {
   socket = new WebSocket(`${protocol}//${location.host}/api/v1/realtime`);
 
   socket.addEventListener("open", () => {
+    logDiagnostic("Сеть", "сокет сообщений подключён");
     reconnectDelay = 1000;
     stopPolling();
     clearInterval(heartbeatTimer);
@@ -560,6 +563,7 @@ function connectRealtime() {
       return;
     }
     if (payload?.type === "message.created" && payload.message) {
+      logDiagnostic("Сервер", "событие новое сообщение");
       handleRealtimeMessage(payload);
     } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {
       handleDeliveredReceipts(payload);
@@ -624,6 +628,7 @@ function handleDeliveredReceipts(payload) {
 }
 
 function handleRealtimeDisconnect() {
+  logDiagnostic("Сеть", "сокет сообщений отключён");
   clearInterval(heartbeatTimer);
   heartbeatTimer = null;
   socket = null;

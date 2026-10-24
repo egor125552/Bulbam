@@ -1,3 +1,4 @@
+import { logDiagnostic } from "./diagnostics-log.js";
 // Short, bounded on-device call trace. Never include SDP, ICE candidates, IPs,
 // TURN passwords, user IDs, names or microphone samples in this journal.
 const MAX_LINES = 180;
@@ -34,6 +35,7 @@ export function logCallEvent(event, detail = "") {
   entries.push(`${stamp} | ${event}${sanitized ? ": " + sanitized : ""}`);
   if (entries.length > MAX_LINES) entries.splice(0, entries.length - MAX_LINES);
   listener?.(getCallLogText());
+  logDiagnostic("Звонки", event, sanitized);
 }
 
 export function getCallLogText() {
