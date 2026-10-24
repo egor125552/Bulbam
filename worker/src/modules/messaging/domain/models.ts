@@ -6,6 +6,24 @@ export interface DirectConversation {
   lastMessageAt: number | null;
 }
 
+export interface GroupConversation {
+  kind: "group";
+  conversationId: string;
+  title: string;
+  avatarIcon: string;
+  ownerUserId: string;
+  historyMode: "all" | "since_join";
+  createdAt: number;
+  lastMessageAt: number | null;
+}
+
+export type Conversation = DirectConversation | GroupConversation;
+
+export interface GroupMember {
+  userId: string;
+  joinedAt: number;
+}
+
 export interface VoiceListenProgress {
   listenedMs: number;
   resumeMs: number;
@@ -34,6 +52,8 @@ export interface StoredMessage {
   createdAt: number;
   deliveredAt: number | null;
   readAt: number | null;
+  readBy?: Array<{userId:string;readAt:number}>;
+  eligibleRecipientCount?: number;
 }
 
 export interface DeliveryReceiptUpdate {

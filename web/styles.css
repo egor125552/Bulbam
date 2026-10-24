@@ -1187,3 +1187,20 @@ html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !im
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 9%, var(--surface));
 }
+
+/* Groups reuse the existing chat composer and messages. */
+.group-dialog { width:min(92vw,520px);max-height:85vh;overflow:auto;border:1px solid var(--border);border-radius:16px;padding:20px;background:var(--surface);color:CanvasText; }
+.group-dialog::backdrop { background:rgba(0,0,0,.58); }
+.group-dialog-actions { display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end;margin-top:12px; }
+.group-picked-users { list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:6px; }
+.group-picked-users button { border:1px solid var(--border);border-radius:999px;padding:8px 12px; }
+.group-user-choice { display:block;width:100%;text-align:left;padding:10px 12px; }
+.group-user-choice[aria-pressed="true"] { border:2px solid var(--brand); }
+.group-dialog .form-stack { display:grid;gap:10px; }
+
+#group-create-fields[hidden] { display:none; }
+
+/* Accessible per-message group read details, separate from the inline time label. */
+.message > details { font-size:.78rem; color:var(--muted); margin-top:.2rem; }
+.message > details > summary { cursor:pointer; width:fit-content; }
+.message > details > p { white-space:normal; overflow-wrap:anywhere; }

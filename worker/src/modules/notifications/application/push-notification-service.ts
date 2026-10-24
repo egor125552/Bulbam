@@ -9,6 +9,7 @@ import type {
 export interface MessageNotificationInput {
   recipientUserId: string;
   senderDisplayName: string;
+  groupTitle?: string;
   conversationId: string;
   messageId: string;
   text: string;
@@ -77,8 +78,8 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   async notifyNewMessage(input: MessageNotificationInput): Promise<void> {
     await this.notifyWhenBackground(input.recipientUserId, {
       kind: "message",
-      title: input.senderDisplayName,
-      body: notificationPreview(input.text),
+      title: input.groupTitle??input.senderDisplayName,
+      body: input.groupTitle?`${input.senderDisplayName}: ${notificationPreview(input.text)}`:notificationPreview(input.text),
       tag: `chat-${input.conversationId}`,
       icon: "/icon.svg",
       data: {

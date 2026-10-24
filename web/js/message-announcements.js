@@ -51,9 +51,14 @@ function handleApiResponse({ path, method, payload }) {
 
   if (!incoming.length || conversationId !== currentConversationId) return;
   const peerName = document.querySelector("#conversation-title")?.textContent?.trim() || "собеседника";
-  announce(incoming.length === 1
-    ? `Новое сообщение от ${peerName}.`
-    : `Новых сообщений от ${peerName}: ${incoming.length}.`);
+  const isGroup = document.querySelector("#message-form")?.dataset?.chatKind === "group";
+  announce(isGroup
+    ? incoming.length === 1
+      ? `Новое сообщение в группе ${peerName}.`
+      : `Новых сообщений в группе ${peerName}: ${incoming.length}.`
+    : incoming.length === 1
+      ? `Новое сообщение от ${peerName}.`
+      : `Новых сообщений от ${peerName}: ${incoming.length}.`);
 }
 
 function rememberVisibleMessageIds() {
