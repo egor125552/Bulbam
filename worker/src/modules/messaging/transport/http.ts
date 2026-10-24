@@ -40,6 +40,14 @@ export async function handleMessagingHttp(
     return methodNotAllowed(['GET','POST']);
   }
 
+  const groupMemberMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/members\/([0-9a-f-]{36})$/i);
+  if(groupMemberMatch){
+    if(request.method!=='DELETE')return methodNotAllowed(['DELETE']);
+    const actor=await authenticate(request);
+    const result=await service.removeGroupMember(actor,groupMemberMatch[1],groupMemberMatch[2]);
+    return json({ok:true,...result});
+  }
+
   const deliveredMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/receipts\/delivered$/i);
   if (deliveredMatch) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);

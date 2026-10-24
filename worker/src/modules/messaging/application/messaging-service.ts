@@ -86,6 +86,20 @@ export class MessagingService {
     return this.groupMembers(actor,group.conversationId);
   }
 
+  async removeGroupMember(actor:MessagingActor,rawConversationId:string,rawUserId:string) {
+    const group=await this.requireGroup(rawConversationId,actor.userId);
+    const userId=validateUserId(rawUserId);
+    if(userId===group.ownerUserId)throw new ApiError(400,'group_owner_cannot_leave','Создатель пока не может выйти из своей группы.');
+    if(userId!==actor.userId&&actor.userId!==group.ownerUserId)
+      throw new ApiError(403,'group_owner_only','Исключать других участников может только создатель группы.');
+    const memberIds=(await this.repository.listGroupMembers(group.conversationId)).map(m=>m.userId);
+    if(!memberIds.includes(userId))notFound('group_member_not_found','Этот человек не участвует в группе.');
+    await this.repository.removeGroupMember(group.conversationId,userId);
+    await this.realtime.publishToUsers([userId],{type:'chat.removed',conversationId:group.conversationId});
+    await this.realtime.publishToUsers(memberIds.filter(id=>id!==userId),{type:'chat.updated',conversationId:group.conversationId});
+    return {removedUserId:userId};
+  }
+
   private async requireGroup(rawConversationId:string,userId:string):Promise<GroupConversation> {
     const conversation=await this.requireConversation(validateConversationId(rawConversationId),userId);
     if(!('title' in conversation))notFound('group_not_found','Группа не найдена.');
@@ -99,7 +113,14 @@ export class MessagingService {
     if ('title' in conversation) {
       const ownMessages=messages.filter(m=>m.senderUserId===actor.userId);
       const readers=await this.repository.listMessageReaders(conversationId,ownMessages.map(m=>m.messageId));
-      for(const message of ownMessages)message.readBy=readers.get(message.messageId)??[];
+      const members=await this.repository.listGroupMembers(conversationId);
+      for(const message of ownMessages){
+        message.readBy=readers.get(message.messageId)??[];
+        // Late joiners cannot read earlier messages when history was restricted.
+        message.eligibleRecipientCount=members.filter(member=>
+          member.userId!==actor.userId && (conversation.historyMode==='all'||member.joinedAt<=message.createdAt)
+        ).length;
+      }
     }
     return messages;
   }
@@ -261,14 +282,21 @@ export class MessagingService {
     }
 
     if (result.status === "created") {
-      await this.realtime.publishToUsers(await this.repository.listConversationRecipients(conversation), {
+      const allRecipients=await this.repository.listConversationRecipients(conversation);
+      const visibleRecipients='title' in conversation&&conversation.historyMode==='since_join'
+        ? new Set((await this.repository.listGroupMembers(conversation.conversationId))
+            .filter(member=>member.joinedAt<=result.message.createdAt)
+            .map(member=>member.userId))
+        : new Set(allRecipients);
+      const messageRecipients=allRecipients.filter(id=>visibleRecipients.has(id));
+      await this.realtime.publishToUsers(messageRecipients, {
         type: "message.created",
         conversationId: conversation.conversationId,
         message: result.message
       });
 
       if (this.notifications) {
-        const recipients=(await this.repository.listConversationRecipients(conversation)).filter(id=>id!==actor.userId);
+        const recipients=messageRecipients.filter(id=>id!==actor.userId);
         const sender=await this.users.findUser(actor.userId);
         const pushTask=Promise.all(recipients.map(recipientUserId=>this.notifications!.notifyNewMessage({
           recipientUserId,senderDisplayName:sender?.displayName??'Бульбам',

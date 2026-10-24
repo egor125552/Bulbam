@@ -1684,6 +1684,7 @@ function setCallStatus(text) {
 
 function syncCallButton() {
   const chatSelected = Boolean(account) &&
+    elements.messageForm.dataset?.chatKind !== 'group' &&
     !elements.messageForm.hidden &&
     Boolean(elements.messageForm.dataset?.conversationId ||
       elements.conversationPeer.textContent.trim().startsWith("@"));

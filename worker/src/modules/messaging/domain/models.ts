@@ -53,6 +53,7 @@ export interface StoredMessage {
   deliveredAt: number | null;
   readAt: number | null;
   readBy?: Array<{userId:string;readAt:number}>;
+  eligibleRecipientCount?: number;
 }
 
 export interface DeliveryReceiptUpdate {

@@ -111,14 +111,14 @@ function decorateChats() {
     const avatar = document.createElement("span");
     avatar.className = "chat-avatar";
     avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = firstLetter(button.querySelector("strong")?.textContent || "Б");
+    avatar.textContent = button.dataset.groupIcon || firstLetter(button.querySelector("strong")?.textContent || "Б");
     button.prepend(avatar);
   }
 }
 
 function decorateConversationAvatar() {
   const avatar = document.querySelector(".conversation-avatar");
-  const next = firstLetter(elements.conversationTitle?.textContent || "Б");
+  const next = elements.conversationTitle?.dataset.avatarIcon || firstLetter(elements.conversationTitle?.textContent || "Б");
   if (avatar && avatar.textContent !== next) avatar.textContent = next;
 }
 

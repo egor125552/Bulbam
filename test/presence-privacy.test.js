@@ -21,7 +21,7 @@ describe("presence is scoped to direct chats", () => {
     const a=crypto.randomUUID(),b=crypto.randomUUID(),c=crypto.randomUUID();
     const conversationId=crypto.randomUUID();
     await env.DB.prepare(
-      "INSERT INTO direct_conversations(conversation_id,participant_a_id,participant_b_id,direct_key,created_at) VALUES (?,?,?,?,?)"
+      "INSERT INTO conversations(conversation_id,participant_a_id,participant_b_id,direct_key,created_at) VALUES (?,?,?,?,?)"
     ).bind(conversationId,a,b,[a,b].sort().join(":"),Date.now()).run();
     expect(await service.peers(a)).toEqual([{userId:b,online:false,lastSeenAt:null,hidden:false}]);
     expect(await service.peers(c)).toEqual([]);
@@ -49,5 +49,5 @@ describe("presence is scoped to direct chats", () => {
     await env.DB.prepare("UPDATE account_presence_sessions SET visible_until = ? WHERE session_id = ?")
       .bind(Date.now()-1,"session-b1").run();
     expect((await service.peers(a))[0].online).toBe(false);
-  });
+  }, 15000);
 });

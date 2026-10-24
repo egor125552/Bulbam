@@ -226,7 +226,9 @@ export class VoiceMessageService {
   }
 
   private async requireConversation(conversationId: string, userId: string): Promise<void> {
-    const conversation = await this.repository.findAnyConversationForUser(conversationId, userId);
+    const conversation = typeof this.repository.findAnyConversationForUser === 'function'
+      ? await this.repository.findAnyConversationForUser(conversationId,userId)
+      : await this.repository.findConversationForUser(conversationId,userId);
     if (!conversation) notFound("chat_not_found", "Диалог не найден.");
   }
 }

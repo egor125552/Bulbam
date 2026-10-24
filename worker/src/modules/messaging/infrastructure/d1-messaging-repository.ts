@@ -51,7 +51,11 @@ const MESSAGE_COLUMNS = `
 
 const MESSAGE_JOINS = `
   LEFT JOIN voice_message_attachments v ON v.message_id = m.message_id
-  LEFT JOIN voice_listen_receipts vl ON vl.message_id = m.message_id AND vl.listener_user_id = ?
+  LEFT JOIN voice_listen_receipts vl ON vl.message_id = m.message_id AND (
+    vl.listener_user_id = ? OR (m.sender_user_id = ? AND EXISTS (
+      SELECT 1 FROM conversations direct_chat WHERE direct_chat.conversation_id=m.conversation_id AND direct_chat.kind='direct'
+    ))
+  )
   LEFT JOIN voice_privacy_settings vps ON vps.user_id = vl.listener_user_id
 `;
 
@@ -148,6 +152,12 @@ export class D1MessagingRepository implements MessagingRepository {
       .bind(conversationId,userId,joinedAt,conversationId)));
   }
 
+  async removeGroupMember(conversationId:string,userId:string):Promise<void> {
+    await this.initialize();
+    await this.db.prepare('DELETE FROM group_members WHERE conversation_id=? AND user_id=?')
+      .bind(conversationId,userId).run();
+  }
+
   async listGroupMembers(conversationId: string): Promise<GroupMember[]> {
     await this.initialize();
     const result=await this.db.prepare('SELECT user_id,joined_at FROM group_members WHERE conversation_id=? ORDER BY joined_at,user_id')
@@ -210,7 +220,7 @@ export class D1MessagingRepository implements MessagingRepository {
         ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT ?
       `)
-      .bind(viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
+      .bind(viewerUserId,viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
       .all<Row>();
     return (result.results ?? []).map((row) => mapMessage(row, viewerUserId)).reverse();
   }
@@ -313,7 +323,7 @@ export class D1MessagingRepository implements MessagingRepository {
           AND m.sender_user_id <> ?
           AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
       `)
-      .bind(recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
+      .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
       .all<Row>();
 
     const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
@@ -366,7 +376,7 @@ export class D1MessagingRepository implements MessagingRepository {
           AND m.sender_user_id <> ?
           AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
       `)
-      .bind(recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
+      .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
       .all<Row>();
 
     const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
@@ -408,7 +418,7 @@ export class D1MessagingRepository implements MessagingRepository {
         ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT 1
       `)
-      .bind(null,conversationId)
+      .bind(null,null,conversationId)
       .first<Row>();
     return row ? mapMessage(row) : null;
   }
@@ -429,7 +439,7 @@ export class D1MessagingRepository implements MessagingRepository {
               (c.history_mode='all' OR m.created_at>=gm.joined_at)))
         LIMIT 1
       `)
-      .bind(userId,userId, conversationId, messageId, userId, userId)
+      .bind(userId,userId,userId, conversationId, messageId, userId, userId)
       .first<Row>();
     return row ? mapMessage(row, userId) : null;
   }
@@ -522,9 +532,10 @@ export class D1MessagingRepository implements MessagingRepository {
         .prepare(`
           SELECT conversation_id
           FROM conversations
-          WHERE kind='direct' AND (participant_a_id = ? OR participant_b_id = ?)
+          WHERE (kind='direct' AND (participant_a_id = ? OR participant_b_id = ?))
+             OR (kind='group' AND owner_user_id = ?)
         `)
-        .bind(userId, userId)
+        .bind(userId, userId, userId)
         .all<Row>();
       for (const row of result.results ?? []) conversationIds.add(String(row.conversation_id));
     }
@@ -552,7 +563,7 @@ export class D1MessagingRepository implements MessagingRepository {
         WHERE m.sender_user_id = ? AND m.client_message_id = ?
         LIMIT 1
       `)
-      .bind(senderUserId,senderUserId, clientMessageId)
+      .bind(senderUserId,senderUserId,senderUserId, clientMessageId)
       .first<Row>();
     return row ? mapMessage(row) : null;
   }

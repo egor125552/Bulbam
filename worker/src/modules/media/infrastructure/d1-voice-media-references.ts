@@ -20,11 +20,12 @@ export class D1VoiceMediaReferences implements VoiceMediaReferences {
         FROM voice_message_attachments v
         JOIN messages m ON m.message_id = v.message_id
         JOIN conversations c ON c.conversation_id = m.conversation_id
-        WHERE c.participant_a_id IN (${placeholders})
-           OR c.participant_b_id IN (${placeholders})
+        WHERE (c.kind='direct' AND (
+            c.participant_a_id IN (${placeholders}) OR c.participant_b_id IN (${placeholders})
+          )) OR (c.kind='group' AND c.owner_user_id IN (${placeholders}))
         ORDER BY v.object_key
       `)
-      .bind(...uniqueUserIds, ...uniqueUserIds)
+      .bind(...uniqueUserIds, ...uniqueUserIds, ...uniqueUserIds)
       .all<{ object_key: string }>();
 
     return (result.results ?? [])

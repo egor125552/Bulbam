@@ -136,11 +136,29 @@ async function initialize(db: D1Database): Promise<void> {
   for (const migration of migrations) {
     if (appliedVersions.has(migration.version)) continue;
     for (const statement of migration.statements) {
-      await runStatement(db, statement);
+      await runMigrationStatement(db, migration.version, statement);
     }
     await db
       .prepare("INSERT OR IGNORE INTO schema_migrations(module, version, applied_at) VALUES (?, ?, ?)")
       .bind("messaging", migration.version, Date.now())
       .run();
   }
+}
+
+// D1 migration batches are not guaranteed to be atomic. A transient Worker
+// failure after the rename must allow the next request to finish v4 safely.
+async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
+  if(version===4){
+    if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
+      const exists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'")
+        .first<{name:string}>();
+      if(exists)return;
+    }
+    const column=sql.match(/^ALTER TABLE conversations ADD COLUMN ([a-z_]+)/);
+    if(column){
+      const info=await db.prepare('PRAGMA table_info(conversations)').all<{name:string}>();
+      if((info.results??[]).some(item=>item.name===column[1]))return;
+    }
+  }
+  await runStatement(db,sql);
 }
