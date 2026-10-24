@@ -80,3 +80,27 @@ test('group voice upload is shared with members but inaccessible to outsiders',a
  expect(audio.status).toBe(206);expect((await audio.arrayBuffer()).byteLength).toBe(32);
  expect((await api(`${path}/messages/${message.messageId}/voice/audio`,c)).status).toBe(404);
 });
+
+test('protected private chats enforce ciphertext across both devices and reject ordinary voice uploads',async()=>{
+ const [a,b,c]=await Promise.all(['alpha','beta','gamma'].map(register));
+ const open=await api('/api/v1/chats/direct',a,'POST',{userId:b.id});
+ expect(open.status).toBe(200);
+ const chat=(await open.json()).chat;
+ expect(chat.encryptionMode).toBe('plain');
+ const path=`/api/v1/chats/${chat.conversationId}`;
+ const old=await api(`${path}/messages`,a,'POST',{clientMessageId:'old_text_0001',text:'Открытый текст'});
+ expect(old.status).toBe(201);
+ expect((await api(`${path}/protection`,c,'POST',{})).status).toBe(404);
+ const enabled=await api(`${path}/protection`,a,'POST',{});
+ expect(enabled.status).toBe(200);
+ expect((await enabled.json()).encryptionMode).toBe('protected');
+ expect((await (await api('/api/v1/chats',b)).json()).chats[0].encryptionMode).toBe('protected');
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'unsafe_0002',text:'нельзя'})).status).toBe(409);
+ expect((await api(`${path}/messages`,b,'POST',{clientMessageId:'unsafe_0003',text:'нельзя'})).status).toBe(409);
+ expect((await api(`${path}/voice/uploads`,a,'POST',{mimeType:'audio/webm;codecs=opus',bitrateBps:64000})).status).toBe(409);
+ const encrypted='bmsec1:1234567890123456.'+'A'.repeat(50);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'encrypted_0004',text:encrypted})).status).toBe(201);
+ expect((await (await api(`${path}/messages`,b)).json()).messages.at(-1).text).toBe(encrypted);
+ expect((await api(`${path}/voice/uploads`,a,'POST',{mimeType:'application/vnd.bulbam.encrypted-voice;v=1;codec=mp4;nonce=1234567890123456',bitrateBps:64000})).status).toBe(201);
+ expect((await (await api(`${path}/messages`,b)).json()).messages[0].text).toBe('Открытый текст');
+});

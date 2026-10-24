@@ -82,7 +82,7 @@ export class D1MessagingRepository implements MessagingRepository {
 
     const row = await this.db
       .prepare(`
-        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at
+        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode
         FROM conversations
         WHERE direct_key = ? AND kind = 'direct'
         LIMIT 1
@@ -98,7 +98,7 @@ export class D1MessagingRepository implements MessagingRepository {
     await this.initialize();
     const row = await this.db
       .prepare(`
-        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at
+        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode
         FROM conversations
         WHERE conversation_id = ?
           AND kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
@@ -109,11 +109,17 @@ export class D1MessagingRepository implements MessagingRepository {
     return row ? mapConversation(row) : null;
   }
 
+  async protectDirectConversation(conversationId:string):Promise<void> {
+    await this.initialize();
+    await this.db.prepare("UPDATE conversations SET encryption_mode='protected' WHERE conversation_id=? AND kind='direct'")
+      .bind(conversationId).run();
+  }
+
   async listConversationsForUser(userId: string, limit: number): Promise<DirectConversation[]> {
     await this.initialize();
     const result = await this.db
       .prepare(`
-        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at
+        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode
         FROM conversations
         WHERE kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
         ORDER BY COALESCE(last_message_at, created_at) DESC, conversation_id DESC
@@ -577,6 +583,7 @@ function mapGroup(row: Row): GroupConversation {
 
 function mapConversation(row: Row): DirectConversation {
   return {
+    encryptionMode:row.encryption_mode==='protected'?'protected':'plain',
     conversationId: String(row.conversation_id),
     participantAId: String(row.participant_a_id),
     participantBId: String(row.participant_b_id),

@@ -12,15 +12,21 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 export function validateVoiceStart(body: Record<string, unknown>) {
-  const mimeType = typeof body.mimeType === "string" ? body.mimeType.toLowerCase() : "";
+  const mimeType = typeof body.mimeType === "string" ? body.mimeType.trim() : "";
+  const normalizedMimeType = mimeType.toLowerCase();
   const bitrateBps = Number(body.bitrateBps);
-  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
-    badRequest("unsupported_voice_format", "Нужен поддерживаемый аудиоформат MP4, WebM или Ogg.");
+  // Encrypted payloads remain opaque bytes on the server. Only a strict
+  // versioned envelope with a whitelisted inner codec is accepted.
+  const encrypted = /^application\/vnd\.bulbam\.encrypted-voice;v=1;codec=(mp4|webm-opus|webm|ogg-opus|ogg);nonce=[A-Za-z0-9_-]{16}$/.test(mimeType);
+  if (!ALLOWED_MIME_TYPES.has(normalizedMimeType) && !encrypted) {
+    badRequest("unsupported_voice_format", "Нужен поддерживаемый аудиоформат или защищённое голосовое Бульбама.");
   }
   if (!ALLOWED_BITRATES.has(bitrateBps)) {
     badRequest("invalid_voice_bitrate", "Некорректный битрейт голосового сообщения.");
   }
-  return { mimeType, bitrateBps };
+  // The nonce is base64url and case sensitive. Lowercasing it makes the
+  // uploaded file impossible to decrypt, so preserve protected metadata.
+  return { mimeType: encrypted ? mimeType : normalizedMimeType, bitrateBps };
 }
 
 export function validateUploadSessionId(value: string): string {

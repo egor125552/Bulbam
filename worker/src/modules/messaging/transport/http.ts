@@ -48,6 +48,13 @@ export async function handleMessagingHttp(
     return json({ok:true,...result});
   }
 
+  const protectionMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/protection$/i);
+  if(protectionMatch){
+    if(request.method!=='POST')return methodNotAllowed(['POST']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.enableDirectProtection(actor,protectionMatch[1])});
+  }
+
   const deliveredMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/receipts\/delivered$/i);
   if (deliveredMatch) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
