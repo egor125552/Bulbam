@@ -845,7 +845,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     elements.callRemoteAudio.srcObject = stream;
     applyJitterBufferTargetToReceiver(event.receiver, jitterBufferTargetMs);
-    void Promise.resolve(elements.callRemoteAudio.play()).then(() => {
+    void Promise.resolve().then(() => elements.callRemoteAudio.play()).then(() => {
       if (peerConnection !== pc) return;
       remotePlaybackBlocked = false;
       if (!recoveryPending) elements.callResumeButton.hidden = true;

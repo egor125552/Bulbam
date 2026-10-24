@@ -1,4 +1,4 @@
-import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, diagnosticErrorName } from "./diagnostics-log.js";
+import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, diagnosticErrorName, diagnosticErrorOrigin } from "./diagnostics-log.js";
 
 const IGNORE = /password|secret|token|recovery|code|passkey|key|username|message|text|search|invite|profile|auth/i;
 function eventTargetId(node) {
@@ -40,8 +40,12 @@ export function setupDiagnostics() {
   document.addEventListener("visibilitychange", () => logDiagnostic("Навигация", document.visibilityState === "visible" ? "страница открыта" : "страница скрыта"));
   window.addEventListener("error", (event) =>
     logDiagnostic("Ошибки", "ошибка выполнения JavaScript", diagnosticErrorName(event.error)));
-  window.addEventListener("unhandledrejection", (event) =>
-    logDiagnostic("Ошибки", "необработанная ошибка Promise", diagnosticErrorName(event.reason)));
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    logDiagnostic("Ошибки", "необработанная ошибка Promise", diagnosticErrorName(reason));
+    const source = diagnosticErrorOrigin(reason);
+    if (source !== "unknown") logDiagnostic("Ошибки", "источник Promise", source);
+  });
   document.querySelector("#diagnostics-clear")?.addEventListener("click", () => {
     clearDiagnostics();
     if (status) status.textContent = "Журнал очищен.";

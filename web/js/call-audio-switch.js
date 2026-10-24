@@ -3,7 +3,8 @@ import { replaceCallCapture } from "./call-microphone-replacement.js";
 const SAFE_ERRORS = new Set([
   "NotReadableError", "NotAllowedError", "NotFoundError", "OverconstrainedError",
   "AbortError", "NotSupportedError", "InvalidModificationError", "InvalidStateError",
-  "OperationError", "TypeError", "SecurityError", "NotImplementedError"
+  "OperationError", "TypeError", "SecurityError", "NotImplementedError",
+  "Error", "NetworkError"
 ]);
 
 // Record DOMException types only. Browser error.message can contain device

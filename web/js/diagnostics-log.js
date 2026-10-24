@@ -77,3 +77,25 @@ export function describeApiOperation(path, method = "GET") {
   else if (/\/push/.test(pathname)) label = "уведомления";
   return `${verb} ${label}`;
 }
+
+// Only fixed, audited function names leave the device. Never export error
+// messages, raw stacks, file paths, line URLs, domain names or device labels.
+const SAFE_CALL_STACK_FRAMES = new Set([
+  "createPeerConnection", "ensurePeerConnection", "beginOfferIfNeeded",
+  "restartOffer", "processSignal", "sendSignal", "answerCall",
+  "startCall", "resumeRecoveredCall", "recoverCallConnection",
+  "applyAudioProfileDuringCall", "replaceCallCapture",
+  "applySelectedAudioProfileToTrack", "requestCallMicrophone",
+  "prepareCallCues", "playCallCue", "prepareRingback", "startRingback",
+  "sampleSender", "pollSignals", "pollCallState", "switchCallAudioProfile"
+]);
+export function diagnosticErrorOrigin(reason) {
+  const stack = typeof reason?.stack === "string" ? reason.stack : "";
+  for (const line of stack.split("\n").slice(0, 16)) {
+    // Function names are extracted only from the beginning of a frame, not
+    // from filenames, query parameters or untrusted error text.
+    const frame = /^\s*(?:at\s+)?(?:async\s+)?([a-zA-Z][a-zA-Z0-9]*)\s*(?:@|\()/.exec(line);
+    if (frame && SAFE_CALL_STACK_FRAMES.has(frame[1])) return frame[1];
+  }
+  return "unknown";
+}
