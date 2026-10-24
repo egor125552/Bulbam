@@ -1038,3 +1038,152 @@ html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !im
 .settings-category-button[hidden] {
   display: none !important;
 }
+
+/* The recording composer must show an explicit action, not a bare microphone
+   symbol. The same button and aria-label keep the existing VoiceOver flow. */
+.composer > #voice-record-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  min-height: 2.85rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* A true visual recording strip with its own timer: duplicated from the
+   existing aria-live=off timer, and hidden from assistive technology. */
+.voice-recording-panel {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+.voice-recording-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+.voice-recording-panel-header strong { font-size: 0.95rem; }
+.voice-recording-led {
+  flex: 0 0 0.72rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--danger) 15%, transparent);
+  animation: voice-recording-pulse 1.8s ease-in-out infinite;
+}
+.voice-recording-clock {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.voice-recording-panel p {
+  margin: 0.35rem 0 0 1.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+@keyframes voice-recording-pulse {
+  50% { opacity: 0.38; }
+}
+
+/* While recording, the text field is replaced by a clearly labeled voice
+   workflow: recording state, send, pause/continue, cancel. */
+.voice-recording .composer {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+/* Visually hide the text input during recording, but leave the existing
+   VoiceOver tree and keyboard navigation unchanged. */
+.voice-recording .composer-input-wrap {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  pointer-events: none;
+}
+.voice-recording .composer > #voice-record-button {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: stretch;
+  width: 100%;
+  border-radius: 0.8rem;
+  font-size: 0.96rem;
+  background: var(--brand);
+  box-shadow: none;
+}
+.voice-recording .composer > #voice-pause-button,
+.voice-recording .composer > #voice-cancel-button {
+  grid-row: 3;
+  justify-self: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.8rem;
+  border-radius: 0.8rem;
+  padding: 0.5rem;
+  text-align: center;
+  white-space: normal;
+}
+.voice-recording .composer > #voice-pause-button { grid-column: 1; }
+.voice-recording .composer > #voice-cancel-button { grid-column: 2; }
+/* This existing control remains discoverable to VoiceOver, as before. */
+.voice-recording .composer > #voice-quality-cycle {
+  grid-column: 1 / -1;
+  grid-row: 4;
+  opacity: 0.78;
+}
+.voice-recording #voice-record-button::before {
+  background: currentColor;
+  border-radius: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-recording-led { animation: none; }
+}
+@media (max-width: 25rem) {
+  .composer > #voice-record-button { padding-inline: 0.55rem; font-size: 0.79rem; }
+  .voice-recording-panel { padding: 0.7rem; }
+  .voice-recording-panel-header strong { font-size: 0.85rem; }
+}
+
+.voice-recording-paused .voice-recording-led {
+  animation: none;
+  background: var(--muted);
+  box-shadow: none;
+}
+.voice-delivery-visual {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  border-radius: 0.75rem;
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+.voice-delivery-visual[data-state="success"] {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--surface));
+}
+.voice-delivery-visual[data-state="error"] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+}

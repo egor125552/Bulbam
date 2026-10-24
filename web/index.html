@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.d990ba07b5fe.js">
+  <link rel="modulepreload" href="/boot.e9c8e511924f.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -263,6 +263,15 @@
               </div>
             </div>
 
+            <p id="voice-delivery-visual" class="voice-delivery-visual" aria-hidden="true" hidden>Голосовое отправляется…</p>
+            <div id="voice-recording-panel" class="voice-recording-panel" aria-hidden="true" hidden>
+              <div class="voice-recording-panel-header">
+                <span class="voice-recording-led" aria-hidden="true"></span>
+                <strong id="voice-recording-visual-label">Идёт запись голосового</strong>
+                <span id="voice-recording-visual-timer" class="voice-recording-clock">0:00</span>
+              </div>
+              <p id="voice-recording-visual-hint">Голосовое ещё не отправлено. Говорите в микрофон.</p>
+            </div>
             <div class="composer-input-wrap">
               <label class="visually-hidden" for="message-input">Сообщение</label>
               <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Написать сообщение" enterkeyhint="send" aria-describedby="message-send-hint"></textarea>
@@ -270,7 +279,8 @@
             </div>
             <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
-            <button id="voice-pause-button" class="button-with-icon" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-pause-button" class="button-with-icon" data-icon="pause" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-cancel-button" class="button-with-icon danger-button" data-icon="trash" type="button" aria-label="Отменить запись голосового" hidden>Отменить</button>
             <button id="voice-quality-cycle" type="button" class="button-with-icon" aria-label="Переключить качество голосовых сообщений">Качество голосового</button>
             <p id="message-send-hint" class="visually-hidden" data-detailed-help>Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
             <p id="voice-record-hint" class="visually-hidden" data-detailed-help>Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
@@ -562,7 +572,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.d990ba07b5fe.js");
+      await import("/boot.e9c8e511924f.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
