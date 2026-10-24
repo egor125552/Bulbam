@@ -36,6 +36,10 @@ export class VoiceMessageService {
     const conversationId = validateConversationId(rawConversationId);
     await this.requireConversation(conversationId, actor.userId);
     const input = validateVoiceStart(body);
+    const chat=await this.repository.findAnyConversationForUser(conversationId,actor.userId);
+    if(chat && !('title' in chat) && chat.encryptionMode==='protected' &&
+      !input.mimeType.startsWith('application/vnd.bulbam.encrypted-voice;v=1;'))
+      throw new ApiError(409,'protected_voice_required','Защищённый диалог требует шифрования голосовых.');
     const sessionId = crypto.randomUUID();
     const session = await this.storage.create(
       sessionId,

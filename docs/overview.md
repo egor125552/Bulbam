@@ -136,7 +136,7 @@ The following are active or future work:
 - video calls;
 - production-scale hardening.
 
-Current stored text messages are not end-to-end encrypted and should not be described that way.
+Ordinary messages are stored as readable text by default. Users may opt in to experimental AES-GCM client-side encryption for new direct text and voice messages, enforced by server mode after activation; older messages, groups, calls and metadata are not protected. No device ratchet or independently audited E2EE protocol has been deployed.
 
 ## Long-term direction
 

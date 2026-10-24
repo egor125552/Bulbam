@@ -94,6 +94,18 @@ const migrations = [
       )`,
       "CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id,conversation_id)"
     ]
+  },
+  {
+    version: 5,
+    statements: [
+      "ALTER TABLE conversations ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'plain' CHECK(encryption_mode IN ('plain','protected'))",
+      `CREATE TRIGGER IF NOT EXISTS enforce_protected_messages BEFORE INSERT ON messages
+        WHEN EXISTS(SELECT 1 FROM conversations c WHERE c.conversation_id=NEW.conversation_id
+          AND c.kind='direct' AND c.encryption_mode='protected')
+          AND NOT ((NEW.message_type='text' AND substr(NEW.body,1,7)='bmsec1:')
+            OR (NEW.message_type='voice' AND NEW.body='bmvoice1'))
+        BEGIN SELECT RAISE(ABORT,'protected_conversation_requires_ciphertext'); END`
+    ]
   }
 ] as const;
 
@@ -148,7 +160,7 @@ async function initialize(db: D1Database): Promise<void> {
 // D1 migration batches are not guaranteed to be atomic. A transient Worker
 // failure after the rename must allow the next request to finish v4 safely.
 async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
-  if(version===4){
+  if(version===4 || version===5){
     if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
       const exists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'")
         .first<{name:string}>();

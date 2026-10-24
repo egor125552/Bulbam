@@ -23,6 +23,11 @@ import {
 import { getVoiceBitrate } from "./voice-settings.js";
 import { VoiceUploadSocket } from "./voice-upload-socket.js";
 import { createRecordingClock } from "./voice-recording-clock.js";
+import { getSecureChatState } from "./secure-chat-ui.js";
+import {
+  encryptedVoiceMime, generateVoiceNonce, encryptVoicePart,
+  VOICE_PLAIN_CHUNK_BYTES, MAX_PROTECTED_VOICE_BYTES
+} from "./secure-voice.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
 const OPTION_HOLD_DELAY_MS = 220;
@@ -141,6 +146,12 @@ async function startRecording(trigger) {
   const account = getCurrentAccount();
   const chat = getSelectedChat();
   if (!account || !chat || current || starting) return;
+  const security = getSecureChatState();
+  if (security.blocked || security.requiresKey ||
+      security.conversationId !== chat.conversationId || security.accountId !== account.userId) {
+    announce("Запись не начата: не удалось проверить защиту переписки.");
+    return;
+  }
 
   starting = true;
   showVoiceDelivery("");
@@ -163,7 +174,7 @@ async function startRecording(trigger) {
       return;
     }
 
-    const mimeType = chooseVoiceMimeType();
+    const mimeType = chooseVoiceMimeType(Boolean(security.key));
     if (!mimeType) {
       announce("Браузер не умеет записывать совместимый формат голосовых сообщений.");
       await playVoiceCue("error");
@@ -196,12 +207,15 @@ async function startRecording(trigger) {
     }
 
     localId = randomId();
+    const protectedMimeType = security.key ? encryptedVoiceMime(mimeType, generateVoiceNonce()) : null;
     const draft = {
       id: localId,
       accountId: expectedAccountId,
       conversationId: expectedConversationId,
       clientMessageId: randomId(),
-      mimeType,
+      mimeType: protectedMimeType ?? mimeType,
+      recordingMimeType: mimeType,
+      encrypted: Boolean(protectedMimeType),
       bitrateBps,
       startedAt: Date.now(),
       lastChunkAt: Date.now(),
@@ -247,7 +261,8 @@ async function startRecording(trigger) {
       uploadPromise: null,
       transport: null,
       finishing: false,
-      clock: createRecordingClock(draft.startedAt)
+      clock: createRecordingClock(draft.startedAt),
+      secureKey: security.key
     };
 
     recorder.addEventListener("dataavailable", (event) => {
@@ -326,6 +341,10 @@ function isCallActive() {
 }
 
 async function persistChunk(state, blob) {
+  if (state.draft.encrypted && state.draft.totalBytes + blob.size > MAX_PROTECTED_VOICE_BYTES) {
+    await interruptRecording("Защищённое голосовое слишком длинное. Максимум 32 МБ.");
+    return;
+  }
   const sequence = state.draft.sequence;
   state.draft.sequence += 1;
   state.draft.totalBytes += blob.size;
@@ -474,21 +493,66 @@ async function finishStoppedRecorder(state) {
   await refreshRecoverableDraft();
 }
 
+function encryptionContext(draft) {
+  return {
+    conversationId: draft.conversationId,
+    senderUserId: draft.accountId,
+    clientMessageId: draft.clientMessageId
+  };
+}
+
+function voiceDataChunkSize(draft) {
+  return draft.encrypted ? VOICE_PLAIN_CHUNK_BYTES : LOCAL_PART_SIZE;
+}
+
+function requireVoiceKey(draft) {
+  const security = getSecureChatState();
+  if (security.blocked || security.requiresKey ||
+      security.accountId !== draft.accountId || security.conversationId !== draft.conversationId) {
+    throw new Error("Нельзя отправить голосовое: не проверены аккаунт, чат или ключ.");
+  }
+  if (Boolean(draft.encrypted) !== Boolean(security.key)) {
+    throw new Error("Режим защиты поменялся. Нельзя отправлять голосовое без требуемого шифрования.");
+  }
+  return security.key;
+}
+
+async function voicePartPayload(draft, key, partNumber, totalPlainBytes) {
+  const chunkSize = voiceDataChunkSize(draft);
+  const dataParts = Math.ceil(totalPlainBytes / chunkSize);
+  const startByte = (partNumber - 1) * chunkSize;
+  const body = await getVoicePartBlob(draft.id, startByte,
+    Math.min(chunkSize, totalPlainBytes - startByte), draft.recordingMimeType ?? draft.mimeType);
+  if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+  if (!draft.encrypted) return body;
+  const bytes = new Uint8Array(await body.arrayBuffer());
+  return new Blob([await encryptVoicePart(bytes, key, draft.mimeType,
+    encryptionContext(draft), partNumber, partNumber === dataParts ? totalPlainBytes : null)],
+    { type: "application/octet-stream" });
+}
+
 async function sendDraftById(id, existingTransport = null) {
   const draft = await getVoiceDraft(id);
   if (!draft) return;
   let transport = existingTransport;
   try {
     showVoiceDelivery("Отправляю голосовое сообщение…");
-    const totalBytes = Number(draft.totalBytes ?? 0);
-    if (!totalBytes) throw new Error("запись пустая");
+    const key = requireVoiceKey(draft);
+    const totalPlainBytes = Number(draft.totalBytes ?? 0);
+    if (!totalPlainBytes) throw new Error("запись пустая");
+    if (draft.encrypted && totalPlainBytes > MAX_PROTECTED_VOICE_BYTES) {
+      throw new Error("Защищённое голосовое превышает 32 МБ.");
+    }
 
     logDiagnostic("Голосовые", "подготовка серверной загрузки");
     const upload = await ensureDraftUpload(draft);
     logDiagnostic("Голосовые", "сервер подтвердил загрузку");
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
-    const partCount = Math.ceil(totalBytes / partSize);
-    logTraceEvent('Голосовые','план передачи записи','',{bytes:totalBytes,chunks:partCount});
+    if (partSize !== LOCAL_PART_SIZE) throw new Error("Размер сетевых частей изменился.");
+    const dataParts = Math.ceil(totalPlainBytes / voiceDataChunkSize(draft));
+    const partCount = dataParts;
+    const totalWireBytes = draft.encrypted ? totalPlainBytes + dataParts * 16 : totalPlainBytes;
+    logTraceEvent('Голосовые','план передачи записи','',{bytes:totalWireBytes,chunks:partCount});
     const parts = [...(upload.parts ?? [])];
 
     if (upload.state !== "ready") {
@@ -502,17 +566,11 @@ async function sendDraftById(id, existingTransport = null) {
       }
       parts.sort((left, right) => left.partNumber - right.partNumber);
 
-      for (let index = 0; index < partCount; index += 1) {
-        const partNumber = index + 1;
+      for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
         if (parts.some((part) => part.partNumber === partNumber)) continue;
-        const startByte = index * partSize;
-        const body = await getVoicePartBlob(
-          id,
-          startByte,
-          Math.min(partSize, totalBytes - startByte),
-          draft.mimeType
-        );
-        if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+        if (requireVoiceKey(draft) !== key) throw new Error("Ключ изменился во время передачи голосового.");
+        const body = await voicePartPayload(draft, key, partNumber, totalPlainBytes);
+        if (body.size > partSize) throw new Error("Слишком большая часть защищённого голосового.");
         logTraceEvent('Голосовые','фрагмент отправляется','',{step:partNumber,bytes:body.size});
         const ack = await transport.sendPart(partNumber, body);
         logDiagnostic("Голосовые", "сервер подтвердил фрагмент", `${partNumber} часть`);
@@ -524,6 +582,8 @@ async function sendDraftById(id, existingTransport = null) {
       }
     }
 
+    if (requireVoiceKey(draft) !== key) throw new Error("Ключ изменился до публикации голосового.");
+
     const result = await api(
       `/api/v1/chats/${draft.conversationId}/voice/uploads/${upload.sessionId}/complete`,
       {
@@ -532,7 +592,7 @@ async function sendDraftById(id, existingTransport = null) {
           clientMessageId: draft.clientMessageId,
           durationMs: draft.durationMs ?? Math.max(1, draft.lastChunkAt - draft.startedAt),
           chunkCount: partCount,
-          sizeBytes: totalBytes
+          sizeBytes: totalWireBytes
         })
       }
     );
@@ -542,8 +602,8 @@ async function sendDraftById(id, existingTransport = null) {
     hideDraftPanel();
     acceptExternalMessage(result.message);
     await refreshChatsAfterExternalMessage();
-    showVoiceDelivery("Голосовое сообщение отправлено.", "success", true);
-    announce("Голосовое сообщение отправлено.");
+    showVoiceDelivery(draft.encrypted ? "Защищённое голосовое отправлено." : "Голосовое сообщение отправлено.", "success", true);
+    announce(draft.encrypted ? "Защищённое голосовое отправлено." : "Голосовое сообщение отправлено.");
   } catch (error) {
     logDiagnostic('Ошибки','голосовое не отправлено',diagnosticErrorName(error));
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
@@ -630,7 +690,11 @@ async function uploadReadyFullParts(state) {
     return;
   }
   const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
-  const fullPartCount = Math.floor(state.draft.totalBytes / partSize);
+  if (partSize !== LOCAL_PART_SIZE) return;
+  // Never upload the last encrypted part until recording has stopped: its
+  // authentication tag must commit to the final, exact byte count.
+  const fullPartCount = Math.max(0, Math.floor(state.draft.totalBytes / voiceDataChunkSize(state.draft)) -
+    (state.draft.encrypted ? 1 : 0));
   if (!fullPartCount) return;
 
   try {
@@ -643,8 +707,10 @@ async function uploadReadyFullParts(state) {
 
     for (let partNumber = 1; partNumber <= fullPartCount; partNumber += 1) {
       if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
-      const start = (partNumber - 1) * partSize;
-      const body = await getVoicePartBlob(state.draft.id, start, partSize, state.draft.mimeType);
+      const security = getSecureChatState();
+      if (security.blocked || security.conversationId !== state.draft.conversationId ||
+          security.accountId !== state.draft.accountId || security.key !== state.secureKey) return;
+      const body = await voicePartPayload(state.draft, state.secureKey, partNumber, state.draft.totalBytes);
       if (body.size !== partSize) return;
       const ack = await state.transport.sendPart(partNumber, body);
       upload.parts.push({ partNumber, sizeBytes: ack.sizeBytes });
@@ -826,8 +892,13 @@ function clearOptionTimer() {
   optionTimer = null;
 }
 
-function chooseVoiceMimeType() {
-  return MIME_CANDIDATES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null;
+function chooseVoiceMimeType(protectedVoice = false) {
+  // iOS Safari's ManagedMediaSource is most reliable with fragmented MP4.
+  // Keep the established recording preference for ordinary, unprotected voice.
+  const candidates = protectedVoice
+    ? ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
+    : MIME_CANDIDATES;
+  return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null;
 }
 
 function isEditable(target) {

@@ -112,14 +112,13 @@ Bulbam is still under active development.
 The following features are not yet complete and should not be presented as finished:
 
 - полная синхронизация состояния прочтения между несколькими устройствами одного пользователя;
-- media and voice messages;
-- groups and channels;
+- full attachment support and channels (voice messages and groups already exist);
 - blocking, reporting, and the full trust-and-safety layer;
-- end-to-end encryption;
+- audited, automatically managed multi-device end-to-end encryption (an opt-in shared-key encrypted mode exists for direct text and voice);
 - video calls;
 - large-scale production hardening.
 
-Text messages should not currently be described as end-to-end encrypted because the server stores readable message bodies.
+By default, ordinary chats remain unencrypted at rest on the server. Direct chats can opt into experimental on-device AES-GCM encryption for new text and voice, with a manually exchanged secret and a server-enforced block on new plaintext. Prior messages, groups and calls are not protected by this mode. It is not Signal Protocol and has not received an independent security audit. See `docs/message-encryption-experimental.md`.
 
 ## Project direction
 

@@ -125,6 +125,17 @@ export class MessagingService {
     return messages;
   }
 
+  async enableDirectProtection(actor:MessagingActor,rawConversationId:string){
+    const conversationId=validateConversationId(rawConversationId);
+    const conversation=await this.requireConversation(conversationId,actor.userId);
+    if('title' in conversation)throw new ApiError(400,'group_encryption_not_supported','Защита групп пока не поддерживается.');
+    await this.repository.protectDirectConversation(conversationId);
+    await this.realtime.publishToUsers([conversation.participantAId,conversation.participantBId],{
+      type:'chat.updated',conversationId
+    });
+    return {encryptionMode:'protected' as const};
+  }
+
   async sendMessage(
     actor: MessagingActor,
     rawConversationId: string,
@@ -133,6 +144,9 @@ export class MessagingService {
     const conversationId = validateConversationId(rawConversationId);
     const conversation = await this.requireConversation(conversationId, actor.userId);
     const input = validateMessageInput(body);
+    if(!('title' in conversation)&&conversation.encryptionMode==='protected' &&
+       !/^bmsec1:[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{22,}$/.test(input.text))
+      throw new ApiError(409,'protected_message_required','Защищённый диалог принимает только зашифрованные сообщения.');
     const message: StoredMessage = {
       messageId: crypto.randomUUID(),
       conversationId,
@@ -155,13 +169,16 @@ export class MessagingService {
   ) {
     const conversationId = validateConversationId(rawConversationId);
     const conversation = await this.requireConversation(conversationId, actor.userId);
+    const encrypted=prepared.voice.mimeType.startsWith('application/vnd.bulbam.encrypted-voice;v=1;');
+    if(!('title' in conversation)&&conversation.encryptionMode==='protected'&&!encrypted)
+      throw new ApiError(409,'protected_voice_required','Защищённый диалог принимает только зашифрованные голосовые.');
     const message: StoredMessage = {
       messageId: prepared.messageId,
       conversationId,
       senderUserId: actor.userId,
       clientMessageId: prepared.clientMessageId,
       kind: "voice",
-      text: "Голосовое сообщение",
+      text: encrypted ? 'bmvoice1' : "Голосовое сообщение",
       voice: { ...prepared.voice, progress: null },
       createdAt: Date.now(),
       deliveredAt: null,
@@ -335,6 +352,7 @@ export class MessagingService {
     const lastMessage = await this.repository.findLatestMessage(conversation.conversationId);
     return {
       kind:'direct',
+      encryptionMode:conversation.encryptionMode,
       conversationId: conversation.conversationId,
       peer,
       createdAt: conversation.createdAt,

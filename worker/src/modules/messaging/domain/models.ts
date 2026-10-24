@@ -1,4 +1,5 @@
 export interface DirectConversation {
+  encryptionMode: "plain" | "protected";
   conversationId: string;
   participantAId: string;
   participantBId: string;

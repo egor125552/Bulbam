@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { generateConversationSecret, importConversationSecret, encryptText, decryptText } from "../web/js/secure-messages.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { createTestHarness } from "wrangler";
 
@@ -188,5 +189,56 @@ describe("persistent direct messaging", () => {
     }
 
     expect(sent).toHaveLength(10);
+  });
+});
+
+describe("encrypted text crosses the actual server without revealing plaintext", () => {
+  test("stores only authenticated ciphertext in D1 and returns it to both participants", async () => {
+    await seedInvite("BULBAM-SECURE-ALPHA-2026", "secure-alpha-invite");
+    await seedInvite("BULBAM-SECURE-BETA-2026", "secure-beta-invite");
+    const alice = await register({
+      username: "secure_alice", displayName: "Алиса", inviteCode: "BULBAM-SECURE-ALPHA-2026"
+    });
+    const bob = await register({
+      username: "secure_bob", displayName: "Борис", inviteCode: "BULBAM-SECURE-BETA-2026"
+    });
+    const opened = await api("/api/v1/chats/direct", alice.cookie, {
+      method: "POST", body: JSON.stringify({ userId: bob.account.userId })
+    });
+    await expectStatus(opened, 200);
+    const conversationId = (await json(opened)).chat.conversationId;
+    const context = {
+      conversationId, senderUserId: alice.account.userId, clientMessageId: "secure_message_00001"
+    };
+    const key = await importConversationSecret(generateConversationSecret());
+    const plaintext = "Личное сообщение, которого не должно быть в базе данных.";
+    const wire = await encryptText(plaintext, key, context);
+    expect(wire).not.toContain(plaintext);
+    const sent = await api(`/api/v1/chats/${conversationId}/messages`, alice.cookie, {
+      method: "POST",
+      body: JSON.stringify({ clientMessageId: context.clientMessageId, text: wire })
+    });
+    await expectStatus(sent, 201);
+
+    const receiverHistory = await api(`/api/v1/chats/${conversationId}/messages`, bob.cookie);
+    await expectStatus(receiverHistory, 200);
+    const [message] = (await json(receiverHistory)).messages;
+    expect(message.text).toBe(wire);
+    expect(message.text).not.toContain(plaintext);
+    expect(await decryptText(message.text, key, {
+      conversationId: message.conversationId,
+      senderUserId: message.senderUserId,
+      clientMessageId: message.clientMessageId
+    })).toBe(plaintext);
+
+    const worker = server.getWorker("bulbam-api-test");
+    const env = await worker.getEnv();
+    const row = await env.DB.prepare("SELECT body FROM messages WHERE client_message_id = ?")
+      .bind(context.clientMessageId).first();
+    expect(row?.body).toBe(wire);
+    expect(row?.body).not.toContain(plaintext);
+
+    const chats = await api("/api/v1/chats", bob.cookie);
+    expect((await json(chats)).chats[0].lastMessage.text).toBe(wire);
   });
 });
