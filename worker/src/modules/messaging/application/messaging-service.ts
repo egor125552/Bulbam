@@ -1,6 +1,6 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
-import type { DirectConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
+import type { Conversation, DirectConversation, GroupConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
 import {
   validateConversationId,
   validateDeliveryReceiptInput,
@@ -31,7 +31,7 @@ export class MessagingService {
   }
 
   async listChats(actor: MessagingActor) {
-    const conversations = await this.repository.listConversationsForUser(actor.userId, 100);
+    const conversations = await this.repository.listAllConversationsForUser(actor.userId, 100);
     return Promise.all(conversations.map((conversation) => this.chatSummary(actor.userId, conversation)));
   }
 
@@ -52,10 +52,56 @@ export class MessagingService {
     return this.chatSummary(actor.userId, conversation, peer);
   }
 
+  async createGroup(actor:MessagingActor, body:Record<string,unknown>) {
+    const title=validateGroupTitle(body.title);
+    const avatarIcon=validateGroupIcon(body.avatarIcon);
+    const userIds=validateGroupUsers(body.userIds,actor.userId);
+    const historyMode=validateHistoryMode(body.historyMode);
+    for(const userId of userIds) if(!await this.users.findUser(userId)) notFound('user_not_found','Один из пользователей не найден.');
+    const group=await this.repository.createGroup(title,avatarIcon,actor.userId,userIds,historyMode,Date.now());
+    const summary=await this.chatSummary(actor.userId,group);
+    await this.realtime.publishToUsers(userIds,{type:'chat.created',conversationId:group.conversationId});
+    return summary;
+  }
+
+  async groupMembers(actor:MessagingActor,rawConversationId:string) {
+    const group=await this.requireGroup(rawConversationId,actor.userId);
+    const members=await this.repository.listGroupMembers(group.conversationId);
+    return {group, members:await Promise.all(members.map(async member=>({
+      ...member,user:await this.users.findUser(member.userId)??deletedUser(member.userId)
+    })))};
+  }
+
+  async addGroupMembers(actor:MessagingActor,rawConversationId:string,body:Record<string,unknown>) {
+    const group=await this.requireGroup(rawConversationId,actor.userId);
+    if(group.ownerUserId!==actor.userId)throw new ApiError(403,'group_owner_only','Добавлять участников может только создатель группы.');
+    const ids=validateGroupUsers(body.userIds,actor.userId);
+    const existing=new Set((await this.repository.listGroupMembers(group.conversationId)).map(x=>x.userId));
+    if(ids.length+existing.size>100)badRequest('group_too_large','В группе может быть не больше 100 участников.');
+    for(const id of ids)if(!await this.users.findUser(id))notFound('user_not_found','Пользователь не найден.');
+    const fresh=ids.filter(id=>!existing.has(id));
+    await this.repository.addGroupMembers(group.conversationId,fresh,Date.now());
+    if(fresh.length)await this.realtime.publishToUsers(fresh,{type:'chat.created',conversationId:group.conversationId});
+    await this.realtime.publishToUsers(await this.repository.listConversationRecipients(group),{type:'chat.updated',conversationId:group.conversationId});
+    return this.groupMembers(actor,group.conversationId);
+  }
+
+  private async requireGroup(rawConversationId:string,userId:string):Promise<GroupConversation> {
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),userId);
+    if(!('title' in conversation))notFound('group_not_found','Группа не найдена.');
+    return conversation as GroupConversation;
+  }
+
   async listMessages(actor: MessagingActor, rawConversationId: string) {
     const conversationId = validateConversationId(rawConversationId);
-    await this.requireConversation(conversationId, actor.userId);
-    return this.repository.listMessages(conversationId, 200, actor.userId);
+    const conversation=await this.requireConversation(conversationId, actor.userId);
+    const messages=await this.repository.listMessages(conversationId, 200, actor.userId);
+    if ('title' in conversation) {
+      const ownMessages=messages.filter(m=>m.senderUserId===actor.userId);
+      const readers=await this.repository.listMessageReaders(conversationId,ownMessages.map(m=>m.messageId));
+      for(const message of ownMessages)message.readBy=readers.get(message.messageId)??[];
+    }
+    return messages;
   }
 
   async sendMessage(
@@ -203,7 +249,7 @@ export class MessagingService {
 
   private async persistAndPublish(
     actor: MessagingActor,
-    conversation: DirectConversation,
+    conversation: Conversation,
     message: StoredMessage
   ) {
     const result = await this.repository.insertMessage(message);
@@ -215,25 +261,21 @@ export class MessagingService {
     }
 
     if (result.status === "created") {
-      await this.realtime.publishToUsers(participants(conversation), {
+      await this.realtime.publishToUsers(await this.repository.listConversationRecipients(conversation), {
         type: "message.created",
         conversationId: conversation.conversationId,
         message: result.message
       });
 
       if (this.notifications) {
-        const recipientUserId = peerUserId(conversation, actor.userId);
-        const sender = await this.users.findUser(actor.userId);
-        const pushTask = this.notifications.notifyNewMessage({
-          recipientUserId,
-          senderDisplayName: sender?.displayName ?? "Бульбам",
-          conversationId: conversation.conversationId,
-          messageId: result.message.messageId,
-          text: result.message.text
-        }).catch((error) => {
-          console.warn("[Push] notification task failed", error);
-        });
-        if (this.defer) this.defer(pushTask);
+        const recipients=(await this.repository.listConversationRecipients(conversation)).filter(id=>id!==actor.userId);
+        const sender=await this.users.findUser(actor.userId);
+        const pushTask=Promise.all(recipients.map(recipientUserId=>this.notifications!.notifyNewMessage({
+          recipientUserId,senderDisplayName:sender?.displayName??'Бульбам',
+          groupTitle:'title' in conversation?conversation.title:undefined,
+          conversationId:conversation.conversationId,messageId:result.message.messageId,text:result.message.text
+        }))).catch(error=>console.warn('[Push] notification task failed',error));
+        if(this.defer)this.defer(pushTask);
         else await pushTask;
       }
     }
@@ -245,17 +287,26 @@ export class MessagingService {
     };
   }
 
-  private async requireConversation(conversationId: string, userId: string): Promise<DirectConversation> {
-    const conversation = await this.repository.findConversationForUser(conversationId, userId);
+  private async requireConversation(conversationId: string, userId: string): Promise<Conversation> {
+    const conversation = await this.repository.findAnyConversationForUser(conversationId, userId);
     if (!conversation) notFound("chat_not_found", "Диалог не найден.");
     return conversation;
   }
 
-  private async chatSummary(userId: string, conversation: DirectConversation, knownPeer?: DirectoryUser) {
+  private async chatSummary(userId: string, conversation: Conversation, knownPeer?: DirectoryUser) {
+    if ('title' in conversation) {
+      const members=await this.repository.listGroupMembers(conversation.conversationId);
+      const list=await this.repository.listMessages(conversation.conversationId,1,userId);
+      return {kind:'group',conversationId:conversation.conversationId,title:conversation.title,avatarIcon:conversation.avatarIcon,
+        historyMode:conversation.historyMode,ownerUserId:conversation.ownerUserId,
+        members:await Promise.all(members.map(async member=>({... (await this.users.findUser(member.userId)??deletedUser(member.userId)),userId:member.userId}))),
+        createdAt:conversation.createdAt,lastMessageAt:conversation.lastMessageAt,lastMessage:list.at(-1)??null};
+    }
     const peerUser = peerUserId(conversation, userId);
     const peer = knownPeer ?? await this.users.findUser(peerUser) ?? deletedUser(peerUser);
     const lastMessage = await this.repository.findLatestMessage(conversation.conversationId);
     return {
+      kind:'direct',
       conversationId: conversation.conversationId,
       peer,
       createdAt: conversation.createdAt,
@@ -277,4 +328,28 @@ function peerUserId(conversation: DirectConversation, userId: string): string {
 
 function deletedUser(userId: string): DirectoryUser {
   return { userId, username: "deleted", displayName: "Удалённый аккаунт" };
+}
+
+function validateGroupTitle(value:unknown):string {
+  if(typeof value!=='string'||!value.trim()||value.trim().length>80)
+    badRequest('invalid_group_title','Название группы должно содержать от 1 до 80 символов.');
+  return value.trim();
+}
+function validateGroupUsers(value:unknown,self:string):string[] {
+  if(!Array.isArray(value)||!value.length||value.length>99)
+    badRequest('invalid_group_members','Выберите от 1 до 99 участников.');
+  const ids=[...new Set(value.map(validateUserId))];
+  if(ids.includes(self))badRequest('invalid_group_members','Создатель уже входит в группу.');
+  return ids;
+}
+function validateHistoryMode(value:unknown):'all'|'since_join' {
+  if(value!=='all'&&value!=='since_join')badRequest('invalid_group_history','Выберите, доступна ли старшая история новым участникам.');
+  return value;
+}
+
+function validateGroupIcon(value:unknown):string {
+  if(value===undefined)return '👥';
+  if(typeof value!=='string'||!['👥','🏠','⭐','🌿','💬'].includes(value))
+    badRequest('invalid_group_icon','Выберите готовый значок группы.');
+  return value;
 }

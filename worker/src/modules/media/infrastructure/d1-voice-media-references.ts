@@ -19,7 +19,7 @@ export class D1VoiceMediaReferences implements VoiceMediaReferences {
         SELECT DISTINCT v.object_key
         FROM voice_message_attachments v
         JOIN messages m ON m.message_id = v.message_id
-        JOIN direct_conversations c ON c.conversation_id = m.conversation_id
+        JOIN conversations c ON c.conversation_id = m.conversation_id
         WHERE c.participant_a_id IN (${placeholders})
            OR c.participant_b_id IN (${placeholders})
         ORDER BY v.object_key

@@ -25,6 +25,21 @@ export async function handleMessagingHttp(
     return json({ ok: true, chat });
   }
 
+  if (url.pathname === "/api/v1/chats/groups") {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const actor=await authenticate(request);
+    const chat=await service.createGroup(actor,await readJsonObject(request));
+    return json({ok:true,chat},{status:201});
+  }
+
+  const groupMembersMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/members$/i);
+  if(groupMembersMatch){
+    const actor=await authenticate(request);
+    if(request.method==='GET')return json({ok:true,...await service.groupMembers(actor,groupMembersMatch[1])});
+    if(request.method==='POST')return json({ok:true,...await service.addGroupMembers(actor,groupMembersMatch[1],await readJsonObject(request))});
+    return methodNotAllowed(['GET','POST']);
+  }
+
   const deliveredMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/receipts\/delivered$/i);
   if (deliveredMatch) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);

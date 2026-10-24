@@ -75,6 +75,25 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_voice_listen_listener ON voice_listen_receipts(listener_user_id, updated_at)",
       "CREATE INDEX IF NOT EXISTS idx_voice_attachments_object ON voice_message_attachments(object_key)"
     ]
+  },
+  {
+    version: 4,
+    statements: [
+      // SQLite rewrites the existing messages FK when the table is renamed.
+      "ALTER TABLE direct_conversations RENAME TO conversations",
+      "ALTER TABLE conversations ADD COLUMN kind TEXT NOT NULL DEFAULT 'direct' CHECK(kind IN ('direct','group'))",
+      "ALTER TABLE conversations ADD COLUMN title TEXT",
+      "ALTER TABLE conversations ADD COLUMN owner_user_id TEXT",
+      "ALTER TABLE conversations ADD COLUMN history_mode TEXT NOT NULL DEFAULT 'all' CHECK(history_mode IN ('all','since_join'))",
+      "ALTER TABLE conversations ADD COLUMN avatar_icon TEXT NOT NULL DEFAULT '👥'",
+      `CREATE TABLE IF NOT EXISTS group_members (
+        conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        joined_at INTEGER NOT NULL,
+        PRIMARY KEY (conversation_id,user_id)
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id,conversation_id)"
+    ]
   }
 ] as const;
 

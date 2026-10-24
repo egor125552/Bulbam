@@ -2,6 +2,9 @@ import type { D1Database } from "../../../platform/cloudflare";
 import type {
   DeliveryReceiptUpdate,
   DirectConversation,
+  Conversation,
+  GroupConversation,
+  GroupMember,
   StoredMessage,
   VoiceListenUpdate
 } from "../domain/models";
@@ -48,7 +51,7 @@ const MESSAGE_COLUMNS = `
 
 const MESSAGE_JOINS = `
   LEFT JOIN voice_message_attachments v ON v.message_id = m.message_id
-  LEFT JOIN voice_listen_receipts vl ON vl.message_id = m.message_id
+  LEFT JOIN voice_listen_receipts vl ON vl.message_id = m.message_id AND vl.listener_user_id = ?
   LEFT JOIN voice_privacy_settings vps ON vps.user_id = vl.listener_user_id
 `;
 
@@ -66,7 +69,7 @@ export class D1MessagingRepository implements MessagingRepository {
 
     await this.db
       .prepare(`
-        INSERT OR IGNORE INTO direct_conversations (
+        INSERT OR IGNORE INTO conversations (
           conversation_id, participant_a_id, participant_b_id, direct_key, created_at, last_message_at
         ) VALUES (?, ?, ?, ?, ?, NULL)
       `)
@@ -76,8 +79,8 @@ export class D1MessagingRepository implements MessagingRepository {
     const row = await this.db
       .prepare(`
         SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at
-        FROM direct_conversations
-        WHERE direct_key = ?
+        FROM conversations
+        WHERE direct_key = ? AND kind = 'direct'
         LIMIT 1
       `)
       .bind(directKey)
@@ -92,9 +95,9 @@ export class D1MessagingRepository implements MessagingRepository {
     const row = await this.db
       .prepare(`
         SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at
-        FROM direct_conversations
+        FROM conversations
         WHERE conversation_id = ?
-          AND (participant_a_id = ? OR participant_b_id = ?)
+          AND kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
         LIMIT 1
       `)
       .bind(conversationId, userId, userId)
@@ -107,8 +110,8 @@ export class D1MessagingRepository implements MessagingRepository {
     const result = await this.db
       .prepare(`
         SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at
-        FROM direct_conversations
-        WHERE participant_a_id = ? OR participant_b_id = ?
+        FROM conversations
+        WHERE kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
         ORDER BY COALESCE(last_message_at, created_at) DESC, conversation_id DESC
         LIMIT ?
       `)
@@ -117,18 +120,97 @@ export class D1MessagingRepository implements MessagingRepository {
     return (result.results ?? []).map(mapConversation);
   }
 
+  async createGroup(title: string, avatarIcon: string, ownerUserId: string, members: string[], historyMode: "all" | "since_join", now: number): Promise<GroupConversation> {
+    await this.initialize();
+    const conversationId = crypto.randomUUID();
+    // Compatibility fields are kept only for pre-v4 direct rows. Membership is
+    // exclusively controlled by group_members, never participant_a/b.
+    await this.db.batch([
+      this.db.prepare(`INSERT INTO conversations
+        (conversation_id,participant_a_id,participant_b_id,direct_key,created_at,last_message_at,kind,title,owner_user_id,history_mode,avatar_icon)
+        VALUES (?,?,?,?,?,NULL,'group',?,?,?,?)`)
+        .bind(conversationId,ownerUserId,ownerUserId,`group:${conversationId}`,now,title,ownerUserId,historyMode,avatarIcon),
+      ...[ownerUserId,...members].map(userId=>this.db.prepare(`INSERT INTO group_members(conversation_id,user_id,joined_at)
+        SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE conversation_id=? AND kind='group')`)
+        .bind(conversationId,userId,now,conversationId))
+    ]);
+    return {kind:'group',conversationId,title,avatarIcon,ownerUserId,historyMode,createdAt:now,lastMessageAt:null};
+  }
+
+  async addGroupMembers(conversationId: string, userIds: string[], now: number): Promise<void> {
+    await this.initialize();
+    if (!userIds.length) return;
+    const conversation=await this.db.prepare("SELECT last_message_at FROM conversations WHERE conversation_id=? AND kind='group'")
+      .bind(conversationId).first<Row>();
+    const joinedAt=Math.max(now,Number(conversation?.last_message_at??0)+1);
+    await this.db.batch(userIds.map(userId=>this.db.prepare(`INSERT OR IGNORE INTO group_members(conversation_id,user_id,joined_at)
+      SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM conversations WHERE conversation_id=? AND kind='group')`)
+      .bind(conversationId,userId,joinedAt,conversationId)));
+  }
+
+  async listGroupMembers(conversationId: string): Promise<GroupMember[]> {
+    await this.initialize();
+    const result=await this.db.prepare('SELECT user_id,joined_at FROM group_members WHERE conversation_id=? ORDER BY joined_at,user_id')
+      .bind(conversationId).all<Row>();
+    return (result.results??[]).map(row=>({userId:String(row.user_id),joinedAt:Number(row.joined_at)}));
+  }
+
+  async findAnyConversationForUser(conversationId: string, userId: string): Promise<Conversation|null> {
+    await this.initialize();
+    const result=await this.db.prepare(`SELECT c.* FROM conversations c
+      LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+      WHERE c.conversation_id=? AND ((c.kind='direct' AND (c.participant_a_id=? OR c.participant_b_id=?))
+        OR (c.kind='group' AND gm.user_id IS NOT NULL)) LIMIT 1`)
+      .bind(userId,conversationId,userId,userId).first<Row>();
+    return result ? (result.kind==='group'?mapGroup(result):mapConversation(result)) : null;
+  }
+
+  async listAllConversationsForUser(userId: string, limit: number): Promise<Conversation[]> {
+    await this.initialize();
+    const result=await this.db.prepare(`SELECT c.* FROM conversations c
+      LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+      WHERE (c.kind='direct' AND (c.participant_a_id=? OR c.participant_b_id=?))
+         OR (c.kind='group' AND gm.user_id IS NOT NULL)
+      ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.conversation_id DESC LIMIT ?`)
+      .bind(userId,userId,userId,limit).all<Row>();
+    return (result.results??[]).map(row=>row.kind==='group'?mapGroup(row):mapConversation(row));
+  }
+
+  async listConversationRecipients(conversation: Conversation): Promise<string[]> {
+    if ('title' in conversation) return (await this.listGroupMembers(conversation.conversationId)).map(member=>member.userId);
+    return [conversation.participantAId,conversation.participantBId];
+  }
+
+  async listMessageReaders(conversationId: string,messageIds: string[]):Promise<Map<string,Array<{userId:string;readAt:number}>>> {
+    await this.initialize();
+    const output=new Map<string,Array<{userId:string;readAt:number}>>();
+    if(!messageIds.length)return output;
+    const placeholders=messageIds.map(()=>'?').join(',');
+    const rows=await this.db.prepare(`SELECT message_id,recipient_user_id,read_at FROM message_receipts
+      WHERE message_id IN (${placeholders}) AND read_at IS NOT NULL`).bind(...messageIds).all<Row>();
+    for(const row of rows.results??[]){const key=String(row.message_id);const current=output.get(key)??[];
+      current.push({userId:String(row.recipient_user_id),readAt:Number(row.read_at)});output.set(key,current);}
+    return output;
+  }
+
   async listMessages(conversationId: string, limit: number, viewerUserId: string): Promise<StoredMessage[]> {
     await this.initialize();
     const result = await this.db
       .prepare(`
-        SELECT ${MESSAGE_COLUMNS}
+        SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
+          own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at
         FROM messages m
         ${MESSAGE_JOINS}
+        LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+        JOIN conversations c ON c.conversation_id=m.conversation_id
+        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
         WHERE m.conversation_id = ?
+        AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
+          (c.history_mode='all' OR m.created_at>=gm.joined_at)))
         ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT ?
       `)
-      .bind(conversationId, limit)
+      .bind(viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
       .all<Row>();
     return (result.results ?? []).map((row) => mapMessage(row, viewerUserId)).reverse();
   }
@@ -184,7 +266,7 @@ export class D1MessagingRepository implements MessagingRepository {
     statements.push(
       this.db
         .prepare(`
-          UPDATE direct_conversations
+          UPDATE conversations
           SET last_message_at = CASE
             WHEN last_message_at IS NULL OR last_message_at < ? THEN ?
             ELSE last_message_at
@@ -219,14 +301,19 @@ export class D1MessagingRepository implements MessagingRepository {
     const placeholders = messageIds.map(() => "?").join(", ");
     const result = await this.db
       .prepare(`
-        SELECT ${MESSAGE_COLUMNS}
+        SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
+          own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
         FROM messages m
         ${MESSAGE_JOINS}
+        JOIN conversations c ON c.conversation_id=m.conversation_id
+        LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
         WHERE m.conversation_id = ?
           AND m.message_id IN (${placeholders})
           AND m.sender_user_id <> ?
+          AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
       `)
-      .bind(conversationId, ...messageIds, recipientUserId)
+      .bind(recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
       .all<Row>();
 
     const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
@@ -267,14 +354,19 @@ export class D1MessagingRepository implements MessagingRepository {
     const placeholders = messageIds.map(() => "?").join(", ");
     const result = await this.db
       .prepare(`
-        SELECT ${MESSAGE_COLUMNS}
+        SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
+          own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
         FROM messages m
         ${MESSAGE_JOINS}
+        JOIN conversations c ON c.conversation_id=m.conversation_id
+        LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
         WHERE m.conversation_id = ?
           AND m.message_id IN (${placeholders})
           AND m.sender_user_id <> ?
+          AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
       `)
-      .bind(conversationId, ...messageIds, recipientUserId)
+      .bind(recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
       .all<Row>();
 
     const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
@@ -316,7 +408,7 @@ export class D1MessagingRepository implements MessagingRepository {
         ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT 1
       `)
-      .bind(conversationId)
+      .bind(null,conversationId)
       .first<Row>();
     return row ? mapMessage(row) : null;
   }
@@ -328,13 +420,16 @@ export class D1MessagingRepository implements MessagingRepository {
         SELECT ${MESSAGE_COLUMNS}
         FROM messages m
         ${MESSAGE_JOINS}
-        JOIN direct_conversations c ON c.conversation_id = m.conversation_id
+        JOIN conversations c ON c.conversation_id = m.conversation_id
+        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
         WHERE m.conversation_id = ?
           AND m.message_id = ?
-          AND (c.participant_a_id = ? OR c.participant_b_id = ?)
+          AND ((c.kind='direct' AND (c.participant_a_id = ? OR c.participant_b_id = ?))
+            OR (c.kind='group' AND gm.user_id IS NOT NULL AND
+              (c.history_mode='all' OR m.created_at>=gm.joined_at)))
         LIMIT 1
       `)
-      .bind(conversationId, messageId, userId, userId)
+      .bind(userId,userId, conversationId, messageId, userId, userId)
       .first<Row>();
     return row ? mapMessage(row, userId) : null;
   }
@@ -416,6 +511,7 @@ export class D1MessagingRepository implements MessagingRepository {
     if (!userIds.length) return;
 
     for (const userId of userIds) {
+      await this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_privacy_settings WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_listen_receipts WHERE listener_user_id = ?").bind(userId).run();
     }
@@ -425,8 +521,8 @@ export class D1MessagingRepository implements MessagingRepository {
       const result = await this.db
         .prepare(`
           SELECT conversation_id
-          FROM direct_conversations
-          WHERE participant_a_id = ? OR participant_b_id = ?
+          FROM conversations
+          WHERE kind='direct' AND (participant_a_id = ? OR participant_b_id = ?)
         `)
         .bind(userId, userId)
         .all<Row>();
@@ -442,7 +538,7 @@ export class D1MessagingRepository implements MessagingRepository {
           .bind(conversationId)
       );
       statements.push(this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId));
-      statements.push(this.db.prepare("DELETE FROM direct_conversations WHERE conversation_id = ?").bind(conversationId));
+      statements.push(this.db.prepare("DELETE FROM conversations WHERE conversation_id = ?").bind(conversationId));
     }
     await this.db.batch(statements);
   }
@@ -456,10 +552,16 @@ export class D1MessagingRepository implements MessagingRepository {
         WHERE m.sender_user_id = ? AND m.client_message_id = ?
         LIMIT 1
       `)
-      .bind(senderUserId, clientMessageId)
+      .bind(senderUserId,senderUserId, clientMessageId)
       .first<Row>();
     return row ? mapMessage(row) : null;
   }
+}
+
+function mapGroup(row: Row): GroupConversation {
+  return {kind:'group',conversationId:String(row.conversation_id),title:String(row.title),avatarIcon:String(row.avatar_icon??'👥'),
+    ownerUserId:String(row.owner_user_id),historyMode:row.history_mode==='since_join'?'since_join':'all',
+    createdAt:Number(row.created_at),lastMessageAt:row.last_message_at==null?null:Number(row.last_message_at)};
 }
 
 function mapConversation(row: Row): DirectConversation {
@@ -510,8 +612,12 @@ function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
         }
       : null,
     createdAt: Number(row.created_at),
-    deliveredAt: row.delivered_at == null ? null : Number(row.delivered_at),
-    readAt: row.read_at == null ? null : Number(row.read_at)
+    deliveredAt: row.conversation_kind==='group' && viewerUserId!==senderUserId
+      ? row.own_delivered_at==null?null:Number(row.own_delivered_at)
+      : row.delivered_at==null?null:Number(row.delivered_at),
+    readAt: row.conversation_kind==='group' && viewerUserId!==senderUserId
+      ? row.own_read_at==null?null:Number(row.own_read_at)
+      : row.read_at==null?null:Number(row.read_at)
   };
 }
 

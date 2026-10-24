@@ -216,13 +216,14 @@
             <div class="section-heading">
               <h3 id="search-users-title">Новый чат</h3>
             </div>
+            <button id="create-group-open" type="button" class="button-with-icon" data-icon="users">Создать группу</button>
             <label class="visually-hidden" for="user-search-input">Найти человека</label>
             <input id="user-search-input" type="search" autocomplete="off" placeholder="Имя или @username" aria-describedby="user-search-hint">
             <p id="user-search-hint" class="hint">Введите минимум 2 символа.</p>
             <ul id="user-search-results" class="user-results" aria-label="Результаты поиска"></ul>
           </section>
 
-          <nav class="chat-navigation" aria-label="Личные диалоги">
+          <nav class="chat-navigation" aria-label="Список чатов">
             <div id="chat-list" class="chat-list"></div>
           </nav>
         </aside>
@@ -237,6 +238,7 @@
                 <p id="conversation-peer" class="conversation-peer">Откройте диалог или найдите человека.</p>
               </div>
             </div>
+            <button id="group-info-open" type="button" class="button-with-icon" data-icon="users" hidden>Участники</button>
             <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
@@ -312,7 +314,49 @@
             <audio id="call-remote-audio" autoplay playsinline></audio>
           </section>
 
-      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+  
+      <dialog id="group-editor" aria-labelledby="group-editor-title" class="group-dialog">
+        <form id="group-editor-form" class="form-stack">
+          <h2 id="group-editor-title" tabindex="-1">Создать группу</h2>
+          <div id="group-create-fields" class="form-stack">
+            <label for="group-title-input">Название группы</label>
+            <input id="group-title-input" maxlength="80" autocomplete="off" placeholder="Например, Наши">
+            <label for="group-icon-input">Значок группы</label>
+            <select id="group-icon-input">
+              <option value="👥">Участники</option><option value="🏠">Дом</option>
+              <option value="⭐">Звезда</option><option value="🌿">Лист</option>
+              <option value="💬">Сообщения</option>
+            </select>
+            <label for="group-history-input">Что увидят участники, добавленные позже?</label>
+            <select id="group-history-input">
+              <option value="since_join">Только новые сообщения</option>
+              <option value="all">Всю предыдущую переписку</option>
+            </select>
+          </div>
+          <h3 id="group-pick-title">Выберите участников</h3>
+          <p class="hint">Сначала люди из ваших личных чатов. Можно найти другого пользователя.</p>
+          <p id="group-selected-count" role="status">Выбрано: 0</p>
+          <ul id="group-picked-users" class="group-picked-users" aria-label="Участники для добавления"></ul>
+          <label for="group-user-search">Найти человека</label>
+          <input id="group-user-search" type="search" autocomplete="off" placeholder="Имя или @username">
+          <ul id="group-user-results" class="user-results" aria-label="Выбор участников"></ul>
+          <p id="group-editor-status" role="status" aria-live="polite"></p>
+          <div class="group-dialog-actions">
+            <button id="group-cancel" type="button">Отмена</button>
+            <button id="group-submit" type="submit">Создать группу</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="group-members-dialog" aria-labelledby="group-members-title" class="group-dialog">
+        <h2 id="group-members-title">Участники группы</h2>
+        <p id="group-members-presence" class="hint"></p>
+        <ul id="group-members-list" class="user-results"></ul>
+        <div class="group-dialog-actions">
+          <button id="group-members-close" type="button">Закрыть</button>
+          <button id="group-members-add" type="button" hidden>Добавить участников</button>
+        </div>
+      </dialog>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <div class="settings-header">
           <div>
             <p class="eyebrow">Бульбам</p>

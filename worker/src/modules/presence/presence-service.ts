@@ -56,8 +56,12 @@ export class PresenceService {
     const result=await this.db.prepare(`
       WITH peers AS (
         SELECT DISTINCT CASE WHEN participant_a_id=? THEN participant_b_id ELSE participant_a_id END AS peer_id
-        FROM direct_conversations
-        WHERE participant_a_id=? OR participant_b_id=?
+        FROM conversations
+        WHERE kind='direct' AND (participant_a_id=? OR participant_b_id=?)
+        UNION
+        SELECT gm2.user_id AS peer_id FROM group_members gm1
+        JOIN group_members gm2 ON gm1.conversation_id=gm2.conversation_id
+        WHERE gm1.user_id=? AND gm2.user_id<>?
       ), activity AS (
         SELECT user_id, MAX(last_active_at) AS last_seen_at,
           MAX(CASE WHEN visible_until>? THEN 1 ELSE 0 END) AS online
@@ -69,7 +73,7 @@ export class PresenceService {
       LEFT JOIN activity ON activity.user_id=peers.peer_id
       LEFT JOIN account_presence_settings settings ON settings.user_id=peers.peer_id
       ORDER BY peers.peer_id LIMIT 100
-    `).bind(userId,userId,userId,now).all<{
+    `).bind(userId,userId,userId,userId,userId,now).all<{
       user_id:string;last_seen_at:number|null;online:number;share_presence:number
     }>();
     return (result.results??[]).map(row=>({
