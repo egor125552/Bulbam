@@ -1106,7 +1106,16 @@ html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !im
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: stretch;
 }
-.voice-recording .composer-input-wrap { display: none; }
+/* Visually hide the text input during recording, but leave the existing
+   VoiceOver tree and keyboard navigation unchanged. */
+.voice-recording .composer-input-wrap {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  pointer-events: none;
+}
 .voice-recording .composer > #voice-record-button {
   grid-column: 1 / -1;
   grid-row: 2;
@@ -1131,7 +1140,12 @@ html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !im
 }
 .voice-recording .composer > #voice-pause-button { grid-column: 1; }
 .voice-recording .composer > #voice-cancel-button { grid-column: 2; }
-.voice-recording .composer > #voice-quality-cycle { display: none; }
+/* This existing control remains discoverable to VoiceOver, as before. */
+.voice-recording .composer > #voice-quality-cycle {
+  grid-column: 1 / -1;
+  grid-row: 4;
+  opacity: 0.78;
+}
 .voice-recording #voice-record-button::before {
   background: currentColor;
   border-radius: 0;
