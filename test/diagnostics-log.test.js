@@ -1,5 +1,5 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
-import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, describeApiOperation } from "../web/js/diagnostics-log.js";
+import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, describeApiOperation, diagnosticErrorOrigin } from "../web/js/diagnostics-log.js";
 afterEach(clearDiagnostics);
 describe("unified safe diagnostics", () => {
   test("logs calls, UI navigation, recording and server results in a single timeline", () => {
@@ -63,5 +63,18 @@ describe("diagnostic response sampling for very long calls", () => {
     logApiResult("GET состояние звонка", 408, 10000);
     logApiResult("GET состояние звонка", 408, 10000);
     expect(diagnosticText().split("\n")).toHaveLength(2);
+  });
+});
+
+describe("private-safe asynchronous call error origin",()=>{
+  test("extracts a known function only, never a secret Web URL or raw stack",()=>{
+    const error={name:"InvalidStateError",stack:"processSignal@https://example.org/boot.123.js?token=private_secret:1:2\nhttps://example.org/secret_file.js:2:3"};
+    expect(diagnosticErrorOrigin(error)).toBe("processSignal");
+    expect(diagnosticErrorOrigin({stack:"    at async processSignal (https://example.org/boot.js:200:10)"})).toBe("processSignal");
+    expect(diagnosticErrorOrigin({name:"InvalidStateError",stack:"privateUser@https://example.org/private-token:1:2"})).toBe("unknown");
+  });
+  test("returns stable classification when the browser hides the stack",()=>{
+    expect(diagnosticErrorOrigin({name:"InvalidStateError"})).toBe("unknown");
+    expect(diagnosticErrorOrigin(null)).toBe("unknown");
   });
 });
