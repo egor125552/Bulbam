@@ -10,6 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.0ed71f757aec.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -513,7 +514,12 @@
       const panel = document.querySelector("#startup-failure");
       const message = document.querySelector("#startup-failure-message");
       const live = document.querySelector("#live-status");
-      const watchdog = setTimeout(() => fail(new Error("startup_timeout")), 15000);
+      // A 2G-class link can take well over 15 seconds to transfer the app.
+      // Show progress instead of claiming that a slow download failed.
+      const slowNotice = setTimeout(() => {
+        if (!initialized) live.textContent = "Медленный интернет. Продолжаю загружать Бульбам…";
+      }, 9000);
+      const watchdog = setTimeout(() => fail(new Error("startup_timeout")), 90000);
       function fail(error) {
         if (initialized) return;
         console.error("[Bulbam] Startup was interrupted", error);
@@ -531,10 +537,12 @@
       window.bulbamBootReady = () => {
         initialized = true;
         clearTimeout(watchdog);
+        clearTimeout(slowNotice);
         panel.hidden = true;
       };
       window.bulbamBootFailed = (error) => {
         clearTimeout(watchdog);
+        clearTimeout(slowNotice);
         fail(error);
       };
       document.querySelector("#startup-retry")?.addEventListener("click", () => {
@@ -546,14 +554,7 @@
   </script>
   <script type="module">
     try {
-      const [{ setupInterface }, { setupCanonicalInterface }] = await Promise.all([
-        import("/js/ui.js"), import("/js/canonical-interface.js")
-      ]);
-      setupInterface();
-      setupCanonicalInterface();
-      document.querySelector("#logout")?.addEventListener("click", () =>
-        document.querySelector("#settings-dialog")?.close?.());
-      await import("/app.js?v=20261019-settings-call-fix-1");
+      await import("/boot.0ed71f757aec.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

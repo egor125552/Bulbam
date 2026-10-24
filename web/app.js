@@ -21,28 +21,31 @@ import { setupVoiceRecorder } from "./js/voice-recorder.js";
 import { setupVoiceSettings } from "./js/voice-settings.js";
 import { setupVoiceWebKitTimelineFix } from "./js/voice-webkit-timeline.js";
 
-setupI18n();
-setupDetailedHelp();
-setupSettingsScreens();
-setupHealth();
-setupAuth();
-setupAdminRecovery();
-setupWelcome();
-setupSessions();
-setupInvites();
-setupMessenger();
-setupMessageAnnouncements();
-setupMessageScroll();
-setupPushNotifications();
-setupPresence();
-setupVoiceSettings();
-setupVoicePlayer();
-setupVoiceWebKitTimelineFix();
-setupAppleVoiceRecordingPreference();
-setupFinishedCallPanelCleanup();
-setupVoiceRecorder();
-setupAudioProfiles();
-setupCalls();
+export function startApp() {
+  setupI18n();
+  setupDetailedHelp();
+  setupSettingsScreens();
+  setupHealth();
+  setupAuth();
+  setupAdminRecovery();
+  setupWelcome();
+  setupSessions();
+  setupInvites();
+  setupMessenger();
+  setupMessageAnnouncements();
+  setupMessageScroll();
+  setupPushNotifications();
+  setupPresence();
+  setupVoiceSettings();
+  setupVoicePlayer();
+  setupVoiceWebKitTimelineFix();
+  setupAppleVoiceRecordingPreference();
+  setupFinishedCallPanelCleanup();
+  setupVoiceRecorder();
+  setupAudioProfiles();
+  setupCalls();
 
-await checkServer();
-await loadCurrentAccount({ quiet: false });
+  // Login is the only critical API request at startup. Health checks remain
+  // available on demand, but must not block account/chat initialization.
+  void loadCurrentAccount({ quiet: false });
+}

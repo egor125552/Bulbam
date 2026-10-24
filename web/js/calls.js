@@ -54,6 +54,8 @@ let networkRecoveryActive = false;
 let signalProcessingQueue = Promise.resolve();
 let signalPollInFlight = false;
 let signalPollRequestId = 0;
+let statePollInFlight = false;
+let statePollRequestId = 0;
 const iceRequestEpoch = createRequestEpoch();
 let localNegotiationId = null;
 let remoteNegotiationId = null;
@@ -280,6 +282,10 @@ async function startCall() {
 
   elements.callStartButton.disabled = true;
   try {
+    // Fetch short-lived TURN credentials while the user grants microphone
+    // access and the room is being created. These independent network waits
+    // must not add up sequentially on slow cellular connections.
+    void prefetchIceServers();
     logCallEvent("запрос микрофона");
     localStream = await requestMicrophone();
     logCallEvent("микрофон доступен");
@@ -320,14 +326,27 @@ async function answerCall() {
     }
     localStream = microphone;
     logCallEvent("микрофон доступен");
-    const pc = await ensurePeerConnection();
-    if (currentCall?.callId !== answeringCallId || pc !== peerConnection) return;
-    const result = await api(callPath("/answer"), { method: "POST" });
+    // Server answer and TURN/peer preparation happen independently. Doing
+    // them serially added a whole TURN-network round trip before the caller
+    // could start its offer. Promise.allSettled also handles a rare WebRTC
+    // initialization failure after the server already accepted the call.
+    const [peerReady, serverAnswer] = await Promise.allSettled([
+      ensurePeerConnection(),
+      api(callPath("/answer"), { method: "POST" })
+    ]);
     if (currentCall?.callId !== answeringCallId) return;
+    if (serverAnswer.status === "rejected") throw serverAnswer.reason;
     logCallEvent("звонок принят");
     playCallCue("answered");
-    currentCall = result.call;
+    currentCall = serverAnswer.value.call;
     recoveryPending = false;
+    if (peerReady.status === "rejected") {
+      showConnectedControls("Ответ отправлен. Подключаю резервный аудиомаршрут…");
+      startCallPolling();
+      void recoverCallConnection({ hard: true, reason: "initial-peer-creation" });
+      return;
+    }
+    if (peerReady.value !== peerConnection) return;
     showConnectedControls("Соединяем звонок…");
     startCallPolling();
     announce(`Вы ответили ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
@@ -1296,6 +1315,8 @@ function stopCallPolling() {
   clearInterval(statePollTimer);
   signalPollTimer = null;
   statePollTimer = null;
+  statePollRequestId += 1;
+  statePollInFlight = false;
 }
 
 async function pollSignals() {
@@ -1322,7 +1343,11 @@ async function pollSignals() {
 }
 
 async function pollCallState() {
-  if (!currentCall) return;
+  // Network requests on a congested 2G connection may take longer than the
+  // polling interval. Do not stack duplicate GETs that starve SDP/ICE posts.
+  if (!currentCall || statePollInFlight) return;
+  statePollInFlight = true;
+  const requestId = ++statePollRequestId;
   const polledCallId = currentCall.callId;
   const path = callPath();
   try {
@@ -1359,7 +1384,11 @@ async function pollCallState() {
     currentCall = { ...currentCall, ...latest };
     if (latest.status === "declined") finishCall("Собеседник отклонил звонок.");
     else if (latest.status === "ended") finishCall("Звонок завершён.");
-  } catch {}
+  } catch {
+    // The WebSocket event and next successful poll can still recover state.
+  } finally {
+    if (requestId === statePollRequestId) statePollInFlight = false;
+  }
 }
 
 async function restoreCallFromUrl() {

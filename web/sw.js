@@ -135,3 +135,69 @@ async function openOrFocus(targetUrl) {
 
   return self.clients.openWindow(targetUrl);
 }
+
+// Public application shell only. Never cache authenticated /api endpoints,
+// voice messages, WebSocket traffic, or user data.
+const SHELL_CACHE = "bulbam-shell-c35bd8057765";
+const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
+
+self.addEventListener("fetch", (event) => {
+  const request = event.request;
+  if (request.method !== "GET") return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  if (request.mode === "navigate") {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request);
+        if (response.ok && new URL(response.url).origin === self.location.origin) {
+          const cache = await caches.open(SHELL_CACHE);
+          event.waitUntil(cache.put("/", response.clone()).catch(() => {}));
+        }
+        return response;
+      } catch (error) {
+        const cached = await caches.match("/");
+        if (cached) return cached;
+        throw error;
+      }
+    })());
+    return;
+  }
+  // A content-hashed bundle cannot go stale; serve it directly from cache.
+  if (/^\/boot\.[a-f0-9]{12}\.js$/.test(url.pathname)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      const response = await fetch(request);
+      if (response.ok) void cache.put(request, response.clone()).catch(() => {});
+      return response;
+    })());
+    return;
+  }
+  // Styles are updated in the background; the current load is not blocked
+  // by a conditional 304 request on a mobile radio.
+  if (STATIC_FILES.has(url.pathname)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      const cached = await cache.match(request);
+      const network = fetch(request).then((response) => {
+        if (response.ok) return cache.put(request, response.clone()).then(() => response);
+        return response;
+      });
+      if (cached) {
+        event.waitUntil(network.catch(() => {}));
+        return cached;
+      }
+      return network;
+    })());
+  }
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(names.filter((name) => name.startsWith("bulbam-shell-") && name !== SHELL_CACHE)
+      .map((name) => caches.delete(name)));
+  })());
+});
