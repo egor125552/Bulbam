@@ -1,3 +1,4 @@
+import {logDiagnostic, logTraceEvent, diagnosticErrorName} from "./diagnostics-log.js";
 import { api } from "./api.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 
@@ -11,6 +12,7 @@ export function setupPushNotifications() {
   elements.pushDisableButton.addEventListener("click", () => void disablePush());
 
   window.addEventListener("bulbam:account-changed", () => {
+    logDiagnostic('Сеть','настройки уведомлений обновляются');
     void refreshPushState();
   });
 
@@ -20,7 +22,9 @@ export function setupPushNotifications() {
   });
 
   if (pushSupported()) {
+    logDiagnostic('Сеть','регистрация Service Worker началась');
     registrationPromise = navigator.serviceWorker.register("/sw.js");
+    void registrationPromise.then(()=>logDiagnostic('Сеть','Service Worker зарегистрирован'),error=>logDiagnostic('Ошибки','регистрация Service Worker не удалась',diagnosticErrorName(error)));
   }
 }
 
@@ -42,6 +46,7 @@ export async function detachPushSubscription() {
 }
 
 async function refreshPushState() {
+  logDiagnostic('Сеть','проверка состояния push');
   const account = getCurrentAccount();
   if (!account) {
     setPushActive(false);
@@ -78,6 +83,7 @@ async function refreshPushState() {
     if (Notification.permission === "granted" && subscription) {
       await syncSubscription(subscription);
       setPushActive(true);
+      logDiagnostic('Сеть','уведомления активны');
       setUi("Push-уведомления включены на этом устройстве.", false, true);
       return;
     }

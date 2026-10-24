@@ -5,7 +5,7 @@ import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
 import { createCallHeadsetControls } from "./call-headset-controls.js";
 import { switchCallAudioProfile, mediaErrorCategory } from "./call-audio-switch.js";
-import { logDiagnostic, diagnosticErrorName } from "./diagnostics-log.js";
+import { logDiagnostic, diagnosticErrorName, logTraceEvent } from "./diagnostics-log.js";
 import { createCallNetworkRestoration } from "./call-network-restoration.js";
 import { matchesCallResponse, createRequestEpoch } from "./call-request-guards.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
@@ -799,6 +799,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
       throw new Error("Создание устаревшего аудиосоединения отменено.");
     }
     const sender = pc.addTrack(track, localStream);
+    logDiagnostic('Звонки','дорожка добавлена',track.kind==='audio'?'audio':'другое');
     if (track.kind === "audio") {
       try { await tuneAudioSender(sender); } catch {
         // Encoder bitrate control is an enhancement; capture settings remain valid if unsupported.
@@ -1132,6 +1133,7 @@ function applyAudioProfileDuringCall() {
     const pc = peerConnection;
     const sender = pc?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
     logDiagnostic("Микрофон", "переключение в звонке", profile.id);
+    const trace=(stage,detail='')=>logDiagnostic('Микрофон',stage,detail);
     try {
       const switchResult = await switchCallAudioProfile({
         oldStream, sender,
@@ -1139,9 +1141,9 @@ function applyAudioProfileDuringCall() {
         applyExisting: (oldTrack) => applySelectedAudioProfileToTrack(oldTrack, profile.id),
         isCurrent: () => epoch === profileSwitchEpoch && currentCall?.callId === callId &&
           peerConnection === pc && localStream === oldStream,
-        muted
+        muted,trace
       });
-      if (switchResult.status === "stale") return;
+      if (switchResult.status === "stale") { trace('переключение пропущено'); return; }
       if (switchResult.captureError) logDiagnostic("Микрофон", "новая дорожка недоступна", switchResult.captureError);
       if (switchResult.status === "failed") {
         logDiagnostic("Микрофон", "ошибка переключения", switchResult.fallbackError);
@@ -1155,13 +1157,18 @@ function applyAudioProfileDuringCall() {
         ? updateAudioProfileStatus(switchResult.track, profile.id)
         : switchResult.result;
       if (epoch !== profileSwitchEpoch || currentCall?.callId !== callId) return;
-      if (sender) { try { await tuneAudioSender(sender, profile.id); } catch {} }
+      if (sender) {
+        trace('настройка кодировщика начало');
+        try {await tuneAudioSender(sender,profile.id);trace('настройка кодировщика успешно');}
+        catch(error){trace('настройка кодировщика ошибка',diagnosticErrorName(error));}
+      }
       const partial = switchResult.status === "fallback" || result?.mismatches?.length || result?.unknown?.length;
       logDiagnostic("Микрофон", partial ? "режим применён частично" : "режим применён", profile.id);
       announce(partial
         ? `Режим «${profile.label}» применён к действующему микрофону, но браузер не подтвердил все параметры.`
         : `Режим звука «${profile.label}» применён к текущему микрофону.`);
     } catch (error) {
+      trace('непредвиденная ошибка переключения',mediaErrorCategory(error));
       logDiagnostic("Микрофон", "ошибка переключения", mediaErrorCategory(error));
       if (currentCall?.callId === callId) announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
     }

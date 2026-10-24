@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.2e7029f270a4.js">
+  <link rel="modulepreload" href="/boot.2324ebf768e7.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -546,7 +546,8 @@
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
             <section aria-labelledby="diagnostics-journal-title" class="diagnostics-journal">
               <h3 id="diagnostics-journal-title">Полный журнал диагностики</h3>
-              <p class="hint">Действия интерфейса, переходы, запросы к серверу, звонки, микрофон и этапы голосовых. Хранится только в памяти этой вкладки; личные сообщения, пароли, токены и звук не сохраняются. Для анализа сервера показаны запросы и его ответы, а не внутренние журналы Cloudflare.</p>
+              <p class="hint">Подробная хронология всего Бульбама: действия и фокус интерфейса, жизненный цикл вкладки, запросы и ответы, WebSocket, сообщения, группы, голосовые, звонки, микрофон, ресурсы, производительность и ошибки. Каждый доступный браузеру этап получает время и номер. Хранится только в памяти этой вкладки; личные сообщения, пароли, токены и звук не сохраняются. Внутренние журналы Cloudflare и операционной системы браузеру недоступны.</p>
+              <p id="diagnostics-count" class="hint" role="status" aria-live="polite">Счётчик событий</p>
               <label for="diagnostics-log">События в порядке времени</label>
               <textarea id="diagnostics-log" readonly rows="13" spellcheck="false" aria-live="off" aria-label="Полный журнал событий Бульбама"></textarea>
               <div class="call-log-actions" data-diagnostics-private="true">
@@ -616,7 +617,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.2e7029f270a4.js");
+      await import("/boot.2324ebf768e7.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

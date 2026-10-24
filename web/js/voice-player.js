@@ -1,3 +1,4 @@
+import {logDiagnostic,logTraceEvent} from "./diagnostics-log.js";
 import { explainVoicePlaybackError } from "./voice-playback-diagnostics.js";
 import { announce, getCurrentAccount } from "./ui.js";
 import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
@@ -131,12 +132,14 @@ export function renderVoiceMessage(message, mine) {
 
   audio.playbackRate = playbackRate;
   audio.addEventListener("play", () => {
+    logDiagnostic('Голосовые','воспроизведение началось');
     if (controller.disposing) return;
     play.textContent = "Пауза";
     startHeartbeat(controller);
     void prefetchNextVoice(controller.message.messageId);
   });
   audio.addEventListener("pause", () => {
+    logDiagnostic('Голосовые','воспроизведение на паузе');
     play.textContent = "Воспроизвести";
     stopHeartbeat(controller);
     if (!controller.disposing) void sendProgress(controller, false, false);
@@ -150,19 +153,23 @@ export function renderVoiceMessage(message, mine) {
     controller.lastMediaTimeMs = audio.currentTime * 1000;
   });
   audio.addEventListener("waiting", () => {
+    logDiagnostic('Голосовые','ожидание данных для воспроизведения');
     if (controller.disposing) return;
     controller.buffering = true;
     announce("Буферизация голосового сообщения.");
   });
   audio.addEventListener("playing", () => {
+    logDiagnostic('Голосовые','воспроизведение продолжено');
     if (controller.disposing) return;
     if (controller.buffering) announce("Воспроизведение голосового продолжено.");
     controller.buffering = false;
   });
   audio.addEventListener("ended", () => {
+    logDiagnostic('Голосовые','воспроизведение завершено');
     if (!controller.disposing) void handleEnded(controller);
   });
   audio.addEventListener("error", () => {
+    logTraceEvent('Ошибки','ошибка проигрывателя','',{status:Number(audio.error?.code)||0});
     if (controller.disposing) return;
     stopHeartbeat(controller);
     const reason=explainVoicePlaybackError(audio.error?.code);

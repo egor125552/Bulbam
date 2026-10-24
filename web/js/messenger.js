@@ -1,4 +1,4 @@
-import { logDiagnostic } from "./diagnostics-log.js";
+import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
@@ -89,6 +89,7 @@ export async function refreshChatsAfterExternalMessage() {
 async function switchAccount(nextAccount) {
   generation += 1;
   account = nextAccount;
+  logTraceEvent('Навигация','смена пользователя','',{active:Boolean(nextAccount)});
   chats = [];
   presenceByUserId.clear();
   selectedChat = null;
@@ -202,6 +203,7 @@ async function loadChats({ quiet = false } = {}) {
   try {
     const result = await api("/api/v1/chats");
     chats = result.chats ?? [];
+    logTraceEvent('Сервер','список чатов получен','',{count:chats.length});
     if (selectedChat) {
       selectedChat = chats.find((chat) => chat.conversationId === selectedChat.conversationId) ?? selectedChat;
     }
@@ -293,6 +295,7 @@ async function loadMessages({ quiet = false } = {}) {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
     if (!selectedChat || selectedChat.conversationId !== conversationId) return;
     const serverMessages = result.messages ?? [];
+    logTraceEvent('Сервер','история чата загружена','',{messages:serverMessages.length});
     const pending = messages.filter((message) => message.localState);
     messages = serverMessages;
     for (const local of pending) {
@@ -517,6 +520,7 @@ async function sendCurrentMessage(event) {
     localState: "pending"
   };
   messages.push(pending);
+  logTraceEvent('Интерфейс','сообщение поставлено в очередь','',{count:messages.length});
   elements.messageInput.value = "";
   renderMessages({ preserveVoicePlayback: true, scrollToBottom: true });
   await transmitPending(pending);
@@ -525,6 +529,7 @@ async function sendCurrentMessage(event) {
 async function transmitPending(pending) {
   if (!account || !selectedChat || pending.conversationId !== selectedChat.conversationId) return;
   pending.localState = "pending";
+  logDiagnostic('Сеть','повтор или начало отправки текста');
   renderMessages({ preserveVoicePlayback: true });
   try {
     const result = await api(`/api/v1/chats/${pending.conversationId}/messages`, {
@@ -535,10 +540,12 @@ async function transmitPending(pending) {
       })
     });
     upsertServerMessage(result.message);
+    logDiagnostic('Сеть','сообщение подтверждено сервером');
     announce("Сообщение отправлено.");
     await loadChats({ quiet: true });
   } catch (error) {
     pending.localState = "failed";
+    logDiagnostic('Ошибки','сообщение не отправлено',diagnosticErrorName(error));
     renderMessages({ preserveVoicePlayback: true });
     announce(`Сообщение не отправлено: ${error.message}. Можно повторить отправку.`);
   }
@@ -570,6 +577,7 @@ async function acknowledgeIncomingMessages(conversationId, candidates) {
   const isOpenAndVisible = selectedChat?.conversationId === conversationId && document.visibilityState === "visible";
   const readIds = isOpenAndVisible ? [...new Set(incoming.filter((message) => !message.readAt).map((message) => message.messageId))] : [];
   const deliveredIds = [...new Set(incoming.filter((message) => !message.deliveredAt && !readIds.includes(message.messageId)).map((message) => message.messageId))];
+  logTraceEvent('Сеть','подтверждения сообщений подготовлены','',{messages:incoming.length,count:readIds.length,chunks:deliveredIds.length});
   try {
     if (deliveredIds.length) {
       await api(`/api/v1/chats/${conversationId}/receipts/delivered`, { method: "POST", body: JSON.stringify({ messageIds: deliveredIds }) });
@@ -587,6 +595,7 @@ function connectRealtime() {
   if (!account || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
   clearTimeout(reconnectTimer);
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  logDiagnostic('Сеть','начало подключения сокета сообщений');
   socket = new WebSocket(`${protocol}//${location.host}/api/v1/realtime`);
 
   socket.addEventListener("open", () => {
@@ -606,6 +615,8 @@ function connectRealtime() {
     } catch {
       return;
     }
+    const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed'];
+    logDiagnostic('Сеть','получено событие сокета',known.includes(payload?.type)?payload.type:'другое');
     if (payload?.type === "message.created" && payload.message) {
       logDiagnostic("Сервер", "событие новое сообщение");
       handleRealtimeMessage(payload);
@@ -623,6 +634,7 @@ function connectRealtime() {
 
   socket.addEventListener("close", handleRealtimeDisconnect);
   socket.addEventListener("error", () => {
+    logDiagnostic('Ошибки','ошибка сокета сообщений');
     try { socket?.close(); } catch {}
   });
 }
@@ -692,6 +704,7 @@ function handleRealtimeDisconnect() {
   clearTimeout(reconnectTimer);
   const delay = reconnectDelay;
   reconnectDelay = Math.min(15000, reconnectDelay * 2);
+  logTraceEvent('Сеть','переподключение сокета назначено','',{retryMs:delay,step:reconnectDelay});
   reconnectTimer = setTimeout(connectRealtime, delay);
 }
 
@@ -708,10 +721,12 @@ function stopRealtime() {
 
 function startPolling() {
   if (pollTimer || !account) return;
+  logDiagnostic('Сеть','резервный опрос включен');
   pollTimer = setInterval(() => void refreshVisibleState(), 5000);
 }
 
 function stopPolling() {
+  if(pollTimer)logDiagnostic('Сеть','резервный опрос остановлен');
   clearInterval(pollTimer);
   pollTimer = null;
 }

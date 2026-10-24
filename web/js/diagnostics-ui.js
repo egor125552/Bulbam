@@ -1,4 +1,4 @@
-import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, diagnosticErrorName, diagnosticErrorOrigin } from "./diagnostics-log.js";
+import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, diagnosticErrorName, diagnosticErrorOrigin, diagnosticStats } from "./diagnostics-log.js";
 
 const IGNORE = /password|secret|token|recovery|code|passkey|key|username|message|text|search|invite|profile|auth/i;
 function eventTargetId(node) {
@@ -14,7 +14,12 @@ export function setupDiagnostics() {
   if (!field) return;
   const dialog = document.querySelector("#settings-dialog");
   let updateScheduled = false;
-  const updateField = () => { field.value = diagnosticText(); };
+  const updateField = () => {
+    field.value = diagnosticText();
+    const stats=diagnosticStats();
+    const count=document.querySelector('#diagnostics-count');
+    if(count)count.textContent=`Событий: ${stats.count} из ${stats.limit}. Всего за сеанс: ${stats.total}.`;
+  };
   updateField();
   // Keeping a 900-line textarea synchronized after every polling request
   // would slow down ordinary calls. Only render while diagnostics is open.

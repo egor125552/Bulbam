@@ -1,7 +1,10 @@
 // Opt-in exportable, memory-only technical trace. Never store or export names,
 // IDs, URLs with tokens, message text, audio samples or request/response bodies.
-const MAX_EVENTS = 900;
+const MAX_EVENTS = 12000;
 const events = [];
+let sequence = 0;
+let firstEventAt = Date.now();
+const detailMetrics = new Set(['attempt','durationMs','count','bytes','chunks','members','messages','retryMs','status','active','elapsedMs','visible','queue','step']);
 const observers = new Set();
 const pollCounts = new Map();
 const POLLS = new Set(["GET сигналы звонка", "GET состояние звонка", "GET присутствие"]);
@@ -15,31 +18,46 @@ function safe(value) {
 export function logDiagnostic(category, action, detail = "") {
   if (!CATEGORIES.has(category)) return;
   // Call sites must supply a fixed code-defined event, never user content.
-  const event = `${new Date().toISOString()} | ${category} | ${safe(action)}${detail ? ` | ${safe(detail)}` : ""}`;
+  const event = `${new Date().toISOString()} | ${category} | ${safe(action)}${detail ? ` | ${safe(detail)}` : ""} | №${++sequence} +${Date.now() - firstEventAt} ms`;
   events.push(event);
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
   for (const observer of observers) { try { observer(event); } catch {} }
 }
 export function diagnosticText() { return events.join("\n"); }
-export function clearDiagnostics() { pollCounts.clear(); events.length = 0; for (const f of observers) { try { f(null); } catch {} } }
+export function clearDiagnostics() { pollCounts.clear(); events.length = 0; sequence=0;firstEventAt=Date.now(); for (const f of observers) { try { f(null); } catch {} } }
 export function subscribeDiagnostics(callback) { observers.add(callback); return () => observers.delete(callback); }
 // Log all meaningful operations; group repetitive successful heartbeat GETs.
 // A connected call otherwise generates three nearly identical lines per poll
 // and pushes the actual errors out of the bounded log within minutes.
+// Every browser-initiated API operation has an explicit start and result.
+// No identifiers, request bodies or response payloads are ever included.
 export function logApiStart(operation) {
-  if (!POLLS.has(operation)) logDiagnostic("Сервер", "запрос", operation);
+  logDiagnostic("Сервер", "запрос", operation);
 }
 export function logApiResult(operation, status, durationMs) {
   const timing = `${Math.max(0, Math.round(durationMs))} ms`;
   if (status === 200 && POLLS.has(operation)) {
     const count = (pollCounts.get(operation) ?? 0) + 1;
     pollCounts.set(operation, count);
-    if (count === 1) logDiagnostic("Сервер", "фоновый опрос", `${operation} 200 ${timing}`);
-    else if (count % 10 === 0) logDiagnostic("Сервер", "фоновый опрос", `${operation} ${count} проверок 200`);
+    logDiagnostic("Сервер", "фоновый опрос", `${operation} 200 ${timing}`);
     return;
   }
   logDiagnostic("Сервер", "ответ", `${operation} ${status} ${timing}`);
 }
+
+// Only numeric/boolean metrics from an explicit allowlist. No arbitrary object
+// serialization: user and call data can hide in seemingly harmless objects.
+export function logTraceEvent(category, stage, outcome = "", metrics = {}) {
+  const fields = [];
+  if (metrics && typeof metrics === "object") for (const [name,value] of Object.entries(metrics)) {
+    if (!detailMetrics.has(name)) continue;
+    if (typeof value === 'number' && Number.isFinite(value)) fields.push(`${name} ${Math.round(value)}`);
+    else if (typeof value === 'boolean') fields.push(`${name} ${value ? 1 : 0}`);
+  }
+  logDiagnostic(category, stage, [outcome, ...fields].filter(Boolean).join(' '));
+}
+export function diagnosticStats() { return {count:events.length,total:sequence,limit:MAX_EVENTS}; }
+
 export function diagnosticErrorName(reason) {
   const name = typeof reason?.name === "string" ? reason.name : "";
   const safeNames = new Set([

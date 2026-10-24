@@ -1,6 +1,6 @@
 import { renderVoiceRecorderVisual, renderVoiceDeliveryVisual } from "./voice-recorder-visual.js";
 import { rawVoiceConstraints, keepVoiceRaw } from "./voice-raw-capture.js";
-import { logDiagnostic } from "./diagnostics-log.js";
+import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { isDetailedHelpEnabled } from "./accessibility-help.js";
 import { api } from "./api.js";
@@ -488,6 +488,7 @@ async function sendDraftById(id, existingTransport = null) {
     logDiagnostic("Голосовые", "сервер подтвердил загрузку");
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     const partCount = Math.ceil(totalBytes / partSize);
+    logTraceEvent('Голосовые','план передачи записи','',{bytes:totalBytes,chunks:partCount});
     const parts = [...(upload.parts ?? [])];
 
     if (upload.state !== "ready") {
@@ -512,6 +513,7 @@ async function sendDraftById(id, existingTransport = null) {
           draft.mimeType
         );
         if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+        logTraceEvent('Голосовые','фрагмент отправляется','',{step:partNumber,bytes:body.size});
         const ack = await transport.sendPart(partNumber, body);
         logDiagnostic("Голосовые", "сервер подтвердил фрагмент", `${partNumber} часть`);
         parts.push({ partNumber, sizeBytes: ack.sizeBytes });
@@ -534,6 +536,7 @@ async function sendDraftById(id, existingTransport = null) {
         })
       }
     );
+    logDiagnostic('Голосовые','передача завершена');
     await deleteVoiceDraft(id);
     recoverableDraft = null;
     hideDraftPanel();
@@ -542,6 +545,7 @@ async function sendDraftById(id, existingTransport = null) {
     showVoiceDelivery("Голосовое сообщение отправлено.", "success", true);
     announce("Голосовое сообщение отправлено.");
   } catch (error) {
+    logDiagnostic('Ошибки','голосовое не отправлено',diagnosticErrorName(error));
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
     showVoiceDelivery("Не удалось отправить. Запись сохранена, можно повторить.", "error");
     announce(`Голосовое не отправлено: ${error.message}. Запись сохранена, можно повторить.`);
