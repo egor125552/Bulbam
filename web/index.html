@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.295838544f82.js">
+  <link rel="modulepreload" href="/boot.0c30310b5148.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -551,6 +551,14 @@
             <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить список устройств</button>
           </section>
 
+          <section id="e2ee-devices-card" class="card" aria-labelledby="e2ee-devices-title" hidden>
+            <h3 id="e2ee-devices-title">Ключи устройств</h3>
+            <p class="hint">Ключи создаются на этом устройстве автоматически. Новые устройства требуют подтверждения с уже доверенного. Шифрование текущих чатов пока не меняется.</p>
+            <ul id="e2ee-devices-list" aria-label="Доверенные и ожидающие устройства"></ul>
+            <button type="button" id="e2ee-devices-refresh">Обновить устройства</button>
+            <p id="e2ee-devices-status"></p>
+          </section>
+
           <section id="invite-card" class="card" aria-labelledby="invite-title" hidden>
             <h3 id="invite-title">Приглашение</h3>
             <p class="hint">Одноразовый код для нового пользователя.</p>
@@ -659,7 +667,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.295838544f82.js");
+      await import("/boot.0c30310b5148.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

@@ -1,0 +1,43 @@
+import {webcrypto} from 'node:crypto';
+import {beforeAll,afterAll,test,expect} from 'vitest';
+import 'fake-indexeddb/auto';
+import {localDeviceIdentity,registerCurrentDevice,deviceStatus} from '../web/js/device-identity.js';
+import {verifyDeviceBundle} from '../worker/src/modules/messaging/domain/device-key-validation.ts';
+const account='11111111-1111-4111-8111-111111111111';
+let original;
+beforeAll(()=>{original=globalThis.crypto;Object.defineProperty(globalThis,'crypto',{configurable:true,value:webcrypto});});
+afterAll(()=>{if(original)Object.defineProperty(globalThis,'crypto',{configurable:true,value:original});});
+test('automatically generates and persists nonexportable identity, agreement and signed prekey per account',async()=>{
+ const device=await localDeviceIdentity(account);
+ expect(device.signingPrivate.extractable).toBe(false);
+ expect(device.agreementPrivate.extractable).toBe(false);
+ expect(device.signedPrekeyPrivate.extractable).toBe(false);
+ expect(await verifyDeviceBundle(account,device.bundle)).toBe(true);
+ const fromOtherTab=await localDeviceIdentity(account);
+ expect(fromOtherTab.bundle).toEqual(device.bundle);
+ expect(fromOtherTab.signingPrivate).toBeDefined();
+ const altered={...device.bundle,deviceId:webcrypto.randomUUID()};
+ expect(await verifyDeviceBundle(account,altered)).toBe(false);
+ expect(await verifyDeviceBundle('another-account',device.bundle)).toBe(false);
+});
+test('registers only public material, verifies matching response and fetches device directory',async()=>{
+ const data=await localDeviceIdentity(account);
+ const calls=[];
+ const request=async(path,options={})=>{
+   calls.push({path,options});
+   if(options.method==='POST')return {device:{...data.bundle,trust:'active'}};
+   return {devices:[{...data.bundle,trust:'active'}]};
+ };
+ const device=await registerCurrentDevice(account,request);
+ expect(device.trust).toBe('active');
+ const payload=JSON.parse(calls[0].options.body);
+ expect(payload).not.toHaveProperty('signingPrivate');
+ expect(payload).not.toHaveProperty('agreementPrivate');
+ expect(payload).not.toHaveProperty('signedPrekeyPrivate');
+ expect(payload).toEqual(data.bundle);
+ const status=await deviceStatus(account,request);
+ expect(status.localDeviceId).toBe(data.bundle.deviceId);
+ expect(status.devices).toHaveLength(1);
+ const hostile=async()=>({device:{...data.bundle,identitySigning:{...data.bundle.identitySigning,x:'A'.repeat(43)}}});
+ await expect(registerCurrentDevice(account,hostile)).rejects.toThrow(/другую идентичность/);
+});
