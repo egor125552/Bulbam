@@ -35,6 +35,7 @@ let groupEditorConversation=null;
 let groupSearchTimer=null;
 
 export function setupMessenger() {
+  window.addEventListener('bulbam:chat-mode-changed',()=>void loadChats({quiet:true}));
   setupSecureChat({
     onKeyChanged: () => {renderMessages({ preserveVoicePlayback: true });void loadChats({quiet:true});},
     verifyCandidateKey: async (secret, candidateAccountId, candidateConversationId) => {
@@ -245,8 +246,8 @@ async function loadChats({ quiet = false } = {}) {
     if (selectedChat) {
       const prev=selectedChat;
       selectedChat = chats.find((chat) => chat.conversationId === selectedChat.conversationId) ?? selectedChat;
-      if(prev.encryptionMode!==selectedChat.encryptionMode || prev.autoProtection!==selectedChat.autoProtection)
-        void setSecureConversation(account,selectedChat,{force:!getSecureChatState().key});
+      if(prev.encryptionMode!==selectedChat.encryptionMode || prev.autoProtection!==selectedChat.autoProtection || prev.encryptionOptOut!==selectedChat.encryptionOptOut)
+        void setSecureConversation(account,selectedChat,{force:!getSecureChatState().key && !selectedChat.encryptionOptOut});
     }
     renderChats();
   } catch (error) {
@@ -485,7 +486,7 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
         }
       } else {
         body.textContent = message.text;
-        if (getSecureChatState().key && !message.localState && message.kind === "text") {
+        if (getSecureChatState().key && !getSecureChatState().disabled && !message.localState && message.kind === "text") {
           item.classList.add("message-unprotected");
           body.setAttribute("aria-label", "Без шифрования. " + message.text);
         }
@@ -576,7 +577,7 @@ async function sendCurrentMessage(event) {
     announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
     return;
   }
-  if (!secure.key && (secure.requiresKey || messages.some(isProtectedContent))) {
+  if (!secure.sendKey && !secure.disabled && (secure.requiresKey || messages.some(isProtectedContent))) {
     announce("В переписке есть защищённые сообщения. Введите ключ перед отправкой, чтобы не отправить текст открыто.");
     return;
   }
@@ -584,14 +585,15 @@ async function sendCurrentMessage(event) {
   const clientMessageId = randomId();
   let wireText = text;
   try {
-    if (secure.key) wireText = await encryptText(text, secure.key, {
+    if (secure.sendKey) wireText = await encryptText(text, secure.sendKey, {
       conversationId: expectedChat, senderUserId: account.userId, clientMessageId
     });
   } catch (error) {
     announce("Сообщение не отправлено: " + error.message);
     return;
   }
-  if (selectedChat?.conversationId !== expectedChat || account?.userId !== secure.accountId) return;
+  if (selectedChat?.conversationId !== expectedChat || account?.userId !== secure.accountId ||
+      getSecureChatState().sendKey !== secure.sendKey) return;
 
   const pending = {
     messageId: `pending_${randomId()}`,
@@ -622,18 +624,18 @@ async function transmitPending(pending) {
   }
   try {
     // Retrying a draft written before protection was enabled must never send it in the clear.
-    if (secure.key && !isEncryptedText(pending.wireText ?? pending.text)) {
-      pending.wireText = await encryptText(pending.text, secure.key, {
+    if (secure.sendKey && !isEncryptedText(pending.wireText ?? pending.text)) {
+      pending.wireText = await encryptText(pending.text, secure.sendKey, {
         conversationId: pending.conversationId,
         senderUserId: account.userId,
         clientMessageId: pending.clientMessageId
       });
     }
-    if (!secure.key && isEncryptedText(pending.wireText ?? pending.text)) {
+    if (!secure.sendKey && isEncryptedText(pending.wireText ?? pending.text)) {
       announce("Нельзя повторить отправку, пока ключ переписки недоступен.");
       return;
     }
-    if (!secure.key && (secure.requiresKey || messages.some(isProtectedContent))) {
+    if (!secure.sendKey && !secure.disabled && (secure.requiresKey || messages.some(isProtectedContent))) {
       announce("Повторная отправка без ключа заблокирована.");
       return;
     }
@@ -642,7 +644,7 @@ async function transmitPending(pending) {
     return;
   }
   if (!account || selectedChat?.conversationId !== pending.conversationId ||
-    getSecureChatState().key !== secure.key) return;
+    getSecureChatState().sendKey !== secure.sendKey) return;
   pending.localState = "pending";
   logDiagnostic('Сеть','повтор или начало отправки текста');
   renderMessages({ preserveVoicePlayback: true });

@@ -174,7 +174,7 @@ async function startRecording(trigger) {
       return;
     }
 
-    const mimeType = chooseVoiceMimeType(Boolean(security.key));
+    const mimeType = chooseVoiceMimeType(Boolean(security.sendKey));
     if (!mimeType) {
       announce("Браузер не умеет записывать совместимый формат голосовых сообщений.");
       await playVoiceCue("error");
@@ -207,7 +207,7 @@ async function startRecording(trigger) {
     }
 
     localId = randomId();
-    const protectedMimeType = security.key ? encryptedVoiceMime(mimeType, generateVoiceNonce()) : null;
+    const protectedMimeType = security.sendKey ? encryptedVoiceMime(mimeType, generateVoiceNonce()) : null;
     const draft = {
       id: localId,
       accountId: expectedAccountId,
@@ -262,7 +262,7 @@ async function startRecording(trigger) {
       transport: null,
       finishing: false,
       clock: createRecordingClock(draft.startedAt),
-      secureKey: security.key
+      secureKey: security.sendKey
     };
 
     recorder.addEventListener("dataavailable", (event) => {
@@ -511,10 +511,10 @@ function requireVoiceKey(draft) {
       security.accountId !== draft.accountId || security.conversationId !== draft.conversationId) {
     throw new Error("Нельзя отправить голосовое: не проверены аккаунт, чат или ключ.");
   }
-  if (Boolean(draft.encrypted) !== Boolean(security.key)) {
+  if (Boolean(draft.encrypted) !== Boolean(security.sendKey)) {
     throw new Error("Режим защиты поменялся. Нельзя отправлять голосовое без требуемого шифрования.");
   }
-  return security.key;
+  return security.sendKey;
 }
 
 async function voicePartPayload(draft, key, partNumber, totalPlainBytes) {
@@ -709,7 +709,7 @@ async function uploadReadyFullParts(state) {
       if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
       const security = getSecureChatState();
       if (security.blocked || security.conversationId !== state.draft.conversationId ||
-          security.accountId !== state.draft.accountId || security.key !== state.secureKey) return;
+          security.accountId !== state.draft.accountId || security.sendKey !== state.secureKey) return;
       const body = await voicePartPayload(state.draft, state.secureKey, partNumber, state.draft.totalBytes);
       if (body.size !== partSize) return;
       const ack = await state.transport.sendPart(partNumber, body);

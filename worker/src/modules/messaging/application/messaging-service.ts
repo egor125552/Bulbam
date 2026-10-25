@@ -30,6 +30,50 @@ export class MessagingService {
     return this.repository.initialize();
   }
 
+  async getFeatures() {
+    return {encryption:await this.repository.getFeatureEnabled('encryption')};
+  }
+
+  async setFeature(actor:MessagingActor,featureId:string,enabled:unknown){
+    if(actor.role!=='owner')
+      throw new ApiError(403,'owner_only','Управление функциями доступно только владельцу.');
+    if(featureId!=='encryption')
+      throw new ApiError(404,'feature_not_found','Функция не найдена.');
+    if(typeof enabled!=='boolean')
+      badRequest('invalid_feature_setting','Нужно выбрать включено или выключено.');
+    await this.repository.setFeatureEnabled(featureId,enabled,actor.userId);
+    return {feature:featureId,enabled};
+  }
+
+  async changeDirectEncryption(actor:MessagingActor,rawConversationId:string,enabled:unknown){
+    if(typeof enabled!=='boolean')
+      badRequest('invalid_feature_setting','Нужно выбрать включено или выключено.');
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)
+      badRequest('direct_only','Шифрование групп пока не поддерживается.');
+    if(!enabled){
+      // No push notification. Realtime only synchronizes the two chat views.
+      await this.repository.setDirectEncryptionOptOut(conversation.conversationId,true);
+    }else{
+      if(!await this.repository.getFeatureEnabled('encryption'))
+        throw new ApiError(409,'feature_disabled','Защита отключена владельцем Бульбама.');
+      if(conversation.protectionOrigin==='manual'){
+        // Do not accidentally replace the earlier shared manual AES key.
+        await this.repository.reactivateManualEncryption(conversation.conversationId);
+      }else{
+        // Both endpoints need stable ECDH identities for automatic mode.
+        await this.repository.setDirectEncryptionOptOut(conversation.conversationId,false);
+        if(!await this.repository.activateAutoProtection(conversation.conversationId)){
+          await this.repository.setDirectEncryptionOptOut(conversation.conversationId,true);
+          throw new ApiError(409,'keys_not_ready','Ключи собеседников ещё не готовы.');
+        }
+      }
+    }
+    await this.realtime.publishToUsers([conversation.participantAId,conversation.participantBId],
+      {type:'chat.updated',conversationId:conversation.conversationId});
+    return {encryptionMode:enabled?'protected':'plain',autoProtection:enabled && conversation.protectionOrigin!=='manual',encryptionOptOut:!enabled};
+  }
+
   async listChats(actor: MessagingActor) {
     const conversations = await this.repository.listAllConversationsForUser(actor.userId, 100);
     return Promise.all(conversations.map((conversation) => this.chatSummary(actor.userId, conversation)));
@@ -158,8 +202,12 @@ export class MessagingService {
   }
 
   async activateAutoProtection(actor:MessagingActor,rawConversationId:string){
+    if(!await this.repository.getFeatureEnabled('encryption'))
+      throw new ApiError(409,'feature_disabled','Защита отключена владельцем Бульбама.');
     const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
     if('title' in conversation)badRequest('auto_keys_direct_only','Автоматический обмен доступен только личным чатам.');
+    if(conversation.encryptionOptOut)
+      throw new ApiError(409,'chat_protection_disabled','Защита выключена в этом чате.');
     if(conversation.encryptionMode==='protected'&&!conversation.autoProtection)
       throw new ApiError(409,'legacy_manual_protection','В этом чате уже включён ручной ключ. Автоматическая смена нарушила бы историю.');
     const enabled=await this.repository.activateAutoProtection(conversation.conversationId);
@@ -171,9 +219,13 @@ export class MessagingService {
   }
 
   async enableDirectProtection(actor:MessagingActor,rawConversationId:string){
+    if(!await this.repository.getFeatureEnabled('encryption'))
+      throw new ApiError(409,'feature_disabled','Защита отключена владельцем Бульбама.');
     const conversationId=validateConversationId(rawConversationId);
     const conversation=await this.requireConversation(conversationId,actor.userId);
     if('title' in conversation)throw new ApiError(400,'group_encryption_not_supported','Защита групп пока не поддерживается.');
+    if(conversation.encryptionOptOut)
+      throw new ApiError(409,'chat_protection_disabled','Защита выключена в этом чате.');
     if(conversation.autoProtection)
       throw new ApiError(409,'already_auto_protected','Этот чат уже защищён автоматическим обменом.');
     await this.repository.protectDirectConversation(conversationId);
@@ -401,6 +453,8 @@ export class MessagingService {
       kind:'direct',
       encryptionMode:conversation.encryptionMode,
       autoProtection:conversation.autoProtection,
+      encryptionOptOut:conversation.encryptionOptOut,
+      protectionOrigin:conversation.protectionOrigin,
       conversationId: conversation.conversationId,
       peer,
       createdAt: conversation.createdAt,

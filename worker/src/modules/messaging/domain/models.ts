@@ -1,6 +1,8 @@
 export interface DirectConversation {
   encryptionMode: "plain" | "protected";
   autoProtection: boolean;
+  encryptionOptOut: boolean;
+  protectionOrigin:'none'|'manual'|'auto';
   conversationId: string;
   participantAId: string;
   participantBId: string;
@@ -70,4 +72,5 @@ export interface VoiceListenUpdate {
 
 export interface MessagingActor {
   userId: string;
+  role?: string;
 }

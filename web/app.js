@@ -11,6 +11,7 @@ import { setupFinishedCallPanelCleanup } from "./js/call-finished-panel.js";
 import { setupCalls } from "./js/calls.js";
 import { checkServer, setupHealth } from "./js/health.js";
 import { setupInvites } from "./js/invites.js";
+import { setupOwnerFeatures } from './js/owner-features.js';
 import { setupMessageAnnouncements } from "./js/message-announcements.js";
 import { setupMessageScroll } from "./js/message-scroll.js";
 import { setupMessenger } from "./js/messenger.js";
@@ -29,6 +30,7 @@ export function startApp() {
   setupDetailedDiagnostics();
   setupDetailedHelp();
   setupSettingsScreens();
+  setupOwnerFeatures();
   setupHealth();
   setupAuth();
   setupAdminRecovery();

@@ -7,7 +7,7 @@ const load = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 describe("secure messages never silently downgrade", () => {
   test("outgoing protected text is sent as ciphertext and authenticated with conversation context", async () => {
     const client = await load("web/js/messenger.js");
-    expect(client).toContain("await encryptText(text, secure.key");
+    expect(client).toContain("await encryptText(text, secure.sendKey");
     expect(client).toContain("text: pending.wireText ?? pending.text");
     expect(client).toContain("await encryptText(pending.text");
     expect(client).toContain("isEncryptedText(message.text)");

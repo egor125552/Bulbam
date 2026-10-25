@@ -43,3 +43,16 @@ test('a new user can still use ordinary chats before explicitly enrolling a devi
    encryptionMode:'plain',autoProtection:false,peer:{userId:'other-fresh-peer'}});
  expect(getSecureChatState()).toMatchObject({key:null,requiresKey:false,protected:false,automatic:false,blocked:false});
 });
+
+test('disabling chat encryption keeps local old-history key but switches future sends to plaintext',async()=>{
+ const account={userId:'disabled-mode-account'};
+ const chat={kind:'direct',conversationId:'disabled-mode-chat',encryptionMode:'protected',autoProtection:false,encryptionOptOut:false,peer:{userId:'another'}};
+ const secret=generateConversationSecret();await saveConversationKey(account.userId,chat.conversationId,secret);
+ await setSecureConversation(account,chat);
+ const old=getSecureChatState();expect(old.sendKey).toBeTruthy();
+ await setSecureConversation(account,{...chat,encryptionMode:'plain',encryptionOptOut:true});
+ const plain=getSecureChatState();expect(plain.key).toBe(old.key);
+ expect(plain).toMatchObject({sendKey:null,disabled:true,blocked:false,requiresKey:false});
+ await setSecureConversation(account,{...chat,encryptionMode:'protected',encryptionOptOut:false});
+ expect(getSecureChatState().sendKey).toBe(old.key);
+});
