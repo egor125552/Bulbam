@@ -1,5 +1,6 @@
 import { generateConversationSecret, loadConversationKey, saveConversationKey, forgetConversationKey } from "./secure-messages.js";
 import { api } from "./api.js";
+import {isEncryptionFeatureEnabled} from './owner-features.js';
 import { deriveAutoChatKey, registerIdentity, existingIdentity } from './auto-keys.js';
 
 let selectedAccountId = null;
@@ -9,6 +10,8 @@ let keyIsLoading = false;
 let loadFailed = false;
 let protectedHistorySeen = false;
 let serverProtected = false;
+let chatDisabled = false;
+let currentProtectionOrigin = 'none';
 let automaticMode = false;
 let waitingPeer = false;
 let autoError = '';
@@ -29,14 +32,16 @@ function setStatus(value) {
 
 function updatePresentation() {
   const hasChat = Boolean(selectedAccountId && selectedConversationId && !groupConversation);
-  const active = Boolean(serverProtected && encryptionKey && !keyIsLoading && !loadFailed);
-  const autoPending=Boolean(currentPeerId && (autoOptedIn || automaticMode) && !encryptionKey && !serverProtected);
+  const featureEnabled=isEncryptionFeatureEnabled();
+  const active = Boolean(serverProtected && encryptionKey && !keyIsLoading && !loadFailed && !chatDisabled);
+  const autoPending=Boolean(!chatDisabled && currentPeerId && (autoOptedIn || automaticMode) && !encryptionKey && !serverProtected);
   const open = element("secure-chat-open");
   const label = element("secure-chat-label");
-  if (open) open.hidden = !hasChat;
+  if (open) open.hidden = !hasChat || !featureEnabled;
   if (label) {
-    label.hidden = !hasChat;
-    label.textContent = active && automaticMode ? "Автоматическая защита сообщений и голосовых включена" :
+    label.hidden = !hasChat || !featureEnabled || chatDisabled;
+    label.textContent = chatDisabled ? "Обычные сообщения. Без сквозного шифрования" :
+      active && automaticMode ? "Автоматическая защита сообщений и голосовых включена" :
       active ? "Новые текстовые и голосовые сообщения защищены (эксперимент)" :
       autoPending ? "Ожидаю автоматический обмен ключами. Отправка заблокирована" :
       keyIsLoading || loadFailed || Boolean(encryptionKey && !serverProtected) ? "Защита не готова. Отправка остановлена" :
@@ -45,10 +50,14 @@ function updatePresentation() {
   }
   const manualHint=element('secure-chat-manual-hint');
   if(manualHint)manualHint.hidden=automaticMode || autoPending || (!serverProtected && autoOptedIn);
+  const disable = element('secure-chat-toggle-off');
+  if(disable)disable.hidden=!hasChat || !serverProtected || !featureEnabled;
+  const enable = element('secure-chat-toggle-on');
+  if(enable)enable.hidden=!hasChat || !chatDisabled || !featureEnabled;
   const onboarding = element("secure-chat-onboarding");
   if (onboarding) onboarding.hidden = !hasChat || automaticMode || autoPending || Boolean(encryptionKey) || keyIsLoading || loadFailed;
   const generate = element("secure-chat-generate");
-  if (generate) generate.hidden = serverProtected || protectedHistorySeen || autoPending;
+  if (generate) generate.hidden = serverProtected || protectedHistorySeen || autoPending || chatDisabled;
   const forget = element('secure-chat-forget');
   if(forget) forget.hidden=!hasChat || !encryptionKey || automaticMode;
   const activate = element("secure-chat-activate");
@@ -60,11 +69,12 @@ function updatePresentation() {
   const recording = document.querySelector("#voice-record-button");
   const draftSend = element("voice-draft-send");
   if (recording) {
-    recording.disabled = keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey);
+    recording.disabled = !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
     recording.title = active ? "Запись защищённого голосового сообщения" : "";
   }
-  if (draftSend) draftSend.disabled = keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey);
+  if (draftSend) draftSend.disabled = !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
   if (!hasChat) setStatus("Откройте переписку.");
+  else if (chatDisabled) setStatus('Обычные сообщения. Без сквозного шифрования');
   else if (keyIsLoading) setStatus("Проверяю и автоматически согласовываю ключи с собеседником.");
   else if (loadFailed) setStatus(autoError || "Не удалось проверить ключи. Открытая отправка отключена.");
   else if (waitingPeer) setStatus("Жду, когда собеседник откроет обновлённый Бульбам и зарегистрирует ключ. Открытая отправка заблокирована. Нажмите «Повторить автоматический обмен» для проверки.");
@@ -80,8 +90,10 @@ export function getSecureChatState() {
     accountId: selectedAccountId,
     conversationId: selectedConversationId,
     key: encryptionKey,
-    blocked: keyIsLoading || loadFailed || Boolean(currentPeerId && autoOptedIn && !encryptionKey && !serverProtected) || Boolean(encryptionKey && !serverProtected),
-    requiresKey: (serverProtected || protectedHistorySeen || waitingPeer) && !encryptionKey,
+    sendKey: chatDisabled ? null : encryptionKey,
+    disabled: chatDisabled,
+    blocked: !chatDisabled && (keyIsLoading || loadFailed || Boolean(currentPeerId && autoOptedIn && !encryptionKey && !serverProtected) || Boolean(encryptionKey && !serverProtected)),
+    requiresKey: !chatDisabled && (serverProtected || protectedHistorySeen || waitingPeer) && !encryptionKey,
     protected: serverProtected,
     automatic: automaticMode,
     waitingPeer
@@ -100,8 +112,11 @@ export async function setSecureConversation(account, chat, {force=false}={}) {
   if (!force && account?.userId && chat?.conversationId &&
       selectedAccountId === account.userId && selectedConversationId === chat.conversationId &&
       !groupConversation && chat.kind !== 'group') {
-    serverProtected = serverProtected || chat.encryptionMode === 'protected';
-    automaticMode = automaticMode || Boolean(chat.autoProtection);
+    serverProtected = chat.encryptionMode === 'protected';
+    automaticMode = Boolean(chat.autoProtection);
+    chatDisabled = Boolean(chat.encryptionOptOut);
+    currentProtectionOrigin=chat.protectionOrigin??'none';
+    if(chatDisabled){waitingPeer=false;loadFailed=false;}
     updatePresentation();
     return;
   }
@@ -112,6 +127,8 @@ export async function setSecureConversation(account, chat, {force=false}={}) {
   currentPeerId=!groupConversation ? chat?.peer?.userId??null : null;
   autoOptedIn=false;
   serverProtected = !groupConversation && chat?.encryptionMode === 'protected';
+  chatDisabled = !groupConversation && Boolean(chat?.encryptionOptOut);
+  currentProtectionOrigin=chat?.protectionOrigin??'none';
   automaticMode=Boolean(chat?.autoProtection && serverProtected);
   waitingPeer=false;
   autoError='';
@@ -132,12 +149,16 @@ export async function setSecureConversation(account, chat, {force=false}={}) {
     const identity=currentPeerId ? await existingIdentity(accountId) : null;
     if(serial!==requestSerial)return;
     autoOptedIn=Boolean(identity);
-    if(!found && currentPeerId &&
-       ((!serverProtected && autoOptedIn) || (serverProtected && automaticMode))){
+    // Even after protection is switched off (or hidden globally), old
+    // automatically encrypted messages still require the original ECDH key.
+    const historicAuto=currentProtectionOrigin==='auto';
+    const canStartProtection=!chatDisabled && isEncryptionFeatureEnabled() &&
+      ((!serverProtected && autoOptedIn) || (serverProtected && automaticMode));
+    if(!found && currentPeerId && identity && (canStartProtection || historicAuto)){
       const key=await deriveAutoChatKey({accountId,peerUserId:currentPeerId,conversationId});
       if(serial!==requestSerial)return;
       if(!key){waitingPeer=true;return;}
-      if(!serverProtected){
+      if(!serverProtected && !chatDisabled){
         const result=await api(`/api/v1/chats/${conversationId}/protection/auto`,{
           method:'POST',body:'{}'
         });
@@ -145,8 +166,7 @@ export async function setSecureConversation(account, chat, {force=false}={}) {
         if(!result.autoProtection)throw new Error('Сервер не подтвердил автоматическую защиту.');
       }
       encryptionKey=key;
-      serverProtected=true;
-      automaticMode=true;
+      if(!chatDisabled){serverProtected=true;automaticMode=true;}
       waitingPeer=false;
     }
   } catch(error) {
@@ -191,6 +211,27 @@ async function activateProtection(expectedAccountId,expectedConversationId,expec
 
 export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
   updateMessages = onKeyChanged ?? null;
+  window.addEventListener('bulbam:features-changed',()=>{
+    const active=isEncryptionFeatureEnabled();
+    if(!active && !serverProtected){
+      waitingPeer=false;
+      loadFailed=false;
+    }
+    const dialog=element('secure-chat-dialog');
+    if(!active && dialog?.open)dialog.close();
+    updatePresentation();
+    // The global setting arrives asynchronously after account initialization.
+    // Once enabled, resume automatic key negotiation without another tap.
+    if(active && selectedAccountId && selectedConversationId && currentPeerId &&
+       !groupConversation && !chatDisabled && !encryptionKey && !keyIsLoading){
+      void setSecureConversation({userId:selectedAccountId},{
+        kind:'direct',conversationId:selectedConversationId,
+        peer:{userId:currentPeerId},encryptionMode:serverProtected?'protected':'plain',
+        autoProtection:automaticMode,encryptionOptOut:chatDisabled,
+        protectionOrigin:currentProtectionOrigin
+      },{force:true});
+    }
+  });
   const dialog = element("secure-chat-dialog");
   element("secure-chat-open")?.addEventListener("click", () => {
     updatePresentation();
@@ -216,6 +257,40 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       updateMessages?.();
     }catch(error){setStatus('Не удалось удалить местный ключ: '+error.message);}
   });
+  async function changeMode(enabled){
+    if(!selectedAccountId||!selectedConversationId||groupConversation)return;
+    const id=selectedConversationId,serial=requestSerial;
+    const off=element('secure-chat-toggle-off'),on=element('secure-chat-toggle-on');
+    if(off)off.disabled=true;
+    if(on)on.disabled=true;
+    try{
+      if(enabled && !encryptionKey){
+        if(currentProtectionOrigin==='manual')
+          throw new Error('На этом устройстве нет прежнего ключа. Сначала импортируйте его.');
+        if(!currentPeerId || !await existingIdentity(selectedAccountId))
+          throw new Error('На устройстве нет ключа автоматической защиты. Подключение новых устройств ещё не поддерживается.');
+        const restored=await deriveAutoChatKey({accountId:selectedAccountId,peerUserId:currentPeerId,
+          conversationId:id});
+        if(!restored)throw new Error('Собеседник ещё не зарегистрировал ключ.');
+        if(serial!==requestSerial)return;
+        encryptionKey=restored;
+      }
+      const result=await api(`/api/v1/chats/${id}/protection/mode`,{
+        method:'PUT',body:JSON.stringify({enabled})
+      });
+      if(serial!==requestSerial)return;
+      chatDisabled=Boolean(result.encryptionOptOut);
+      serverProtected=result.encryptionMode==='protected';
+      automaticMode=Boolean(result.autoProtection);
+      waitingPeer=false;loadFailed=false;
+      updatePresentation();
+      updateMessages?.();
+      window.dispatchEvent(new CustomEvent('bulbam:chat-mode-changed',{detail:{conversationId:id}}));
+    }catch(error){setStatus('Не удалось сохранить настройку: '+error.message);}
+    finally{if(off)off.disabled=false;if(on)on.disabled=false;}
+  }
+  element('secure-chat-toggle-off')?.addEventListener('click',()=>void changeMode(false));
+  element('secure-chat-toggle-on')?.addEventListener('click',()=>void changeMode(true));
   element('secure-chat-activate')?.addEventListener('click',()=>void activateProtection(selectedAccountId,selectedConversationId,requestSerial));
   element('secure-chat-enroll-auto')?.addEventListener('click',async()=>{
     if(!selectedAccountId||!selectedConversationId||serverProtected||autoOptedIn)return;

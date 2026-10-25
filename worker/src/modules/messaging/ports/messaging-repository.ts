@@ -21,6 +21,10 @@ export interface MessagingRepository {
   registerIdentityKey(userId:string,publicKey:string):Promise<boolean>;
   identityKeys(userIds:string[]):Promise<Map<string,string>>;
   activateAutoProtection(conversationId:string):Promise<boolean>;
+  getFeatureEnabled(featureId:string):Promise<boolean>;
+  setFeatureEnabled(featureId:string,enabled:boolean,actorId:string):Promise<void>;
+  setDirectEncryptionOptOut(conversationId:string,enabled:boolean):Promise<void>;
+  reactivateManualEncryption(conversationId:string):Promise<void>;
   listConversationsForUser(userId: string, limit: number): Promise<DirectConversation[]>;
   listAllConversationsForUser(userId: string, limit: number): Promise<Conversation[]>;
   findAnyConversationForUser(conversationId: string, userId: string): Promise<Conversation | null>;

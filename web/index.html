@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.d57f759a45e4.js">
+  <link rel="modulepreload" href="/boot.25196abfcc97.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -367,6 +367,8 @@
         <button id="secure-chat-activate" type="button" hidden>Включить защиту чата</button>
         <button id="secure-chat-enroll-auto" type="button" hidden>Включить автоматическую защиту</button>
         <button id="secure-chat-retry-auto" type="button" hidden>Повторить автоматический обмен</button>
+        <button id="secure-chat-toggle-off" type="button" hidden>Выключить защиту в этом чате</button>
+        <button id="secure-chat-toggle-on" type="button" hidden>Включить защиту в этом чате</button>
         <button id="secure-chat-forget" type="button" hidden>Забыть ключ на этом устройстве</button>
         <p class="hint">Автоматический обмен ключами ECDH для личных переписок доступен на первом зарегистрированном устройстве каждого аккаунта. Это эксперимент: подключение остальных устройств пока не реализовано. После включения сервер отклоняет открытые новые сообщения и голосовые. Старые сообщения и звонки не защищены. Это не Signal: нет полноценного управления несколькими устройствами и прямой секретности.</p>
         <p id="secure-chat-manual-hint" class="hint">Ключ необходимо передать собеседнику через другой надёжный канал, НЕ в сообщении Бульбама. Без ключа сообщения не восстановить. Этот ключ останется только на текущем устройстве.</p>
@@ -405,6 +407,12 @@
           <a id="invite-settings-link" href="#invite-title" hidden>Приглашения</a>
         </nav>
         <div class="settings-grid">
+          <section id="feature-controls-card" class="card" hidden aria-labelledby="feature-controls-title">
+            <h3 id="feature-controls-title">Управление функциями</h3>
+            <label for="feature-encryption"><input id="feature-encryption" type="checkbox" checked> Защита переписки для всех аккаунтов</label>
+            <p id="feature-controls-status" role="status" aria-live="polite"></p>
+          </section>
+
           <section class="card" aria-labelledby="appearance-title">
             <h3 id="appearance-title">Интерфейс</h3>
             <label for="settings-language">Язык интерфейса</label>
@@ -649,7 +657,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.d57f759a45e4.js");
+      await import("/boot.25196abfcc97.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

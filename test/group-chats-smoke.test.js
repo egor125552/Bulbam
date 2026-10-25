@@ -145,3 +145,95 @@ test('immutable public identity keys and atomic automatic protection of direct c
  expect(testing.status).toBe(200);
  expect((await testing.json())).toMatchObject({registered:0,accepted:0});
 });
+
+test('only owner can hide encryption feature globally for all accounts',async()=>{
+ const [owner,member]=await Promise.all(['alpha','beta'].map(register));
+ const env=await server.getWorker('bulbam-api-test').getEnv();
+ await env.DB.prepare("UPDATE accounts SET role='owner' WHERE user_id=?").bind(owner.id).run();
+ const initial=await api('/api/v1/features',member);
+ expect(initial.status).toBe(200);
+ expect((await initial.json()).features).toEqual({encryption:true});
+ expect((await api('/api/v1/admin/features/encryption',member,'PUT',{enabled:false})).status).toBe(403);
+ expect((await api('/api/v1/admin/features/encryption',owner,'PUT',{enabled:'false'})).status).toBe(400);
+ expect((await api('/api/v1/admin/features/unknown',owner,'PUT',{enabled:false})).status).toBe(404);
+ const off=await api('/api/v1/admin/features/encryption',owner,'PUT',{enabled:false});
+ expect(off.status).toBe(200);
+ expect((await (await api('/api/v1/features',member)).json()).features.encryption).toBe(false);
+ const chat=(await (await api('/api/v1/chats/direct',owner,'POST',{userId:member.id})).json()).chat;
+ expect((await api(`/api/v1/chats/${chat.conversationId}/protection`,owner,'POST',{})).status).toBe(409);
+ expect((await api(`/api/v1/chats/${chat.conversationId}/protection/auto`,member,'POST',{})).status).toBe(409);
+ expect((await api('/api/v1/admin/features/encryption',owner,'PUT',{enabled:true})).status).toBe(200);
+ expect((await (await api('/api/v1/features',member)).json()).features.encryption).toBe(true);
+});
+
+test('both participants see direct chat protection toggled without new push and old ciphertext remains intact',async()=>{
+ const [a,b]=await Promise.all(['alpha','beta'].map(register));
+ const chat=(await (await api('/api/v1/chats/direct',a,'POST',{userId:b.id})).json()).chat;
+ const path=`/api/v1/chats/${chat.conversationId}`;
+ expect((await api(`${path}/protection/mode`,b,'PUT',{enabled:'no'})).status).toBe(400);
+ expect((await api(`${path}/protection`,a,'POST',{})).status).toBe(200);
+ const encrypted='bmsec1:1234567890123456.'+'A'.repeat(45);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'legacy_cipher_1',text:encrypted})).status).toBe(201);
+ const off=await api(`${path}/protection/mode`,b,'PUT',{enabled:false});
+ expect(off.status).toBe(200);
+ expect((await off.json()).encryptionOptOut).toBe(true);
+ expect((await (await api('/api/v1/chats',a)).json()).chats[0].encryptionOptOut).toBe(true);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'after_off_plain_1',text:'Обычное сообщение'})).status).toBe(201);
+ const voiceStart=await api(`${path}/voice/uploads`,a,'POST',{mimeType:'audio/webm;codecs=opus',bitrateBps:64000});
+ expect(voiceStart.status).toBe(201);
+ const uploadId=(await voiceStart.json()).upload.sessionId;
+ expect((await api(`${path}/voice/uploads/${uploadId}`,a,'DELETE')).status).toBe(204);
+ const messages=(await (await api(`${path}/messages`,b)).json()).messages;
+ expect(messages.map(m=>m.text)).toEqual([encrypted,'Обычное сообщение']);
+ expect((await api(`${path}/protection/auto`,a,'POST',{})).status).toBe(409);
+ expect((await api(`${path}/protection`,a,'POST',{})).status).toBe(409);
+ const on=await api(`${path}/protection/mode`,a,'PUT',{enabled:true});
+ expect(on.status).toBe(200);
+ expect((await on.json()).autoProtection).toBe(false);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'after_on_plain_1',text:'Открытый текст'})).status).toBe(409);
+ expect((await (await api(`${path}/messages`,b)).json()).messages[0].text).toBe(encrypted);
+});
+
+test('only owner controls global encryption feature for all accounts, without push notifications',async()=>{
+ const [owner,member,other]=await Promise.all(['alpha','beta','gamma'].map(register));
+ const env=await server.getWorker('bulbam-api-test').getEnv();
+ await env.DB.prepare("UPDATE accounts SET role='owner' WHERE user_id=?").bind(owner.id).run();
+ expect((await (await api('/api/v1/features',member)).json()).features.encryption).toBe(true);
+ expect((await api('/api/v1/admin/features/encryption',member,'PUT',{enabled:false})).status).toBe(403);
+ expect((await api('/api/v1/admin/features/encryption',owner,'PUT',{enabled: 'false'})).status).toBe(400);
+ expect((await api('/api/v1/admin/features/unknown',owner,'PUT',{enabled:false})).status).toBe(404);
+ const existing=(await (await api('/api/v1/chats/direct',member,'POST',{userId:other.id})).json()).chat;
+ const existingPath=`/api/v1/chats/${existing.conversationId}`;
+ expect((await api(`${existingPath}/protection`,member,'POST',{})).status).toBe(200);
+ expect((await api('/api/v1/admin/features/encryption',owner,'PUT',{enabled:false})).status).toBe(200);
+ expect((await (await api('/api/v1/features',other)).json()).features.encryption).toBe(false);
+ expect((await api(`${existingPath}/messages`,other,'POST',{clientMessageId:'hidden_plain_0001',text:'открыто'})).status).toBe(409);
+ expect((await api(`${existingPath}/messages`,other,'POST',{clientMessageId:'hidden_cipher_0002',text:'bmsec1:1234567890123456.'+'A'.repeat(40)})).status).toBe(201);
+ const chat=(await (await api('/api/v1/chats/direct',member,'POST',{userId:other.id})).json()).chat;
+ expect((await api(`/api/v1/chats/${chat.conversationId}/protection`,member,'POST',{})).status).toBe(409);
+ expect((await api(`/api/v1/chats/${chat.conversationId}/protection/auto`,other,'POST',{})).status).toBe(409);
+ expect((await api('/api/v1/admin/features/encryption',owner,'PUT',{enabled:true})).status).toBe(200);
+ expect((await (await api('/api/v1/features',member)).json()).features.encryption).toBe(true);
+});
+
+test('chat encryption off is synchronized for both members, older ciphertext remains, manual protection can be restored',async()=>{
+ const [a,b,c]=await Promise.all(['alpha','beta','gamma'].map(register));
+ const chat=(await (await api('/api/v1/chats/direct',a,'POST',{userId:b.id})).json()).chat;
+ const path=`/api/v1/chats/${chat.conversationId}`;
+ expect((await api(`${path}/protection`,a,'POST',{})).status).toBe(200);
+ const ciphertext='bmsec1:1234567890123456.'+'Q'.repeat(48);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'encrypted_before_off_0001',text:ciphertext})).status).toBe(201);
+ expect((await api(`${path}/protection/mode`,c,'PUT',{enabled:false})).status).toBe(404);
+ expect((await api(`${path}/protection/mode`,a,'PUT',{enabled:false})).status).toBe(200);
+ const view=(await (await api('/api/v1/chats',b)).json()).chats.find(x=>x.conversationId===chat.conversationId);
+ expect(view).toMatchObject({encryptionMode:'plain',encryptionOptOut:true,protectionOrigin:'manual'});
+ expect((await api(`${path}/voice/uploads`,a,'POST',{mimeType:'audio/webm;codecs=opus',bitrateBps:64000})).status).toBe(201);
+ expect((await api(`${path}/messages`,b,'POST',{clientMessageId:'plaintext_after_off_0002',text:'Обычное сообщение'})).status).toBe(201);
+ expect((await (await api(`${path}/messages`,a)).json()).messages.map(x=>x.text)).toEqual([ciphertext,'Обычное сообщение']);
+ expect((await api(`${path}/protection/auto`,b,'POST',{})).status).toBe(409);
+ expect((await api(`${path}/protection/mode`,b,'PUT',{enabled:true})).status).toBe(200);
+ expect((await (await api('/api/v1/chats',a)).json()).chats.find(x=>x.conversationId===chat.conversationId).encryptionMode).toBe('protected');
+ expect((await api(`${path}/messages`,b,'POST',{clientMessageId:'unsafe_after_on_0003',text:'не защищено'})).status).toBe(409);
+ expect((await api(`${path}/voice/uploads`,b,'POST',{mimeType:'audio/webm;codecs=opus',bitrateBps:64000})).status).toBe(409);
+ expect((await api(`${path}/messages`,b,'POST',{clientMessageId:'encrypted_after_on_0004',text:ciphertext})).status).toBe(201);
+});

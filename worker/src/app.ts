@@ -161,7 +161,7 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
     const authenticate = identity
       ? async (incoming: Request) => {
           const authenticated = await identity.authenticate(sessionToken(incoming));
-          return { userId: authenticated.account.userId, sessionId: authenticated.session.sessionId };
+          return { userId: authenticated.account.userId, sessionId: authenticated.session.sessionId, role: authenticated.account.role };
         }
       : null;
 

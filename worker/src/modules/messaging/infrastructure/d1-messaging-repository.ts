@@ -109,6 +109,39 @@ export class D1MessagingRepository implements MessagingRepository {
     return row ? mapConversation(row) : null;
   }
 
+  async getFeatureEnabled(featureId:string):Promise<boolean>{
+    await this.initialize();
+    const row=await this.db.prepare('SELECT enabled FROM feature_flags WHERE feature_id=?').bind(featureId)
+      .first<{enabled:number}>();
+    return row ? row.enabled===1 : true;
+  }
+
+  async setFeatureEnabled(featureId:string,enabled:boolean,actorId:string):Promise<void>{
+    await this.initialize();
+    await this.db.prepare(`INSERT INTO feature_flags(feature_id,enabled,updated_at,updated_by_user_id)
+      VALUES(?,?,?,?) ON CONFLICT(feature_id) DO UPDATE SET enabled=excluded.enabled,
+      updated_at=excluded.updated_at,updated_by_user_id=excluded.updated_by_user_id`)
+      .bind(featureId,enabled?1:0,Date.now(),actorId).run();
+  }
+
+  async reactivateManualEncryption(conversationId:string):Promise<void>{
+    await this.initialize();
+    await this.db.prepare(`UPDATE conversations SET encryption_mode='protected',
+      encryption_opt_out=0,auto_protection=0
+      WHERE conversation_id=? AND kind='direct' AND protection_origin='manual'`)
+      .bind(conversationId).run();
+  }
+
+  async setDirectEncryptionOptOut(conversationId:string,enabled:boolean):Promise<void>{
+    await this.initialize();
+    // Disabling encryption applies only to NEW messages. Existing ciphertext
+    // is kept in place, never rewritten or destroyed.
+    await this.db.prepare(`UPDATE conversations SET encryption_mode=CASE WHEN ?=1 THEN 'plain' ELSE encryption_mode END,
+      auto_protection=CASE WHEN ?=1 THEN 0 ELSE auto_protection END,
+      encryption_opt_out=? WHERE conversation_id=? AND kind='direct'`)
+      .bind(enabled?1:0,enabled?1:0,enabled?1:0,conversationId).run();
+  }
+
   async registerIdentityKey(userId:string,publicKey:string):Promise<boolean>{
     await this.initialize();
     await this.db.prepare('INSERT OR IGNORE INTO account_encryption_keys(user_id,public_key,created_at) VALUES(?,?,?)')
@@ -133,7 +166,7 @@ export class D1MessagingRepository implements MessagingRepository {
     await this.initialize();
     // Atomic mode transition. Never relabel a manually protected legacy chat.
     await this.db.prepare(`UPDATE conversations SET encryption_mode='protected',auto_protection=1
-      WHERE conversation_id=? AND kind='direct' AND encryption_mode='plain'
+      WHERE conversation_id=? AND kind='direct' AND encryption_mode='plain' AND encryption_opt_out=0
       AND EXISTS (SELECT 1 FROM account_encryption_keys WHERE user_id=conversations.participant_a_id)
       AND EXISTS (SELECT 1 FROM account_encryption_keys WHERE user_id=conversations.participant_b_id)`)
       .bind(conversationId).run();
@@ -144,7 +177,7 @@ export class D1MessagingRepository implements MessagingRepository {
 
   async protectDirectConversation(conversationId:string):Promise<void> {
     await this.initialize();
-    await this.db.prepare("UPDATE conversations SET encryption_mode='protected' WHERE conversation_id=? AND kind='direct'")
+    await this.db.prepare("UPDATE conversations SET encryption_mode='protected',protection_origin='manual',encryption_opt_out=0 WHERE conversation_id=? AND kind='direct'")
       .bind(conversationId).run();
   }
 
@@ -619,6 +652,8 @@ function mapConversation(row: Row): DirectConversation {
   return {
     encryptionMode:row.encryption_mode==='protected'?'protected':'plain',
     autoProtection:Number(row.auto_protection??0)===1,
+    encryptionOptOut:Number(row.encryption_opt_out??0)===1,
+    protectionOrigin:row.protection_origin==='manual'?'manual':row.protection_origin==='auto'?'auto':'none',
     conversationId: String(row.conversation_id),
     participantAId: String(row.participant_a_id),
     participantBId: String(row.participant_b_id),

@@ -115,6 +115,18 @@ const migrations = [
         user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, created_at INTEGER NOT NULL
       )`
     ]
+  },
+  {
+    version: 7,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS feature_flags (
+        feature_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+        updated_at INTEGER NOT NULL, updated_by_user_id TEXT NOT NULL
+      )`,
+      "ALTER TABLE conversations ADD COLUMN encryption_opt_out INTEGER NOT NULL DEFAULT 0 CHECK(encryption_opt_out IN (0,1))",
+      "ALTER TABLE conversations ADD COLUMN protection_origin TEXT NOT NULL DEFAULT 'none' CHECK(protection_origin IN ('none','manual','auto'))",
+      "UPDATE conversations SET protection_origin=CASE WHEN auto_protection=1 THEN 'auto' ELSE 'manual' END WHERE kind='direct' AND encryption_mode='protected' AND protection_origin='none'"
+    ]
   }
 ] as const;
 
@@ -169,7 +181,7 @@ async function initialize(db: D1Database): Promise<void> {
 // D1 migration batches are not guaranteed to be atomic. A transient Worker
 // failure after the rename must allow the next request to finish v4 safely.
 async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
-  if(version===4 || version===5 || version===6){
+  if(version===4 || version===5 || version===6 || version===7){
     if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
       const exists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'")
         .first<{name:string}>();

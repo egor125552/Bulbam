@@ -10,6 +10,28 @@ export async function handleMessagingHttp(
   service: MessagingService,
   authenticate: AuthenticateMessagingRequest
 ): Promise<Response | null> {
+  if(url.pathname==='/api/v1/features'){
+    if(request.method!=='GET')return methodNotAllowed(['GET']);
+    await authenticate(request);
+    return json({ok:true,features:await service.getFeatures()});
+  }
+
+  const featureToggle=url.pathname.match(/^\/api\/v1\/admin\/features\/([a-z-]+)$/);
+  if(featureToggle){
+    if(request.method!=='PUT')return methodNotAllowed(['PUT']);
+    const actor=await authenticate(request);
+    const body=await readJsonObject(request);
+    return json({ok:true,...await service.setFeature(actor,featureToggle[1],body.enabled)});
+  }
+
+  const directEncryptionToggle=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/protection\/mode$/i);
+  if(directEncryptionToggle){
+    if(request.method!=='PUT')return methodNotAllowed(['PUT']);
+    const actor=await authenticate(request);
+    const body=await readJsonObject(request);
+    return json({ok:true,...await service.changeDirectEncryption(actor,directEncryptionToggle[1],body.enabled)});
+  }
+
   if (url.pathname === "/api/v1/chats") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const actor = await authenticate(request);

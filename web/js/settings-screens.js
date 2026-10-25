@@ -10,7 +10,8 @@ const CATEGORIES = [
   { id: "devices", title: "Устройства", sections: ["sessions-title"] },
   { id: "invites", title: "Приглашения", sections: ["invite-title"] },
   { id: "accessibility", title: "Специальные возможности", sections: ["accessibility-title"] },
-  { id: "diagnostics", title: "Диагностика", sections: ["health-title"] }
+  { id: "diagnostics", title: "Диагностика", sections: ["health-title"] },
+  { id: "features", title: "Управление функциями", sections: ["feature-controls-title"] }
 ];
 
 const SUBPAGES = {
@@ -175,6 +176,8 @@ function updateSettingsCategories() {
   const invite = document.querySelector("#invite-card");
   const button = categoryButtons.get("invites");
   if (button) button.hidden = !invite || invite.hidden;
+  const featureButton=categoryButtons.get('features');
+  if(featureButton)featureButton.hidden = document.querySelector('#account-role')?.textContent !== 'owner';
 }
 
 function updateLanguage() {
