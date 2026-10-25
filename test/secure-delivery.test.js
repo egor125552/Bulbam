@@ -15,10 +15,10 @@ describe("secure messages never silently downgrade", () => {
   });
 
   test("protected previews and notification bodies never expose the envelope", async () => {
-    expect(chatPreview({ kind: "text", senderUserId: "other", text: "bmsec1:abc.def" }, "me")).toBe("Защищённое сообщение");
+    expect(chatPreview({ kind: "text", senderUserId: "other", text: "bmsec1:abc.def" }, "me")).toBe("Сообщение");
     const server = await load("worker/src/modules/notifications/application/push-notification-service.ts");
     expect(server).toContain('text.startsWith("bmsec1:")');
-    expect(server).toContain('return "Защищённое сообщение"');
+    expect(server).toContain('return "Новое сообщение"');
   });
 
   test("does not allow voice to be sent in the protected text mode", async () => {
