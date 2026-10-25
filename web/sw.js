@@ -144,7 +144,7 @@ async function openOrFocus(targetUrl) {
 
 // Public application shell only. Never cache authenticated /api endpoints,
 // voice messages, WebSocket traffic, or user data.
-const SHELL_CACHE = "bulbam-shell-016ad645a174";
+const SHELL_CACHE = "bulbam-shell-4b9b9c73f17b";
 const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
 
 self.addEventListener("fetch", (event) => {

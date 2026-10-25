@@ -25,9 +25,15 @@ let lastGeneratedSecret = "";
 
 const element = (id) => document.getElementById(id);
 
+// Normal protection state belongs in this dialog's single action button.
+// Only actionable failures are announced to VoiceOver.
 function setStatus(value) {
   const output = element("secure-chat-status");
-  if (output) output.textContent = value;
+  if (output) { output.hidden = true; output.textContent = value; output.removeAttribute('role'); }
+}
+function setError(value) {
+  const output = element("secure-chat-status");
+  if (output) { output.textContent = value; output.hidden = false; output.setAttribute('role', 'alert'); }
 }
 
 function updatePresentation() {
@@ -36,24 +42,18 @@ function updatePresentation() {
   const active = Boolean(serverProtected && encryptionKey && !keyIsLoading && !loadFailed && !chatDisabled);
   const autoPending=Boolean(!chatDisabled && currentPeerId && (autoOptedIn || automaticMode) && !encryptionKey && !serverProtected);
   const open = element("secure-chat-open");
-  const label = element("secure-chat-label");
+  // No visible, focusable or screen-reader-readable protection status in the chat header.
   if (open) open.hidden = !hasChat || !featureEnabled;
-  if (label) {
-    label.hidden = !hasChat || !featureEnabled || chatDisabled;
-    label.textContent = chatDisabled ? "Обычные сообщения. Без сквозного шифрования" :
-      active && automaticMode ? "Автоматическая защита сообщений и голосовых включена" :
-      active ? "Новые текстовые и голосовые сообщения защищены (эксперимент)" :
-      autoPending ? "Ожидаю автоматический обмен ключами. Отправка заблокирована" :
-      keyIsLoading || loadFailed || Boolean(encryptionKey && !serverProtected) ? "Защита не готова. Отправка остановлена" :
-        serverProtected || protectedHistorySeen ? "Защищённый чат: для отправки нужен ключ" :
-        "Обычные сообщения. Без сквозного шифрования";
-  }
   const manualHint=element('secure-chat-manual-hint');
   if(manualHint)manualHint.hidden=automaticMode || autoPending || (!serverProtected && autoOptedIn);
   const disable = element('secure-chat-toggle-off');
   if(disable)disable.hidden=!hasChat || !serverProtected || !featureEnabled;
   const enable = element('secure-chat-toggle-on');
-  if(enable)enable.hidden=!hasChat || !chatDisabled || !featureEnabled;
+  if(enable)enable.hidden=!hasChat || serverProtected || !featureEnabled;
+  // Legacy shared secrets are accessible only when recovery is necessary.
+  const legacy=element('secure-chat-legacy-tools');
+  if(legacy)legacy.hidden=!hasChat || !featureEnabled ||
+    !(currentProtectionOrigin==='manual' && (!encryptionKey || activationFailed));
   const onboarding = element("secure-chat-onboarding");
   if (onboarding) onboarding.hidden = !hasChat || automaticMode || autoPending || Boolean(encryptionKey) || keyIsLoading || loadFailed;
   const generate = element("secure-chat-generate");
@@ -70,7 +70,8 @@ function updatePresentation() {
   const draftSend = element("voice-draft-send");
   if (recording) {
     recording.disabled = !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
-    recording.title = active ? "Запись защищённого голосового сообщения" : "";
+    // Do not repeat the encryption state in tooltip or VoiceOver announcements.
+    recording.removeAttribute('title');
   }
   if (draftSend) draftSend.disabled = !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
   if (!hasChat) setStatus("Откройте переписку.");
@@ -255,7 +256,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       updatePresentation();
       setStatus('Локальный ключ удалён. Чтобы снова читать переписку, импортируйте прежний ключ.');
       updateMessages?.();
-    }catch(error){setStatus('Не удалось удалить местный ключ: '+error.message);}
+    }catch(error){setError('Не удалось удалить местный ключ: '+error.message);}
   });
   async function changeMode(enabled){
     if(!selectedAccountId||!selectedConversationId||groupConversation)return;
@@ -263,19 +264,28 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
     const off=element('secure-chat-toggle-off'),on=element('secure-chat-toggle-on');
     if(off)off.disabled=true;
     if(on)on.disabled=true;
+    setStatus('');
     try{
       if(enabled && !encryptionKey){
         if(currentProtectionOrigin==='manual')
-          throw new Error('На этом устройстве нет прежнего ключа. Сначала импортируйте его.');
-        if(!currentPeerId || !await existingIdentity(selectedAccountId))
-          throw new Error('На устройстве нет ключа автоматической защиты. Подключение новых устройств ещё не поддерживается.');
+          throw new Error('Для старой защищённой переписки нужен прежний ключ. Откройте восстановление ключа.');
+        if(!currentPeerId)
+          throw new Error('Не удалось определить собеседника для обмена ключами.');
+        // No manual copying or pasting: register the local public identity and
+        // independently derive the shared key once the peer has done the same.
+        // Existing immutable account identities are never silently replaced.
+        await registerIdentity(selectedAccountId);
+        if(serial!==requestSerial)return;
+        autoOptedIn=true;
         const restored=await deriveAutoChatKey({accountId:selectedAccountId,peerUserId:currentPeerId,
           conversationId:id});
-        if(!restored)throw new Error('Собеседник ещё не зарегистрировал ключ.');
+        if(!restored)throw new Error('Ожидаю обновлённое устройство собеседника. Защита ещё не включена.');
         if(serial!==requestSerial)return;
         encryptionKey=restored;
       }
-      const result=await api(`/api/v1/chats/${id}/protection/mode`,{
+      const result=currentProtectionOrigin==='none' && encryptionKey && !autoOptedIn && enabled
+        ? await api(`/api/v1/chats/${id}/protection`,{method:'POST',body:'{}'})
+        : await api(`/api/v1/chats/${id}/protection/mode`,{
         method:'PUT',body:JSON.stringify({enabled})
       });
       if(serial!==requestSerial)return;
@@ -286,7 +296,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       updatePresentation();
       updateMessages?.();
       window.dispatchEvent(new CustomEvent('bulbam:chat-mode-changed',{detail:{conversationId:id}}));
-    }catch(error){setStatus('Не удалось сохранить настройку: '+error.message);}
+    }catch(error){setError('Не удалось сохранить настройку: '+error.message);}
     finally{if(off)off.disabled=false;if(on)on.disabled=false;}
   }
   element('secure-chat-toggle-off')?.addEventListener('click',()=>void changeMode(false));
@@ -306,7 +316,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       autoOptedIn=true;
       await setSecureConversation({userId:selectedAccountId},{kind:'direct',conversationId:selectedConversationId,
         peer:{userId:currentPeerId},encryptionMode:'plain'},{force:true});
-    }catch(error){setStatus('Не удалось включить обмен: '+error.message);}
+    }catch(error){setError('Не удалось включить обмен: '+error.message);}
   });
   element('secure-chat-retry-auto')?.addEventListener('click',()=>{
     const account={userId:selectedAccountId};
@@ -349,7 +359,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       output.focus();
       await activateProtection(accountId,conversationId,serial);
     } catch (error) {
-      setStatus("Не удалось создать ключ: " + error.message);
+      setError("Не удалось создать ключ: " + error.message);
     } finally {
       button.disabled = false;
     }
@@ -378,7 +388,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       updateMessages?.();
       await activateProtection(accountId,conversationId,serial);
     } catch (error) {
-      setStatus("Ключ не принят: " + error.message);
+      setError("Ключ не принят: " + error.message);
     } finally {
       button.disabled = false;
     }
@@ -389,7 +399,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
       await navigator.clipboard.writeText(lastGeneratedSecret);
       setStatus("Ключ скопирован. Отправьте его через другой надёжный канал, не через Бульбам.");
     } catch {
-      setStatus("Копирование не удалось. Выделите ключ в поле и скопируйте вручную.");
+      setError("Копирование не удалось. Выделите ключ в поле и скопируйте вручную.");
       element("secure-chat-key-output")?.focus();
       element("secure-chat-key-output")?.select();
     }
