@@ -1,4 +1,5 @@
-import type {DeviceBundle, RegisteredDevice} from '../domain/device-key-validation';
+import type {DevicePublicKey,DeviceBundle, RegisteredDevice} from '../domain/device-key-validation';
+import type {SealedDeviceEnvelope,StoredDeviceEnvelope} from '../domain/device-envelope';
 import type {
   DeliveryReceiptUpdate,
   DirectConversation,
@@ -24,6 +25,9 @@ export interface MessagingRepository {
   listDevices(userId:string,includeInactive:boolean):Promise<RegisteredDevice[]>;
   approveDevice(userId:string,deviceId:string):Promise<boolean>;
   revokeDevice(userId:string,deviceId:string):Promise<boolean>;
+  insertDeviceEnvelope(conversationId:string,senderUserId:string,envelope:SealedDeviceEnvelope,senderSigning:DevicePublicKey):Promise<{envelope:StoredDeviceEnvelope;created:boolean}>;
+  listDeviceEnvelopes(conversationId:string,userId:string,deviceId:string):Promise<StoredDeviceEnvelope[]>;
+  acknowledgeDeviceEnvelope(envelopeId:string,conversationId:string,userId:string,deviceId:string):Promise<boolean>;
   identityKeys(userIds:string[]):Promise<Map<string,string>>;
   activateAutoProtection(conversationId:string):Promise<boolean>;
   getFeatureEnabled(featureId:string):Promise<boolean>;

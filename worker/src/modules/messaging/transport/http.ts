@@ -70,6 +70,21 @@ export async function handleMessagingHttp(
     return json({ok:true,...result});
   }
 
+  const envelopesMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/e2ee\/envelopes$/i);
+  if(envelopesMatch){
+    const actor=await authenticate(request);
+    if(request.method==='POST')return json({ok:true,...await service.sendE2eeEnvelope(actor,envelopesMatch[1],await readJsonObject(request))},{status:201});
+    if(request.method==='GET')return json({ok:true,...await service.fetchE2eeEnvelopes(actor,envelopesMatch[1],url.searchParams.get('deviceId')??'')});
+    return methodNotAllowed(['POST','GET']);
+  }
+  const envelopeAck=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/e2ee\/envelopes\/([0-9a-f-]{36})\/ack$/i);
+  if(envelopeAck){
+    if(request.method!=='POST')return methodNotAllowed(['POST']);
+    const actor=await authenticate(request);
+    const body=await readJsonObject(request);
+    return json({ok:true,...await service.ackE2eeEnvelope(actor,envelopeAck[1],envelopeAck[2],String(body.deviceId??''),String(body.signature??''))});
+  }
+
   if(url.pathname==='/api/v1/e2ee/devices'){
     const actor=await authenticate(request);
     if(request.method==='GET')return json({ok:true,...await service.listOwnE2eeDevices(actor)});

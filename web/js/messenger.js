@@ -2,6 +2,8 @@ import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
+import { receiveDeviceText } from './e2ee-device-envelopes.js';
+import { readEncryptedHistory } from './e2ee-history.js';
 import { decryptVoiceFile } from "./secure-voice.js";
 import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
@@ -334,14 +336,36 @@ async function selectChat(chat, { focusHeading = false } = {}) {
 async function loadMessages({ quiet = false } = {}) {
   if (!account || !selectedChat) return;
   const conversationId = selectedChat.conversationId;
+  const accountId=account.userId;
+  const expectedGeneration=generation;
   try {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
-    if (!selectedChat || selectedChat.conversationId !== conversationId) return;
+    if (!selectedChat || selectedChat.conversationId !== conversationId ||
+        account?.userId!==accountId || generation!==expectedGeneration) return;
     const serverMessages = result.messages ?? [];
     logTraceEvent('Сервер','история чата загружена','',{messages:serverMessages.length});
     requireProtectedConversationKey(account.userId, conversationId, serverMessages.some(isProtectedContent));
     const pending = messages.filter((message) => message.localState);
     messages = serverMessages;
+    // Device-specific encrypted inbox is independent of the legacy message
+    // history. Never send fallback plaintext if the E2EE inbox is unavailable.
+    if(selectedChat?.kind==='direct'){
+      let deviceMessages=[];
+      try{deviceMessages=await receiveDeviceText({accountId,conversationId});}
+      catch{try{deviceMessages=await readEncryptedHistory(accountId,conversationId);}catch{}}
+      if(selectedChat?.conversationId!==conversationId || account?.userId!==accountId ||
+        generation!==expectedGeneration)return;
+      const oldIds=new Set(messages.map(m=>m.messageId));
+      for(const item of deviceMessages){
+        if(item.kind==='voice' && item.e2eeV2){
+          // The legacy upload record has no media key; the independently
+          // encrypted device envelope supplies the playback key and metadata.
+          messages=messages.filter(m=>m.messageId!==item.messageId &&
+            !(m.kind==='voice'&&m.clientMessageId===item.clientMessageId));
+          messages.push(item);
+        }else if(!oldIds.has(item.messageId))messages.push(item);
+      }
+    }
     for (const local of pending) {
       if (!messages.some((message) => message.clientMessageId === local.clientMessageId)) {
         messages.push(local);
@@ -733,11 +757,14 @@ function connectRealtime() {
     } catch {
       return;
     }
-    const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed'];
+    const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed','e2ee.envelope.created'];
     logDiagnostic('Сеть','получено событие сокета',known.includes(payload?.type)?payload.type:'другое');
     if (payload?.type === "message.created" && payload.message) {
       logDiagnostic("Сервер", "событие новое сообщение");
       handleRealtimeMessage(payload);
+    } else if(payload?.type==='e2ee.envelope.created'){
+      if(selectedChat?.conversationId===payload.conversationId)void loadMessages({quiet:true});
+      else void loadChats({quiet:true});
     } else if(payload?.type==='chat.removed'){
       if(selectedChat?.conversationId===payload.conversationId){selectedChat=null;messages=[];renderConversation();}
       void loadChats({quiet:true});

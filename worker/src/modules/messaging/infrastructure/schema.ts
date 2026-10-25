@@ -146,6 +146,35 @@ const migrations = [
       )`,
       "CREATE INDEX IF NOT EXISTS idx_e2ee_devices_user_trust ON e2ee_devices(user_id,trust)"
     ]
+  },
+  {
+    version: 9,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS e2ee_device_envelopes (
+        envelope_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        sender_user_id TEXT NOT NULL,
+        sender_device_id TEXT NOT NULL,
+        recipient_user_id TEXT NOT NULL,
+        recipient_device_id TEXT NOT NULL,
+        client_message_id TEXT NOT NULL,
+        ephemeral_public_key TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        acknowledged_at INTEGER,
+        UNIQUE(conversation_id,sender_user_id,sender_device_id,recipient_device_id,client_message_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_e2ee_device_envelope_inbox ON e2ee_device_envelopes
+        (recipient_user_id,recipient_device_id,acknowledged_at,created_at)`
+    ]
+  },
+  {
+    version: 10,
+    statements: [
+      "ALTER TABLE e2ee_device_envelopes ADD COLUMN sender_signing_key TEXT"
+    ]
   }
 ] as const;
 
@@ -200,15 +229,15 @@ async function initialize(db: D1Database): Promise<void> {
 // D1 migration batches are not guaranteed to be atomic. A transient Worker
 // failure after the rename must allow the next request to finish v4 safely.
 async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
-  if(version===4 || version===5 || version===6 || version===7 || version===8){
+  if(version===4 || version===5 || version===6 || version===7 || version===8 || version===10){
     if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
       const exists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'")
         .first<{name:string}>();
       if(exists)return;
     }
-    const column=sql.match(/^ALTER TABLE conversations ADD COLUMN ([a-z_]+)/);
+    const column=sql.match(/^ALTER TABLE (conversations|e2ee_device_envelopes) ADD COLUMN ([a-z_]+)/);
     if(column){
-      const info=await db.prepare('PRAGMA table_info(conversations)').all<{name:string}>();
+      const info=await db.prepare(`PRAGMA table_info(${column[1]})`).all<{name:string}>();
       if((info.results??[]).some(item=>item.name===column[1]))return;
     }
   }

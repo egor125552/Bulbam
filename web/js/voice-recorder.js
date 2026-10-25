@@ -24,6 +24,8 @@ import { getVoiceBitrate } from "./voice-settings.js";
 import { VoiceUploadSocket } from "./voice-upload-socket.js";
 import { createRecordingClock } from "./voice-recording-clock.js";
 import { getSecureChatState } from "./secure-chat-ui.js";
+import {isEncryptionFeatureEnabled,refreshFeatures} from './owner-features.js';
+import {prepareDeviceVoice,importDeviceVoiceKey,publishDeviceVoice} from './e2ee-device-voice.js';
 import {
   encryptedVoiceMime, generateVoiceNonce, encryptVoicePart,
   VOICE_PLAIN_CHUNK_BYTES, MAX_PROTECTED_VOICE_BYTES
@@ -54,6 +56,13 @@ let recoverableDraft = null;
 let optionTimer = null;
 let optionBlocked = false;
 let optionHeld = false;
+const v2VoiceKeys=new Map();
+async function loadedV2Key(draft){
+  if(!draft.e2eeVoiceKey)return null;
+  let key=v2VoiceKeys.get(draft.id);
+  if(!key){key=await importDeviceVoiceKey(draft.e2eeVoiceKey);v2VoiceKeys.set(draft.id,key);}
+  return key;
+}
 
 export function setupVoiceRecorder() {
   recordButton = document.querySelector("#voice-record-button");
@@ -147,8 +156,7 @@ async function startRecording(trigger) {
   const chat = getSelectedChat();
   if (!account || !chat || current || starting) return;
   const security = getSecureChatState();
-  if (security.blocked || security.requiresKey ||
-      security.conversationId !== chat.conversationId || security.accountId !== account.userId) {
+  if(security.conversationId !== chat.conversationId || security.accountId !== account.userId){
     announce("Запись не начата: не удалось проверить защиту переписки.");
     return;
   }
@@ -163,6 +171,14 @@ async function startRecording(trigger) {
   let localId = null;
 
   try {
+    // Never treat a not-yet-loaded feature flag as permission to send raw audio.
+    // If the server cannot confirm the setting, recording is postponed.
+    if(chat.kind==='direct' && !security.sendKey && !security.disabled)
+      await refreshFeatures();
+    const e2eeV2=chat.kind==='direct' && !security.sendKey && !security.disabled &&
+      isEncryptionFeatureEnabled();
+    if(!e2eeV2 && (security.blocked || security.requiresKey))
+      throw new Error('Не удалось проверить ключ переписки.');
     if (isCallActive()) {
       announce("Во время активного звонка запись голосового недоступна.");
       await playVoiceCue("error");
@@ -174,7 +190,11 @@ async function startRecording(trigger) {
       return;
     }
 
-    const mimeType = chooseVoiceMimeType(Boolean(security.sendKey));
+    const deviceVoice=e2eeV2
+      ? await prepareDeviceVoice({accountId:account.userId,conversationId:chat.conversationId,
+          recipientUserId:chat.peer.userId})
+      : null;
+    const mimeType = chooseVoiceMimeType(Boolean(security.sendKey || deviceVoice));
     if (!mimeType) {
       announce("Браузер не умеет записывать совместимый формат голосовых сообщений.");
       await playVoiceCue("error");
@@ -207,7 +227,8 @@ async function startRecording(trigger) {
     }
 
     localId = randomId();
-    const protectedMimeType = security.sendKey ? encryptedVoiceMime(mimeType, generateVoiceNonce()) : null;
+    const protectedMimeType = (security.sendKey || deviceVoice)
+      ? encryptedVoiceMime(mimeType, generateVoiceNonce()) : null;
     const draft = {
       id: localId,
       accountId: expectedAccountId,
@@ -216,6 +237,8 @@ async function startRecording(trigger) {
       mimeType: protectedMimeType ?? mimeType,
       recordingMimeType: mimeType,
       encrypted: Boolean(protectedMimeType),
+      e2eeVoiceKey:deviceVoice?.rawKey??null,
+      e2eePeerUserId:deviceVoice?chat.peer.userId:null,
       bitrateBps,
       startedAt: Date.now(),
       lastChunkAt: Date.now(),
@@ -228,6 +251,7 @@ async function startRecording(trigger) {
 
     try {
       await createVoiceDraft(draft);
+      if(deviceVoice)v2VoiceKeys.set(draft.id,deviceVoice.key);
       logDiagnostic("Голосовые", "черновик сохранён локально");
     } catch (error) {
       stream.getTracks().forEach((track) => track.stop());
@@ -262,7 +286,7 @@ async function startRecording(trigger) {
       transport: null,
       finishing: false,
       clock: createRecordingClock(draft.startedAt),
-      secureKey: security.sendKey
+      secureKey: deviceVoice?.key??security.sendKey
     };
 
     recorder.addEventListener("dataavailable", (event) => {
@@ -315,6 +339,9 @@ async function startRecording(trigger) {
           ? "Запись голосового началась. Отпусти Option, чтобы отправить. Escape отменяет запись."
           : "Запись голосового началась. Ещё раз нажмите «Отправить голосовое» для отправки, либо «Пауза записи».")
       : "Идёт запись.");
+  } catch(error){
+    announce('Запись голосового не началась: '+error.message);
+    await playVoiceCue('error').catch(()=>undefined);
   } finally {
     if (stream) stream.getTracks().forEach((track) => track.stop());
     if (localId) await deleteVoiceDraft(localId).catch(() => undefined);
@@ -507,9 +534,15 @@ function voiceDataChunkSize(draft) {
 
 function requireVoiceKey(draft) {
   const security = getSecureChatState();
-  if (security.blocked || security.requiresKey ||
+  if ((!draft.e2eeVoiceKey && (security.blocked || security.requiresKey)) ||
       security.accountId !== draft.accountId || security.conversationId !== draft.conversationId) {
     throw new Error("Нельзя отправить голосовое: не проверены аккаунт, чат или ключ.");
+  }
+  if(draft.e2eeVoiceKey){
+    if(security.disabled)throw new Error('Защита была выключена во время записи.');
+    const key=v2VoiceKeys.get(draft.id);
+    if(!key)throw new Error('Ключ голосового сообщения пока не восстановлен.');
+    return key;
   }
   if (Boolean(draft.encrypted) !== Boolean(security.sendKey)) {
     throw new Error("Режим защиты поменялся. Нельзя отправлять голосовое без требуемого шифрования.");
@@ -537,6 +570,7 @@ async function sendDraftById(id, existingTransport = null) {
   let transport = existingTransport;
   try {
     showVoiceDelivery("Отправляю голосовое сообщение…");
+    await loadedV2Key(draft);
     const key = requireVoiceKey(draft);
     const totalPlainBytes = Number(draft.totalBytes ?? 0);
     if (!totalPlainBytes) throw new Error("запись пустая");
@@ -596,14 +630,21 @@ async function sendDraftById(id, existingTransport = null) {
         })
       }
     );
+    if(draft.e2eeVoiceKey){
+      // Never announce delivery before every trusted device receives the
+      // per-recording AES key inside its authenticated encrypted envelope.
+      await publishDeviceVoice({accountId:draft.accountId,conversationId:draft.conversationId,
+        recipientUserId:draft.e2eePeerUserId,voiceMessage:result.message,rawKey:draft.e2eeVoiceKey});
+    }
     logDiagnostic('Голосовые','передача завершена');
     await deleteVoiceDraft(id);
+    v2VoiceKeys.delete(id);
     recoverableDraft = null;
     hideDraftPanel();
     acceptExternalMessage(result.message);
     await refreshChatsAfterExternalMessage();
-    showVoiceDelivery(draft.encrypted ? "Защищённое голосовое отправлено." : "Голосовое сообщение отправлено.", "success", true);
-    announce(draft.encrypted ? "Защищённое голосовое отправлено." : "Голосовое сообщение отправлено.");
+    showVoiceDelivery("Голосовое сообщение отправлено.", "success", true);
+    announce("Голосовое сообщение отправлено.");
   } catch (error) {
     logDiagnostic('Ошибки','голосовое не отправлено',diagnosticErrorName(error));
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
@@ -708,8 +749,10 @@ async function uploadReadyFullParts(state) {
     for (let partNumber = 1; partNumber <= fullPartCount; partNumber += 1) {
       if (upload.parts.some((part) => part.partNumber === partNumber)) continue;
       const security = getSecureChatState();
-      if (security.blocked || security.conversationId !== state.draft.conversationId ||
-          security.accountId !== state.draft.accountId || security.sendKey !== state.secureKey) return;
+      if ((!state.draft.e2eeVoiceKey && security.blocked) ||
+          security.conversationId !== state.draft.conversationId ||
+          security.accountId !== state.draft.accountId ||
+          (!state.draft.e2eeVoiceKey && security.sendKey !== state.secureKey)) return;
       const body = await voicePartPayload(state.draft, state.secureKey, partNumber, state.draft.totalBytes);
       if (body.size !== partSize) return;
       const ack = await state.transport.sendPart(partNumber, body);
