@@ -23,9 +23,14 @@ body.signed-in-mode {
 
 .signed-in-mode .site-header { display: none; }
 
+/* The chat is one viewport-high surface. Only message history scrolls,
+   so the call button and composer never disappear behind older messages. */
+body.signed-in-mode { height: 100dvh; overflow: hidden; }
+
 .signed-in-mode main {
   width: min(var(--shell-max), calc(100% - 1.2rem));
-  min-height: 100dvh;
+  min-height: 0;
+  height: 100dvh;
   padding: 0.6rem 0;
 }
 
@@ -34,8 +39,12 @@ body.signed-in-mode {
   min-height: calc(100dvh - 1.2rem);
 }
 
+.signed-in-mode .signed-in { height: 100%; min-height: 0; }
+
 .signed-in-mode .messenger-shell {
   grid-template-columns: minmax(18rem, 23.5rem) minmax(0, 1fr);
+  height: calc(100dvh - 1.2rem);
+  min-height: 0;
   border-radius: 1.25rem;
   box-shadow: 0 22px 70px color-mix(in srgb, #000 18%, transparent);
 }
@@ -191,8 +200,12 @@ body.signed-in-mode {
 /* The call screen lives outside the conversation; chat keeps three stable rows. */
 .conversation-header { grid-row: 1; }
 .conversation-empty,
-.message-list { grid-row: 2; }
+.message-list { grid-row: 2; min-height: 0; }
 .composer { grid-row: 3; }
+
+/* Keep the header/composer as fixed grid rows and scroll only the history. */
+.signed-in-mode .conversation-pane { height: 100%; min-height: 0; overflow: hidden; }
+.signed-in-mode .message-list { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 .conversation-header { padding: 0.62rem 0.85rem; }
 
@@ -497,6 +510,8 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
   }
 
   .signed-in-mode .messenger-shell {
+    height: 100dvh;
+    min-height: 0;
     border: 0;
     border-radius: 0;
     box-shadow: none;
@@ -504,7 +519,7 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
 
   .sidebar-brand { padding-top: calc(0.75rem + env(safe-area-inset-top)); }
   .chat-sidebar,
-  .conversation-pane { min-height: 100dvh; }
+  .conversation-pane { height: 100%; min-height: 0; }
   .conversation-header { padding-top: calc(0.55rem + env(safe-area-inset-top)); }
   .message-list { padding-inline: 0.6rem; }
 

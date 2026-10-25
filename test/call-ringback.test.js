@@ -6,12 +6,12 @@ afterEach(() => {
   delete globalThis.window;
 });
 
-function mockAudioContext({ suspended = false } = {}) {
+function mockAudioContext({ suspended = false, interrupted = false } = {}) {
   const oscillators = [];
   const envelopes = [];
   let resumed = 0;
   class AudioContextFake {
-    state = suspended ? "suspended" : "running";
+    state = interrupted ? "interrupted" : suspended ? "suspended" : "running";
     currentTime = 0;
     destination = {};
     async resume() {
@@ -47,6 +47,15 @@ function mockAudioContext({ suspended = false } = {}) {
 }
 
 describe("realistic outgoing telephone ringback", () => {
+  test("interrupted iOS tone context is resumed and refreshed after app return", async () => {
+    const audio = mockAudioContext({ interrupted: true });
+    const { prepareRingback, resetRingbackAudio } = await import("../web/js/call-ringback.js");
+    expect(await prepareRingback()).toBe(true);
+    expect(audio.resumed).toBe(1);
+    resetRingbackAudio();
+    expect(await prepareRingback()).toBe(true);
+    expect(audio.resumed).toBe(2);
+  });
   test("plays a sustained 425 Hz ring for one second, then four seconds of silence", async () => {
     vi.useFakeTimers();
     const audio = mockAudioContext({ suspended: true });

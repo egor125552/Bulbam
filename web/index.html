@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.2324ebf768e7.js">
+  <link rel="modulepreload" href="/boot.e9152034af9e.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -290,7 +290,7 @@
         </section>
       </div>
 
-          <section id="call-panel" class="call-banner" aria-labelledby="call-title" hidden>
+          <section id="call-panel" class="call-banner" role="dialog" aria-labelledby="call-title" hidden>
             <div class="call-copy">
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
@@ -437,7 +437,7 @@
             <h3 id="admin-recovery-queue-title" tabindex="-1">Запросы восстановления</h3>
             <p>Одобряйте заявку только после независимой проверки владельца аккаунта. Запрос без подтверждения личности может быть попыткой захвата.</p>
             <button id="admin-recovery-refresh" type="button">Обновить заявки</button>
-            <p id="admin-recovery-queue-status" role="status" aria-live="polite"></p>
+            <p id="admin-recovery-queue-status" role="status" aria-live="polite" tabindex="-1"></p>
             <ul id="admin-recovery-requests" aria-label="Ожидающие запросы восстановления"></ul>
           </section>
 
@@ -547,7 +547,7 @@
             <section aria-labelledby="diagnostics-journal-title" class="diagnostics-journal">
               <h3 id="diagnostics-journal-title">Полный журнал диагностики</h3>
               <p class="hint">Подробная хронология всего Бульбама: действия и фокус интерфейса, жизненный цикл вкладки, запросы и ответы, WebSocket, сообщения, группы, голосовые, звонки, микрофон, ресурсы, производительность и ошибки. Каждый доступный браузеру этап получает время и номер. Хранится только в памяти этой вкладки; личные сообщения, пароли, токены и звук не сохраняются. Внутренние журналы Cloudflare и операционной системы браузеру недоступны.</p>
-              <p id="diagnostics-count" class="hint" role="status" aria-live="polite">Счётчик событий</p>
+              <p id="diagnostics-count" class="hint" aria-live="off">Счётчик событий</p>
               <label for="diagnostics-log">События в порядке времени</label>
               <textarea id="diagnostics-log" readonly rows="13" spellcheck="false" aria-live="off" aria-label="Полный журнал событий Бульбама"></textarea>
               <div class="call-log-actions" data-diagnostics-private="true">
@@ -617,7 +617,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.2324ebf768e7.js");
+      await import("/boot.e9152034af9e.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
