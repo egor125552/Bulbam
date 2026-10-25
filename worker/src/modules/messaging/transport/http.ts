@@ -70,6 +70,29 @@ export async function handleMessagingHttp(
     return json({ok:true,...result});
   }
 
+  if(url.pathname==='/api/v1/e2ee/devices'){
+    const actor=await authenticate(request);
+    if(request.method==='GET')return json({ok:true,...await service.listOwnE2eeDevices(actor)});
+    if(request.method==='POST')return json({ok:true,...await service.registerE2eeDevice(actor,await readJsonObject(request))},{status:201});
+    return methodNotAllowed(['GET','POST']);
+  }
+  if(url.pathname==='/api/v1/e2ee/devices/approve'){
+    if(request.method!=='POST')return methodNotAllowed(['POST']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.approveE2eeDevice(actor,await readJsonObject(request))});
+  }
+  if(url.pathname==='/api/v1/e2ee/devices/revoke'){
+    if(request.method!=='POST')return methodNotAllowed(['POST']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.revokeE2eeDevice(actor,await readJsonObject(request))});
+  }
+  const peerDevices=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/e2ee\/devices$/i);
+  if(peerDevices){
+    if(request.method!=='GET')return methodNotAllowed(['GET']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.listE2eePeerDevices(actor,peerDevices[1])});
+  }
+
   if(url.pathname==='/api/v1/keys/identity'){
     if(request.method!=='PUT')return methodNotAllowed(['PUT']);
     const actor=await authenticate(request);

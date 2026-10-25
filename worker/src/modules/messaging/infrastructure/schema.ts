@@ -127,6 +127,25 @@ const migrations = [
       "ALTER TABLE conversations ADD COLUMN protection_origin TEXT NOT NULL DEFAULT 'none' CHECK(protection_origin IN ('none','manual','auto'))",
       "UPDATE conversations SET protection_origin=CASE WHEN auto_protection=1 THEN 'auto' ELSE 'manual' END WHERE kind='direct' AND encryption_mode='protected' AND protection_origin='none'"
     ]
+  },
+  {
+    version: 8,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS e2ee_devices (
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        identity_signing TEXT NOT NULL,
+        identity_agreement TEXT NOT NULL,
+        signed_prekey TEXT NOT NULL,
+        prekey_signature TEXT NOT NULL,
+        registration_signature TEXT NOT NULL,
+        trust TEXT NOT NULL CHECK(trust IN ('active','pending','revoked')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(user_id,device_id)
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_e2ee_devices_user_trust ON e2ee_devices(user_id,trust)"
+    ]
   }
 ] as const;
 
@@ -181,7 +200,7 @@ async function initialize(db: D1Database): Promise<void> {
 // D1 migration batches are not guaranteed to be atomic. A transient Worker
 // failure after the rename must allow the next request to finish v4 safely.
 async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
-  if(version===4 || version===5 || version===6 || version===7){
+  if(version===4 || version===5 || version===6 || version===7 || version===8){
     if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
       const exists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'")
         .first<{name:string}>();

@@ -1,3 +1,4 @@
+import type {DeviceBundle, RegisteredDevice} from '../domain/device-key-validation';
 import type {
   DeliveryReceiptUpdate,
   DirectConversation,
@@ -19,6 +20,10 @@ export interface MessagingRepository {
   findConversationForUser(conversationId: string, userId: string): Promise<DirectConversation | null>;
   protectDirectConversation(conversationId:string):Promise<void>;
   registerIdentityKey(userId:string,publicKey:string):Promise<boolean>;
+  registerDevice(userId:string,bundle:DeviceBundle):Promise<RegisteredDevice|null>;
+  listDevices(userId:string,includeInactive:boolean):Promise<RegisteredDevice[]>;
+  approveDevice(userId:string,deviceId:string):Promise<boolean>;
+  revokeDevice(userId:string,deviceId:string):Promise<boolean>;
   identityKeys(userIds:string[]):Promise<Map<string,string>>;
   activateAutoProtection(conversationId:string):Promise<boolean>;
   getFeatureEnabled(featureId:string):Promise<boolean>;

@@ -1,4 +1,5 @@
 import type { D1Database } from "../../../platform/cloudflare";
+import type {DeviceBundle,RegisteredDevice} from '../domain/device-key-validation';
 import type {
   DeliveryReceiptUpdate,
   DirectConversation,
@@ -140,6 +141,62 @@ export class D1MessagingRepository implements MessagingRepository {
       auto_protection=CASE WHEN ?=1 THEN 0 ELSE auto_protection END,
       encryption_opt_out=? WHERE conversation_id=? AND kind='direct'`)
       .bind(enabled?1:0,enabled?1:0,enabled?1:0,conversationId).run();
+  }
+
+  async registerDevice(userId:string,bundle:DeviceBundle):Promise<RegisteredDevice|null>{
+    await this.initialize();
+    const now=Date.now();
+    await this.db.prepare(`INSERT OR IGNORE INTO e2ee_devices
+      (user_id,device_id,identity_signing,identity_agreement,signed_prekey,
+       prekey_signature,registration_signature,trust,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,
+        CASE WHEN EXISTS(SELECT 1 FROM e2ee_devices WHERE user_id=? AND trust='active')
+          THEN 'pending' ELSE 'active' END,?,?)`)
+      .bind(userId,bundle.deviceId,JSON.stringify(bundle.identitySigning),
+        JSON.stringify(bundle.identityAgreement),JSON.stringify(bundle.signedPrekey),
+        bundle.prekeySignature,bundle.registrationSignature,userId,now,now).run();
+    const device=(await this.listDevices(userId,true)).find(x=>x.deviceId===bundle.deviceId);
+    // A device ID cannot be rebound to different keys or revived after revocation.
+    if(!device||device.trust==='revoked'||
+      JSON.stringify(device.identitySigning)!==JSON.stringify(bundle.identitySigning)||
+      JSON.stringify(device.identityAgreement)!==JSON.stringify(bundle.identityAgreement)||
+      JSON.stringify(device.signedPrekey)!==JSON.stringify(bundle.signedPrekey)||
+      device.prekeySignature!==bundle.prekeySignature||device.registrationSignature!==bundle.registrationSignature)
+      return null;
+    return device;
+  }
+
+  async listDevices(userId:string,includeInactive:boolean):Promise<RegisteredDevice[]>{
+    await this.initialize();
+    const rows=await this.db.prepare(`SELECT * FROM e2ee_devices WHERE user_id=?
+      ${includeInactive?'':"AND trust='active'"} ORDER BY created_at,device_id`)
+      .bind(userId).all<Record<string,unknown>>();
+    return (rows.results??[]).map(row=>({
+      userId:String(row.user_id),deviceId:String(row.device_id),
+      identitySigning:JSON.parse(String(row.identity_signing)),
+      identityAgreement:JSON.parse(String(row.identity_agreement)),
+      signedPrekey:JSON.parse(String(row.signed_prekey)),
+      prekeySignature:String(row.prekey_signature),
+      registrationSignature:String(row.registration_signature),
+      trust:String(row.trust) as RegisteredDevice['trust'],createdAt:Number(row.created_at)
+    }));
+  }
+
+  async approveDevice(userId:string,deviceId:string):Promise<boolean>{
+    await this.initialize();
+    const result=await this.db.prepare(`UPDATE e2ee_devices SET trust='active',updated_at=?
+      WHERE user_id=? AND device_id=? AND trust='pending'`)
+      .bind(Date.now(),userId,deviceId).run();
+    return Number(result.meta?.changes??0)===1;
+  }
+
+  async revokeDevice(userId:string,deviceId:string):Promise<boolean>{
+    await this.initialize();
+    const result=await this.db.prepare(`UPDATE e2ee_devices SET trust='revoked',updated_at=?
+      WHERE user_id=? AND device_id=? AND trust='active'
+      AND EXISTS(SELECT 1 FROM e2ee_devices WHERE user_id=? AND trust='active' AND device_id<>?)`)
+      .bind(Date.now(),userId,deviceId,userId,deviceId).run();
+    return Number(result.meta?.changes??0)===1;
   }
 
   async registerIdentityKey(userId:string,publicKey:string):Promise<boolean>{
@@ -593,6 +650,7 @@ export class D1MessagingRepository implements MessagingRepository {
     if (!userIds.length) return;
 
     for (const userId of userIds) {
+      await this.db.prepare("DELETE FROM e2ee_devices WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM account_encryption_keys WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_privacy_settings WHERE user_id = ?").bind(userId).run();

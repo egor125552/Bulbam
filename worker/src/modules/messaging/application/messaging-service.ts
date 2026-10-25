@@ -1,4 +1,5 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
+import {keyEnvelope,validateDeviceBundle,verifyDeviceBundle,verifyDeviceSignature} from '../domain/device-key-validation';
 import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
 import type { Conversation, DirectConversation, GroupConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
 import {
@@ -167,6 +168,72 @@ export class MessagingService {
       }
     }
     return messages;
+  }
+
+  async registerE2eeDevice(actor:MessagingActor,raw:Record<string,unknown>){
+    const bundle=validateDeviceBundle(raw);
+    if(!await verifyDeviceBundle(actor.userId,bundle))
+      badRequest('invalid_device_proof','Подпись нового устройства не прошла проверку.');
+    const result=await this.repository.registerDevice(actor.userId,bundle);
+    if(!result)
+      throw new ApiError(409,'device_identity_conflict','Этот идентификатор уже используется другим или отозванным устройством.');
+    return {device:result};
+  }
+
+  async listOwnE2eeDevices(actor:MessagingActor){
+    return {devices:await this.repository.listDevices(actor.userId,true)};
+  }
+
+  async listE2eePeerDevices(actor:MessagingActor,rawConversationId:string){
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)badRequest('direct_only','Ключи устройств доступны только для личной переписки.');
+    const users=[conversation.participantAId,conversation.participantBId];
+    const bundles=await Promise.all(users.map(async userId=>({
+      userId,devices:await this.repository.listDevices(userId,false)
+    })));
+    return {users:bundles};
+  }
+
+  async approveE2eeDevice(actor:MessagingActor,raw:Record<string,unknown>){
+    const approverDeviceId=raw.approverDeviceId;
+    const newDeviceId=raw.newDeviceId;
+    const signature=raw.signature;
+    if(typeof approverDeviceId!=='string'||typeof newDeviceId!=='string'||
+      typeof signature!=='string'||!/^[A-Za-z0-9_-]{86}$/.test(signature))
+      badRequest('invalid_device_approval','Недопустимое подтверждение устройства.');
+    const devices=await this.repository.listDevices(actor.userId,true);
+    const approver=devices.find(device=>device.deviceId===approverDeviceId && device.trust==='active');
+    const pending=devices.find(device=>device.deviceId===newDeviceId && device.trust==='pending');
+    if(!approver || !pending || approver.deviceId===pending.deviceId)
+      throw new ApiError(409,'approval_not_allowed','Нужно подтверждение с уже доверенного устройства.');
+    const valid=await verifyDeviceSignature(approver.identitySigning,
+      keyEnvelope('approval',actor.userId,pending.deviceId,pending,approver.deviceId),signature);
+    if(!valid)badRequest('invalid_device_approval','Подпись подтверждения недействительна.');
+    if(!await this.repository.approveDevice(actor.userId,pending.deviceId))
+      throw new ApiError(409,'approval_conflict','Устройство уже изменило состояние.');
+    return {approvedDeviceId:pending.deviceId};
+  }
+
+  async revokeE2eeDevice(actor:MessagingActor,raw:Record<string,unknown>){
+    // An ordinary logged-in session is not sufficient to revoke trusted keys.
+    // The revocation must be signed by another already trusted device.
+    const approvingId=raw.approverDeviceId;
+    const targetId=raw.deviceId;
+    const signature=raw.signature;
+    if(typeof approvingId!=='string'||typeof targetId!=='string'||
+      typeof signature!=='string'||!/^[A-Za-z0-9_-]{86}$/.test(signature))
+      badRequest('invalid_device_revoke','Неверная подпись отзыва устройства.');
+    const devices=await this.repository.listDevices(actor.userId,true);
+    const approver=devices.find(device=>device.deviceId===approvingId&&device.trust==='active');
+    const target=devices.find(device=>device.deviceId===targetId&&device.trust==='active');
+    if(!approver||!target||approver.deviceId===target.deviceId)
+      throw new ApiError(409,'revoke_not_allowed','Для отзыва требуется другое доверенное устройство.');
+    const payload=JSON.stringify(['bulbam/device-revoke/v1',actor.userId,approver.deviceId,target.deviceId]);
+    if(!await verifyDeviceSignature(approver.identitySigning,payload,signature))
+      badRequest('invalid_device_revoke','Неверная подпись отзыва устройства.');
+    if(!await this.repository.revokeDevice(actor.userId,target.deviceId))
+      throw new ApiError(409,'revoke_conflict','Устройство уже изменило состояние.');
+    return {revokedDeviceId:target.deviceId};
   }
 
   async registerAutoIdentity(actor:MessagingActor,raw:Record<string,unknown>){

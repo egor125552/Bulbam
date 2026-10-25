@@ -7,7 +7,7 @@ const CATEGORIES = [
   { id: "notifications", title: "Уведомления", sections: ["notifications-title"] },
   { id: "voice", title: "Голосовые сообщения", sections: ["voice-settings-title"] },
   { id: "calls", title: "Звонки", sections: [] },
-  { id: "devices", title: "Устройства", sections: ["sessions-title"] },
+  { id: "devices", title: "Устройства", sections: ["sessions-title", "e2ee-devices-title"] },
   { id: "invites", title: "Приглашения", sections: ["invite-title"] },
   { id: "accessibility", title: "Специальные возможности", sections: ["accessibility-title"] },
   { id: "diagnostics", title: "Диагностика", sections: ["health-title"] },

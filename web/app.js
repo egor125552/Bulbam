@@ -18,6 +18,7 @@ import { setupMessenger } from "./js/messenger.js";
 import { setupPushNotifications } from "./js/push.js";
 import { setupPresence } from "./js/presence.js";
 import { setupSessions } from "./js/sessions.js";
+import { setupE2eeDevices } from './js/e2ee-devices-ui.js';
 import { setupAppleVoiceRecordingPreference } from "./js/voice-apple-recording.js";
 import { setupVoicePlayer } from "./js/voice-player.js";
 import { setupVoiceRecorder } from "./js/voice-recorder.js";
@@ -36,6 +37,7 @@ export function startApp() {
   setupAdminRecovery();
   setupWelcome();
   setupSessions();
+  setupE2eeDevices();
   setupInvites();
   setupMessenger();
   setupMessageAnnouncements();
