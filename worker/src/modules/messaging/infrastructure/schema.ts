@@ -106,6 +106,15 @@ const migrations = [
             OR (NEW.message_type='voice' AND NEW.body='bmvoice1'))
         BEGIN SELECT RAISE(ABORT,'protected_conversation_requires_ciphertext'); END`
     ]
+  },
+  {
+    version: 6,
+    statements: [
+      "ALTER TABLE conversations ADD COLUMN auto_protection INTEGER NOT NULL DEFAULT 0 CHECK(auto_protection IN (0,1))",
+      `CREATE TABLE IF NOT EXISTS account_encryption_keys (
+        user_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, created_at INTEGER NOT NULL
+      )`
+    ]
   }
 ] as const;
 
@@ -160,7 +169,7 @@ async function initialize(db: D1Database): Promise<void> {
 // D1 migration batches are not guaranteed to be atomic. A transient Worker
 // failure after the rename must allow the next request to finish v4 safely.
 async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
-  if(version===4 || version===5){
+  if(version===4 || version===5 || version===6){
     if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
       const exists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'")
         .first<{name:string}>();

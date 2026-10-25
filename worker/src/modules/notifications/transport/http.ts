@@ -32,6 +32,12 @@ export async function handlePushHttp(
     return methodNotAllowed(["PUT", "DELETE"]);
   }
 
+  if (url.pathname === "/api/v1/push/test") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.testNotification(actor.userId)});
+  }
+
   if (url.pathname === "/api/v1/push/foreground") {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const actor = await authenticate(request);

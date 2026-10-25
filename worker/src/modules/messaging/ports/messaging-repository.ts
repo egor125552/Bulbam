@@ -18,6 +18,9 @@ export interface MessagingRepository {
   getOrCreateDirectConversation(userId: string, peerUserId: string, now: number): Promise<DirectConversation>;
   findConversationForUser(conversationId: string, userId: string): Promise<DirectConversation | null>;
   protectDirectConversation(conversationId:string):Promise<void>;
+  registerIdentityKey(userId:string,publicKey:string):Promise<boolean>;
+  identityKeys(userIds:string[]):Promise<Map<string,string>>;
+  activateAutoProtection(conversationId:string):Promise<boolean>;
   listConversationsForUser(userId: string, limit: number): Promise<DirectConversation[]>;
   listAllConversationsForUser(userId: string, limit: number): Promise<Conversation[]>;
   findAnyConversationForUser(conversationId: string, userId: string): Promise<Conversation | null>;

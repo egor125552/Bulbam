@@ -94,6 +94,12 @@ async function handlePush(data) {
     (client) => client.url.startsWith(self.location.origin) && client.visibilityState === "visible"
   );
 
+  if (data.kind === "message" && visibleClients.length) {
+    // Only suppress this device's duplicate. Another device with a visible
+    // session must not prevent notifications reaching the background iPhone.
+    return;
+  }
+
   if (data.kind === "call" && visibleClients.length) {
     // Realtime is normally the foreground path. Push is still sent server-side
     // for reliability; when the app is genuinely visible, use it only as a
@@ -138,7 +144,7 @@ async function openOrFocus(targetUrl) {
 
 // Public application shell only. Never cache authenticated /api endpoints,
 // voice messages, WebSocket traffic, or user data.
-const SHELL_CACHE = "bulbam-shell-ee238f6c4c7b";
+const SHELL_CACHE = "bulbam-shell-e12b9390d5b1";
 const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
 
 self.addEventListener("fetch", (event) => {

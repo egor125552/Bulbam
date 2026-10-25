@@ -76,7 +76,9 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   }
 
   async notifyNewMessage(input: MessageNotificationInput): Promise<void> {
-    await this.notifyWhenBackground(input.recipientUserId, {
+    // Per-account foreground leases suppress push on OTHER devices too.
+    // Always dispatch; each SW decides locally whether its own window is visible.
+    await this.notifyAll(input.recipientUserId, {
       kind: "message",
       title: input.groupTitle??input.senderDisplayName,
       body: input.groupTitle?`${input.senderDisplayName}: ${notificationPreview(input.text)}`:notificationPreview(input.text),
@@ -87,7 +89,17 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
         conversationId: input.conversationId,
         messageId: input.messageId
       }
-    });
+    },60*60);
+  }
+
+  async testNotification(userId:string):Promise<{registered:number,accepted:number}> {
+    const subscriptions=await this.repository.listForUser(userId);
+    if(!this.configured())return {registered:subscriptions.length,accepted:0};
+    const payload=JSON.stringify({kind:'test',title:'Бульбам: проверка уведомлений',
+      body:'Проверка push с сервера. Если это видно, доставка работает.',
+      tag:'bulbam-push-test',icon:'/icon.svg',data:{url:'/'}});
+    const statuses=await Promise.all(subscriptions.map(item=>this.send(item,payload,60)));
+    return {registered:subscriptions.length,accepted:statuses.filter(Boolean).length};
   }
 
   async notifyIncomingCall(input: IncomingCallNotificationInput): Promise<void> {
@@ -147,7 +159,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     );
   }
 
-  private async send(subscription: PushSubscriptionRecord, payload: string, ttl: number): Promise<void> {
+  private async send(subscription: PushSubscriptionRecord, payload: string, ttl: number): Promise<boolean> {
     try {
       await webpush.sendNotification(
         {
@@ -165,13 +177,15 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
           urgency: "high"
         }
       );
+      return true;
     } catch (error) {
       const statusCode = webPushStatusCode(error);
       if (statusCode === 404 || statusCode === 410) {
         await this.repository.removeEndpoint(subscription.endpoint);
-        return;
+        return false;
       }
       console.warn(`[Push] delivery failed with status ${statusCode || "unknown"}`, error);
+      return false;
     }
   }
 }

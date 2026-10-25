@@ -245,8 +245,8 @@ async function loadChats({ quiet = false } = {}) {
     if (selectedChat) {
       const prev=selectedChat;
       selectedChat = chats.find((chat) => chat.conversationId === selectedChat.conversationId) ?? selectedChat;
-      if(prev.encryptionMode!==selectedChat.encryptionMode)
-        void setSecureConversation(account,selectedChat);
+      if(prev.encryptionMode!==selectedChat.encryptionMode || prev.autoProtection!==selectedChat.autoProtection)
+        void setSecureConversation(account,selectedChat,{force:!getSecureChatState().key});
     }
     renderChats();
   } catch (error) {
@@ -741,6 +741,9 @@ function connectRealtime() {
       void loadChats({quiet:true});
     } else if(payload?.type==='chat.created'||payload?.type==='chat.updated'){
       void loadChats({quiet:true});
+      if(payload.type==='chat.updated' && selectedChat?.conversationId===payload.conversationId &&
+         getSecureChatState().waitingPeer)
+        void setSecureConversation(account,selectedChat,{force:true});
     } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {
       handleDeliveredReceipts(payload);
     } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {

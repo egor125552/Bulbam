@@ -48,6 +48,26 @@ export async function handleMessagingHttp(
     return json({ok:true,...result});
   }
 
+  if(url.pathname==='/api/v1/keys/identity'){
+    if(request.method!=='PUT')return methodNotAllowed(['PUT']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.registerAutoIdentity(actor,await readJsonObject(request))});
+  }
+
+  const autoKeysMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/keys$/i);
+  if(autoKeysMatch){
+    if(request.method!=='GET')return methodNotAllowed(['GET']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.autoIdentityKeys(actor,autoKeysMatch[1])});
+  }
+
+  const autoActivateMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/protection\/auto$/i);
+  if(autoActivateMatch){
+    if(request.method!=='POST')return methodNotAllowed(['POST']);
+    const actor=await authenticate(request);
+    return json({ok:true,...await service.activateAutoProtection(actor,autoActivateMatch[1])});
+  }
+
   const protectionMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/protection$/i);
   if(protectionMatch){
     if(request.method!=='POST')return methodNotAllowed(['POST']);

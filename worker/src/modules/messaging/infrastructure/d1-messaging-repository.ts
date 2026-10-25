@@ -82,7 +82,7 @@ export class D1MessagingRepository implements MessagingRepository {
 
     const row = await this.db
       .prepare(`
-        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode
+        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode, auto_protection
         FROM conversations
         WHERE direct_key = ? AND kind = 'direct'
         LIMIT 1
@@ -98,7 +98,7 @@ export class D1MessagingRepository implements MessagingRepository {
     await this.initialize();
     const row = await this.db
       .prepare(`
-        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode
+        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode, auto_protection
         FROM conversations
         WHERE conversation_id = ?
           AND kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
@@ -107,6 +107,39 @@ export class D1MessagingRepository implements MessagingRepository {
       .bind(conversationId, userId, userId)
       .first<Row>();
     return row ? mapConversation(row) : null;
+  }
+
+  async registerIdentityKey(userId:string,publicKey:string):Promise<boolean>{
+    await this.initialize();
+    await this.db.prepare('INSERT OR IGNORE INTO account_encryption_keys(user_id,public_key,created_at) VALUES(?,?,?)')
+      .bind(userId,publicKey,Date.now()).run();
+    const row=await this.db.prepare('SELECT public_key FROM account_encryption_keys WHERE user_id=?')
+      .bind(userId).first<{public_key:string}>();
+    return row?.public_key===publicKey;
+  }
+
+  async identityKeys(userIds:string[]):Promise<Map<string,string>>{
+    await this.initialize();
+    const result=new Map<string,string>();
+    for(const id of userIds){
+      const row=await this.db.prepare('SELECT public_key FROM account_encryption_keys WHERE user_id=?')
+        .bind(id).first<{public_key:string}>();
+      if(row)result.set(id,row.public_key);
+    }
+    return result;
+  }
+
+  async activateAutoProtection(conversationId:string):Promise<boolean>{
+    await this.initialize();
+    // Atomic mode transition. Never relabel a manually protected legacy chat.
+    await this.db.prepare(`UPDATE conversations SET encryption_mode='protected',auto_protection=1
+      WHERE conversation_id=? AND kind='direct' AND encryption_mode='plain'
+      AND EXISTS (SELECT 1 FROM account_encryption_keys WHERE user_id=conversations.participant_a_id)
+      AND EXISTS (SELECT 1 FROM account_encryption_keys WHERE user_id=conversations.participant_b_id)`)
+      .bind(conversationId).run();
+    const row=await this.db.prepare('SELECT auto_protection FROM conversations WHERE conversation_id=?')
+      .bind(conversationId).first<{auto_protection:number}>();
+    return row?.auto_protection===1;
   }
 
   async protectDirectConversation(conversationId:string):Promise<void> {
@@ -119,7 +152,7 @@ export class D1MessagingRepository implements MessagingRepository {
     await this.initialize();
     const result = await this.db
       .prepare(`
-        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode
+        SELECT conversation_id, participant_a_id, participant_b_id, created_at, last_message_at, encryption_mode, auto_protection
         FROM conversations
         WHERE kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
         ORDER BY COALESCE(last_message_at, created_at) DESC, conversation_id DESC
@@ -527,6 +560,7 @@ export class D1MessagingRepository implements MessagingRepository {
     if (!userIds.length) return;
 
     for (const userId of userIds) {
+      await this.db.prepare("DELETE FROM account_encryption_keys WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_privacy_settings WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_listen_receipts WHERE listener_user_id = ?").bind(userId).run();
@@ -584,6 +618,7 @@ function mapGroup(row: Row): GroupConversation {
 function mapConversation(row: Row): DirectConversation {
   return {
     encryptionMode:row.encryption_mode==='protected'?'protected':'plain',
+    autoProtection:Number(row.auto_protection??0)===1,
     conversationId: String(row.conversation_id),
     participantAId: String(row.participant_a_id),
     participantBId: String(row.participant_b_id),
