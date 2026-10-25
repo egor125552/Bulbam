@@ -15,13 +15,13 @@ const activeOscillators = new Set();
 
 export function prepareRingback() {
   try {
-    if (!context) {
+    if (!context || context.state === "closed") {
       const AudioCtor = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtor) return Promise.resolve(false);
       context = new AudioCtor();
     }
-    if (context.state === "suspended") {
-      return Promise.resolve(context.resume()).then(() => context?.state !== "suspended").catch(() => false);
+    if (context.state !== "running") {
+      return Promise.resolve(context.resume()).then(() => context?.state === "running").catch(() => false);
     }
     return Promise.resolve(true);
   } catch {
@@ -30,7 +30,7 @@ export function prepareRingback() {
 }
 
 function ringOnce() {
-  if (!ringing || !context || context.state === "suspended") return;
+  if (!ringing || !context || context.state !== "running") return;
   try {
     const now = context.currentTime;
     const end = now + RINGBACK_DURATION_SECONDS;
@@ -74,4 +74,11 @@ export function stopRingback() {
     try { osc.stop(); } catch {}
   }
   activeOscillators.clear();
+}
+
+export function resetRingbackAudio() {
+  stopRingback();
+  const old = context;
+  context = null;
+  try { void old?.close?.()?.catch?.(() => {}); } catch {}
 }

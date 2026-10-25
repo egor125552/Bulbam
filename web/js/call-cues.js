@@ -9,13 +9,13 @@ const tones = {
 };
 export function prepareCallCues() {
   try {
-    if (!context) {
+    if (!context || context.state === "closed") {
       const Ctor = window.AudioContext || window.webkitAudioContext;
       if (!Ctor) return Promise.resolve(false);
       context = new Ctor();
     }
-    if (context.state === "suspended") {
-      return Promise.resolve(context.resume()).then(() => context.state !== "suspended").catch(() => false);
+    if (context.state !== "running") {
+      return Promise.resolve(context.resume()).then(() => context.state === "running").catch(() => false);
     }
     return Promise.resolve(true);
   } catch {
@@ -32,7 +32,7 @@ export function playCallCue(event) {
   const sequence = tones[event];
   if (!sequence) return;
   void prepareCallCues().then((ready) => {
-    if (!ready || !context || context.state === "suspended") return;
+    if (!ready || !context || context.state !== "running") return;
     try {
       const now = context.currentTime + 0.012;
       sequence.forEach(([hz, delay, seconds]) => {
@@ -54,4 +54,11 @@ export function playCallCue(event) {
       // UI sound must not interrupt a real call.
     }
   });
+}
+
+export function resetCallCueAudio() {
+  stopCallCues();
+  const old = context;
+  context = null;
+  try { void old?.close?.()?.catch?.(() => {}); } catch {}
 }

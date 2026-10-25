@@ -135,11 +135,17 @@ async function refreshQueue(){
   const status=document.querySelector("#admin-recovery-queue-status");
   try{
     const result=await api("/api/v1/admin/recovery-requests");
-    list.replaceChildren();
-    if(!result.requests?.length){status.textContent="Новых заявок нет.";return;}
-    status.textContent="Заявок: "+result.requests.length;
-    for(const req of result.requests){
+    // Polling and settings navigation must not replace a checked checkbox or
+    // move VoiceOver away from the active recovery request.
+    const existing=new Map([...list.children].map(item=>[item.dataset.requestId,item]));
+    const current=new Set((result.requests??[]).map(req=>req.requestId));
+    for(const [id,item] of existing)if(!current.has(id))item.remove();
+    const summary=current.size?"Заявок: "+current.size:"Новых заявок нет.";
+    if(status.textContent!==summary)status.textContent=summary;
+    for(const req of result.requests??[]){
+      if(existing.has(req.requestId))continue;
       const li=document.createElement("li");
+      li.dataset.requestId=req.requestId;
       const details=document.createElement("p");
       details.textContent="Пользователь @"+req.username+", устройство: "+req.deviceName+
         ", код заявки: "+req.verificationCode+", время: "+
@@ -158,14 +164,18 @@ async function refreshQueue(){
           verified.focus();return;
         }
         approve.disabled=deny.disabled=true;
+        status.textContent=yes?"Одобряю заявку…":"Отклоняю заявку…";
         try{
           await api("/api/v1/admin/recovery-requests/"+encodeURIComponent(req.requestId)+"/decision",{
             method:"POST",body:JSON.stringify({approve:yes,verifiedIdentity:verified.checked})
           });
-          announce(yes?"Заявка одобрена.":"Заявка отклонена.");
-          setTimeout(()=>void refreshQueue(),0);
+          li.remove();
+          await refreshQueue();
+          status.textContent=yes?`Заявка пользователя @${req.username} одобрена.`:`Заявка пользователя @${req.username} отклонена.`;
+          status.focus({preventScroll:true});
         }catch(error){
-          announce("Решение не сохранено: "+error.message);
+          status.textContent="Решение не сохранено: "+error.message;
+          announce(status.textContent);
           approve.disabled=deny.disabled=false;
         }
       }
@@ -209,6 +219,8 @@ export function setupAdminRecovery(){
       void refreshQueue();
     }
   });
-  document.querySelector("#settings-dialog")?.addEventListener("click",()=>void refreshQueue());
+  // Never refresh on every settings click: that destroyed the confirmation
+  // checkbox right after VoiceOver activated it.
+  document.querySelector("#settings-button")?.addEventListener("click",()=>void refreshQueue());
   setInterval(()=>{if(["owner","admin"].includes(getCurrentAccount()?.role))void refreshQueue();},30000);
 }

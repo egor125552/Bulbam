@@ -1,5 +1,5 @@
-import { prepareRingback, startRingback, stopRingback } from "./call-ringback.js";
-import { prepareCallCues, playCallCue, stopCallCues } from "./call-cues.js";
+import { prepareRingback, startRingback, stopRingback, resetRingbackAudio } from "./call-ringback.js";
+import { prepareCallCues, playCallCue, stopCallCues, resetCallCueAudio } from "./call-cues.js";
 import { startCallTrace, logCallEvent } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
@@ -112,7 +112,26 @@ const initialConnectionWatchdog = createCallConnectionWatchdog((callId) => {
   void recoverCallConnection({ hard: false, reason: "initial-connection-timeout" });
 });
 
+let callAudioNeedsRefresh = false;
+function markCallAudioInterrupted() { callAudioNeedsRefresh = true; }
+function restoreCallAudioOnReturn() {
+  if (!callAudioNeedsRefresh || document.visibilityState !== "visible") return;
+  callAudioNeedsRefresh = false;
+  // Safari may claim an AudioContext is still running after iOS interrupted output.
+  // Recreate local feedback only, never disturb live WebRTC media.
+  resetCallCueAudio();
+  const wasRinging = currentCall?.status === "ringing" && currentCall.direction === "outgoing";
+  resetRingbackAudio();
+  if (wasRinging) startRingback();
+}
+
 export function setupCalls() {
+  window.addEventListener("pagehide", markCallAudioInterrupted);
+  window.addEventListener("pageshow", restoreCallAudioOnReturn);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") markCallAudioInterrupted();
+    else restoreCallAudioOnReturn();
+  });
   headsetControls = createCallHeadsetControls(navigator, {
     onMute: (next) => setMuted(next),
     onHangup: () => { if (currentCall) void endCall(); }
@@ -1625,6 +1644,11 @@ function setCallPresentation(mode) {
   elements.callMinimizeButton.hidden = !canMinimize || minimized;
   elements.callExpandButton.hidden = !canMinimize || !minimized;
   elements.callDismissButton.hidden = mode !== "finished";
+  const fullScreen = !elements.callPanel.hidden && !minimized;
+  const shell = document.querySelector(".messenger-shell");
+  if (shell) shell.inert = fullScreen;
+  if (fullScreen) elements.callPanel.setAttribute?.("aria-modal", "true");
+  else elements.callPanel.removeAttribute?.("aria-modal");
 }
 
 function minimizeCall() {
