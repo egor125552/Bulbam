@@ -68,12 +68,13 @@ function updatePresentation() {
   if(retry)retry.hidden=!hasChat || !currentPeerId || (!autoOptedIn && !automaticMode) || Boolean(encryptionKey) || (!waitingPeer && !loadFailed && !autoPending);
   const recording = document.querySelector("#voice-record-button");
   const draftSend = element("voice-draft-send");
+  const deviceRecording = hasChat && !chatDisabled && featureEnabled;
   if (recording) {
-    recording.disabled = !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
+    recording.disabled = !deviceRecording && !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
     // Do not repeat the encryption state in tooltip or VoiceOver announcements.
     recording.removeAttribute('title');
   }
-  if (draftSend) draftSend.disabled = !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
+  if (draftSend) draftSend.disabled = !deviceRecording && !chatDisabled && (keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey));
   if (!hasChat) setStatus("Откройте переписку.");
   else if (chatDisabled) setStatus('Обычные сообщения. Без сквозного шифрования');
   else if (keyIsLoading) setStatus("Проверяю и автоматически согласовываю ключи с собеседником.");

@@ -2,6 +2,10 @@ import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
+import { receiveDeviceText, sendDeviceText, resumeDeviceOutbox } from './e2ee-device-envelopes.js';
+import { isEncryptionFeatureEnabled, refreshFeatures } from './owner-features.js';
+import { shouldUseDeviceE2EE } from './message-encryption-route.js';
+import { readEncryptedHistory } from './e2ee-history.js';
 import { decryptVoiceFile } from "./secure-voice.js";
 import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
@@ -44,7 +48,8 @@ export function setupMessenger() {
         throw new Error("Переписка изменилась во время проверки ключа.");
       }
       const sample = messages.find((message) =>
-        message.conversationId === candidateConversationId && isProtectedContent(message));
+        message.conversationId === candidateConversationId &&
+        !message.e2eeV2 && isProtectedContent(message));
       if (!sample) return;
       const key = await importConversationSecret(secret);
       try {
@@ -334,14 +339,39 @@ async function selectChat(chat, { focusHeading = false } = {}) {
 async function loadMessages({ quiet = false } = {}) {
   if (!account || !selectedChat) return;
   const conversationId = selectedChat.conversationId;
+  const accountId=account.userId;
+  const expectedGeneration=generation;
   try {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
-    if (!selectedChat || selectedChat.conversationId !== conversationId) return;
+    if (!selectedChat || selectedChat.conversationId !== conversationId ||
+        account?.userId!==accountId || generation!==expectedGeneration) return;
     const serverMessages = result.messages ?? [];
     logTraceEvent('Сервер','история чата загружена','',{messages:serverMessages.length});
     requireProtectedConversationKey(account.userId, conversationId, serverMessages.some(isProtectedContent));
     const pending = messages.filter((message) => message.localState);
     messages = serverMessages;
+    // Device-specific encrypted inbox is independent of the legacy message
+    // history. Never send fallback plaintext if the E2EE inbox is unavailable.
+    if(selectedChat?.kind==='direct'){
+      if(shouldUseDeviceE2EE(selectedChat,getSecureChatState(),isEncryptionFeatureEnabled()))
+        await resumeDeviceOutbox({accountId,conversationId})
+          .catch(error=>logDiagnostic('Ошибки','не удалось возобновить зашифрованную отправку',diagnosticErrorName(error)));
+      let deviceMessages=[];
+      try{deviceMessages=await receiveDeviceText({accountId,conversationId});}
+      catch{try{deviceMessages=await readEncryptedHistory(accountId,conversationId);}catch{}}
+      if(selectedChat?.conversationId!==conversationId || account?.userId!==accountId ||
+        generation!==expectedGeneration)return;
+      const oldIds=new Set(messages.map(m=>m.messageId));
+      for(const item of deviceMessages){
+        if(item.kind==='voice' && item.e2eeV2){
+          // The legacy upload record has no media key; the independently
+          // encrypted device envelope supplies the playback key and metadata.
+          messages=messages.filter(m=>m.messageId!==item.messageId &&
+            !(m.kind==='voice'&&m.clientMessageId===item.clientMessageId));
+          messages.push(item);
+        }else if(!oldIds.has(item.messageId))messages.push(item);
+      }
+    }
     for (const local of pending) {
       if (!messages.some((message) => message.clientMessageId === local.clientMessageId)) {
         messages.push(local);
@@ -573,19 +603,39 @@ async function sendCurrentMessage(event) {
   const text = elements.messageInput.value.replace(/\r\n?/g, "\n").trim();
   if (!text) return;
   const secure = getSecureChatState();
-  if (secure.blocked || secure.conversationId !== selectedChat.conversationId) {
-    announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
-    return;
-  }
-  if (!secure.sendKey && !secure.disabled && (secure.requiresKey || messages.some(isProtectedContent))) {
-    announce("В переписке есть защищённые сообщения. Введите ключ перед отправкой, чтобы не отправить текст открыто.");
+  if (selectedChat.kind === 'direct' &&
+      Boolean(selectedChat.encryptionOptOut) !== Boolean(secure.disabled)) {
+    announce("Настройки защиты обновляются. Сообщение пока не отправлено.");
     return;
   }
   const expectedChat = selectedChat.conversationId;
+  const expectedAccount = account.userId;
+  let deviceRoute = false;
+  try {
+    if (selectedChat.kind === 'direct' && !secure.disabled) {
+      // A failed feature check must never silently become an unencrypted send.
+      await refreshFeatures();
+      deviceRoute = shouldUseDeviceE2EE(selectedChat,secure,isEncryptionFeatureEnabled());
+    }
+  } catch (error) {
+    announce("Не удалось проверить защиту переписки: " + error.message);
+    return;
+  }
+  if (account?.userId !== expectedAccount || selectedChat?.conversationId !== expectedChat ||
+      secure.accountId !== expectedAccount || secure.conversationId !== expectedChat) return;
+  if (!deviceRoute && secure.blocked) {
+    announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
+    return;
+  }
+  if (!deviceRoute && !secure.sendKey && !secure.disabled &&
+      (secure.requiresKey || messages.some(isProtectedContent))) {
+    announce("В переписке есть защищённые сообщения. Отправка без ключа заблокирована.");
+    return;
+  }
   const clientMessageId = randomId();
   let wireText = text;
   try {
-    if (secure.sendKey) wireText = await encryptText(text, secure.sendKey, {
+    if (!deviceRoute && secure.sendKey) wireText = await encryptText(text, secure.sendKey, {
       conversationId: expectedChat, senderUserId: account.userId, clientMessageId
     });
   } catch (error) {
@@ -593,7 +643,7 @@ async function sendCurrentMessage(event) {
     return;
   }
   if (selectedChat?.conversationId !== expectedChat || account?.userId !== secure.accountId ||
-      getSecureChatState().sendKey !== secure.sendKey) return;
+      (!deviceRoute && getSecureChatState().sendKey !== secure.sendKey)) return;
 
   const pending = {
     messageId: `pending_${randomId()}`,
@@ -602,7 +652,8 @@ async function sendCurrentMessage(event) {
     clientMessageId,
     kind: "text",
     text,
-    wireText,
+    wireText: deviceRoute ? null : wireText,
+    e2eeV2: deviceRoute,
     voice: null,
     createdAt: Date.now(),
     deliveredAt: null,
@@ -618,7 +669,38 @@ async function sendCurrentMessage(event) {
 async function transmitPending(pending) {
   if (!account || !selectedChat || pending.conversationId !== selectedChat.conversationId) return;
   const secure = getSecureChatState();
-  if (secure.blocked || secure.conversationId !== pending.conversationId || secure.accountId !== account.userId) {
+  if (secure.conversationId !== pending.conversationId || secure.accountId !== account.userId) {
+    announce("Сообщение осталось в черновике: переписка изменилась.");
+    return;
+  }
+  if (pending.e2eeV2) {
+    try {
+      await refreshFeatures();
+      if (!account || selectedChat?.conversationId !== pending.conversationId ||
+          !shouldUseDeviceE2EE(selectedChat,getSecureChatState(),isEncryptionFeatureEnabled())) {
+        throw new Error("Защита переписки изменилась. Открытая отправка запрещена.");
+      }
+      await sendDeviceText({accountId: account.userId,
+        conversationId: pending.conversationId, recipientUserId: selectedChat.peer.userId,
+        text: pending.text, clientMessageId: pending.clientMessageId});
+      if (selectedChat?.conversationId !== pending.conversationId) return;
+      // The sender's trusted device receives its own encrypted copy too.
+      // This is how the standard history gets the locally decryptable message.
+      delete pending.localState;
+      delete pending.wireText;
+      await loadMessages({quiet:true});
+      logDiagnostic('Сеть','сообщение защищено и доставлено устройствам');
+      announce("Сообщение отправлено.");
+      await loadChats({quiet:true});
+    } catch (error) {
+      pending.localState = 'failed';
+      logDiagnostic('Ошибки','зашифрованное сообщение не отправлено',diagnosticErrorName(error));
+      renderMessages({preserveVoicePlayback:true});
+      announce("Сообщение не отправлено: " + error.message + ". Можно повторить.");
+    }
+    return;
+  }
+  if (secure.blocked) {
     announce("Сообщение осталось в черновике: ключ переписки пока недоступен.");
     return;
   }
@@ -733,11 +815,14 @@ function connectRealtime() {
     } catch {
       return;
     }
-    const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed'];
+    const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed','e2ee.envelope.created'];
     logDiagnostic('Сеть','получено событие сокета',known.includes(payload?.type)?payload.type:'другое');
     if (payload?.type === "message.created" && payload.message) {
       logDiagnostic("Сервер", "событие новое сообщение");
       handleRealtimeMessage(payload);
+    } else if(payload?.type==='e2ee.envelope.created'){
+      if(selectedChat?.conversationId===payload.conversationId)void loadMessages({quiet:true});
+      else void loadChats({quiet:true});
     } else if(payload?.type==='chat.removed'){
       if(selectedChat?.conversationId===payload.conversationId){selectedChat=null;messages=[];renderConversation();}
       void loadChats({quiet:true});

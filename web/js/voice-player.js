@@ -41,7 +41,7 @@ export function renderVoiceMessage(message, mine) {
   const root = document.createElement("section");
   root.className = "voice-message";
   const protectedMime = parseEncryptedVoiceMime(voice.mimeType);
-  root.setAttribute("aria-label", `${protectedMime ? "Защищённое" : "Обычное"} голосовое сообщение, ${formatTime(voice.durationMs)}`);
+  root.setAttribute("aria-label", `Голосовое сообщение, ${formatTime(voice.durationMs)}`);
 
   // Keep the actual media engine outside the message subtree. Messenger rerenders can
   // rebuild message cards without destroying a playing HTMLMediaElement on Safari.
@@ -338,12 +338,13 @@ async function togglePlayback(controller) {
 function startStreamingProtectedVoice(controller) {
   const security = getSecureChatState();
   const account = getCurrentAccount();
-  if (!account || security.blocked || !security.key ||
-      security.accountId !== account.userId ||
+  const deviceKey=controller.message.voiceKey??null;
+  if (!account || (!deviceKey && (security.blocked || !security.key ||
+      security.accountId !== account.userId)) ||
       security.conversationId !== controller.message.conversationId) {
     throw new Error("Для прослушивания нужен ключ этой переписки.");
   }
-  const expectedKey = security.key;
+  const expectedKey = deviceKey??security.key;
   const expectedAccountId = account.userId;
   const message = controller.message;
   const session = createProtectedVoiceStream({
@@ -360,7 +361,8 @@ function startStreamingProtectedVoice(controller) {
     isStillAuthorized: () => {
       const active = getSecureChatState();
       return !controller.disposing && getCurrentAccount()?.userId === expectedAccountId &&
-        active.conversationId === message.conversationId && active.key === expectedKey && !active.blocked;
+        active.conversationId === message.conversationId &&
+        (deviceKey ? message.voiceKey === expectedKey : active.key === expectedKey && !active.blocked);
     }
   });
   if (!session) return false;
@@ -388,12 +390,13 @@ async function prepareProtectedSource(controller) {
   if (controller.preparingProtected) return controller.preparingProtected;
   const security = getSecureChatState();
   const account = getCurrentAccount();
-  if (!account || security.blocked || !security.key ||
-      security.accountId !== account.userId ||
+  const deviceKey=controller.message.voiceKey??null;
+  if (!account || (!deviceKey && (security.blocked || !security.key ||
+      security.accountId !== account.userId)) ||
       security.conversationId !== controller.message.conversationId) {
     throw new Error("Для прослушивания нужен ключ этой переписки.");
   }
-  const currentKey = security.key;
+  const currentKey = deviceKey??security.key;
   const currentAccountId = account.userId;
   controller.preparingProtected = (async () => {
     const response = await fetch(voiceUrl(controller.message), {
@@ -409,7 +412,8 @@ async function prepareProtectedSource(controller) {
       });
     const latest = getSecureChatState();
     if (controller.disposing || getCurrentAccount()?.userId !== currentAccountId ||
-        latest.key !== currentKey || latest.conversationId !== controller.message.conversationId) {
+        (deviceKey ? controller.message.voiceKey !== currentKey : latest.key !== currentKey) ||
+        latest.conversationId !== controller.message.conversationId) {
       throw new Error("Переписка или ключ изменились во время загрузки.");
     }
     const objectUrl = URL.createObjectURL(decoded);

@@ -1,5 +1,6 @@
 import type { D1Database } from "../../../platform/cloudflare";
-import type {DeviceBundle,RegisteredDevice} from '../domain/device-key-validation';
+import type {DevicePublicKey,DeviceBundle,RegisteredDevice} from '../domain/device-key-validation';
+import type {SealedDeviceEnvelope,StoredDeviceEnvelope} from '../domain/device-envelope';
 import type {
   DeliveryReceiptUpdate,
   DirectConversation,
@@ -141,6 +142,61 @@ export class D1MessagingRepository implements MessagingRepository {
       auto_protection=CASE WHEN ?=1 THEN 0 ELSE auto_protection END,
       encryption_opt_out=? WHERE conversation_id=? AND kind='direct'`)
       .bind(enabled?1:0,enabled?1:0,enabled?1:0,conversationId).run();
+  }
+
+  async insertDeviceEnvelope(conversationId:string,senderUserId:string,envelope:SealedDeviceEnvelope,senderSigning:DevicePublicKey):Promise<{envelope:StoredDeviceEnvelope;created:boolean}>{
+    await this.initialize();
+    const id=crypto.randomUUID(),createdAt=Date.now();
+    const inserted=await this.db.prepare(`INSERT OR IGNORE INTO e2ee_device_envelopes (
+      envelope_id,conversation_id,sender_user_id,sender_device_id,recipient_user_id,
+      recipient_device_id,client_message_id,ephemeral_public_key,nonce,ciphertext,signature,created_at,
+      sender_signing_key
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(id,conversationId,senderUserId,envelope.senderDeviceId,envelope.recipientUserId,
+        envelope.recipientDeviceId,envelope.clientMessageId,JSON.stringify(envelope.ephemeralPublicKey),
+        envelope.nonce,envelope.ciphertext,envelope.signature,createdAt,JSON.stringify(senderSigning)).run();
+    const row=await this.db.prepare(`SELECT * FROM e2ee_device_envelopes WHERE conversation_id=?
+      AND sender_user_id=? AND sender_device_id=? AND recipient_device_id=? AND client_message_id=?`)
+      .bind(conversationId,senderUserId,envelope.senderDeviceId,envelope.recipientDeviceId,envelope.clientMessageId)
+      .first<Record<string,unknown>>();
+    if(!row)throw new Error('Зашифрованный конверт не сохранился.');
+    const stored=this.rowEnvelope(row);
+    // A retried client ID must refer to identical ciphertext and metadata.
+    if(stored.ciphertext!==envelope.ciphertext||stored.signature!==envelope.signature||
+       stored.nonce!==envelope.nonce||stored.recipientUserId!==envelope.recipientUserId||
+       JSON.stringify(stored.ephemeralPublicKey)!==JSON.stringify(envelope.ephemeralPublicKey))
+      throw new Error('ENVELOPE_IDEMPOTENCY_CONFLICT');
+    return {envelope:stored,created:Number(inserted.meta?.changes??0)>0};
+  }
+
+  async listDeviceEnvelopes(conversationId:string,userId:string,deviceId:string):Promise<StoredDeviceEnvelope[]>{
+    await this.initialize();
+    const rows=await this.db.prepare(`SELECT * FROM e2ee_device_envelopes
+      WHERE conversation_id=? AND recipient_user_id=? AND recipient_device_id=?
+      AND acknowledged_at IS NULL ORDER BY created_at,envelope_id LIMIT 100`)
+      .bind(conversationId,userId,deviceId).all<Record<string,unknown>>();
+    return (rows.results??[]).map(row=>this.rowEnvelope(row));
+  }
+
+  async acknowledgeDeviceEnvelope(id:string,conversationId:string,userId:string,deviceId:string):Promise<boolean>{
+    await this.initialize();
+    const row=await this.db.prepare(`UPDATE e2ee_device_envelopes SET acknowledged_at=?
+      WHERE envelope_id=? AND conversation_id=? AND recipient_user_id=?
+      AND recipient_device_id=? AND acknowledged_at IS NULL`)
+      .bind(Date.now(),id,conversationId,userId,deviceId).run();
+    return Number(row.meta?.changes??0)===1;
+  }
+
+  private rowEnvelope(row:Record<string,unknown>):StoredDeviceEnvelope{
+    return {
+      version:2,envelopeId:String(row.envelope_id),conversationId:String(row.conversation_id),
+      senderUserId:String(row.sender_user_id),senderDeviceId:String(row.sender_device_id),
+      recipientUserId:String(row.recipient_user_id),recipientDeviceId:String(row.recipient_device_id),
+      clientMessageId:String(row.client_message_id),ephemeralPublicKey:JSON.parse(String(row.ephemeral_public_key)),
+      nonce:String(row.nonce),ciphertext:String(row.ciphertext),signature:String(row.signature),
+      createdAt:Number(row.created_at),
+      senderSigningKey:row.sender_signing_key?JSON.parse(String(row.sender_signing_key)):undefined
+    };
   }
 
   async registerDevice(userId:string,bundle:DeviceBundle):Promise<RegisteredDevice|null>{
@@ -650,6 +706,8 @@ export class D1MessagingRepository implements MessagingRepository {
     if (!userIds.length) return;
 
     for (const userId of userIds) {
+      await this.db.prepare("DELETE FROM e2ee_device_envelopes WHERE sender_user_id=? OR recipient_user_id=?")
+        .bind(userId,userId).run();
       await this.db.prepare("DELETE FROM e2ee_devices WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM account_encryption_keys WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(userId).run();

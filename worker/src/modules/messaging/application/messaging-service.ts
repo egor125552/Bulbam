@@ -1,5 +1,6 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import {keyEnvelope,validateDeviceBundle,verifyDeviceBundle,verifyDeviceSignature} from '../domain/device-key-validation';
+import {deviceEnvelopeProof,validateEnvelope} from '../domain/device-envelope';
 import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
 import type { Conversation, DirectConversation, GroupConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
 import {
@@ -168,6 +169,79 @@ export class MessagingService {
       }
     }
     return messages;
+  }
+
+  async sendE2eeEnvelope(actor:MessagingActor,rawConversationId:string,body:Record<string,unknown>){
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)badRequest('direct_only','Шифрованные конверты пока доступны только для личного чата.');
+    if(conversation.encryptionOptOut || !await this.repository.getFeatureEnabled('encryption'))
+      throw new ApiError(409,'e2ee_disabled','Защита недоступна для этого чата.');
+    const envelope=validateEnvelope(body);
+    const receiverId=conversation.participantAId===actor.userId?
+      conversation.participantBId:conversation.participantAId;
+    // Own devices are also legitimate recipients of an encrypted sync copy.
+    if(envelope.recipientUserId!==receiverId && envelope.recipientUserId!==actor.userId)
+      throw new ApiError(403,'recipient_not_member','Получатель не участвует в переписке.');
+    const senders=await this.repository.listDevices(actor.userId,false);
+    const sender=senders.find(x=>x.deviceId===envelope.senderDeviceId);
+    const targets=await this.repository.listDevices(envelope.recipientUserId,false);
+    const target=targets.find(x=>x.deviceId===envelope.recipientDeviceId);
+    if(!sender || !target)
+      throw new ApiError(409,'e2ee_device_untrusted','Устройство не зарегистрировано как доверенное.');
+    const context=deviceEnvelopeProof(conversation.conversationId,actor.userId,envelope);
+    if(!await verifyDeviceSignature(sender.identitySigning,context,envelope.signature))
+      badRequest('invalid_envelope_signature','Подпись зашифрованного сообщения неверна.');
+    let stored;
+    try{stored=await this.repository.insertDeviceEnvelope(conversation.conversationId,actor.userId,envelope,sender.identitySigning);}
+    catch(error){
+      if(error instanceof Error&&error.message==='ENVELOPE_IDEMPOTENCY_CONFLICT')
+        throw new ApiError(409,'e2ee_message_conflict','Повторная отправка содержит другой шифротекст.');
+      throw error;
+    }
+    if(stored.created){
+      const task=this.realtime.publishToUsers([envelope.recipientUserId],{
+        type:'e2ee.envelope.created',conversationId:conversation.conversationId,
+        clientMessageId:envelope.clientMessageId,recipientDeviceId:envelope.recipientDeviceId
+      }).catch(error=>console.warn('[E2EE] realtime dispatch failed',error));
+      if(this.defer)this.defer(task);else await task;
+      if(this.notifications && envelope.recipientUserId!==actor.userId){
+        const sender=await this.users.findUser(actor.userId);
+        const push=this.notifications.notifyNewMessage({
+          recipientUserId:envelope.recipientUserId,
+          senderDisplayName:sender?.displayName??'Бульбам',
+          conversationId:conversation.conversationId,messageId:stored.envelope.envelopeId,
+          text:'Новое сообщение'
+        }).catch(error=>console.warn('[E2EE] push dispatch failed',error));
+        if(this.defer)this.defer(push);else await push;
+      }
+    }
+    return {envelope:stored.envelope};
+  }
+
+  async fetchE2eeEnvelopes(actor:MessagingActor,rawConversationId:string,deviceId:string){
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)badRequest('direct_only','Шифрованные конверты пока доступны только для личного чата.');
+    const devices=await this.repository.listDevices(actor.userId,false);
+    if(!devices.some(x=>x.deviceId===deviceId))
+      throw new ApiError(403,'device_untrusted','Нельзя получить сообщения на недоверенное устройство.');
+    return {envelopes:await this.repository.listDeviceEnvelopes(conversation.conversationId,actor.userId,deviceId)};
+  }
+
+  async ackE2eeEnvelope(actor:MessagingActor,rawConversationId:string,rawEnvelopeId:string,deviceId:string,signature:string){
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)badRequest('direct_only','Шифрованные конверты пока доступны только для личного чата.');
+    if(!/^[0-9a-f-]{36}$/i.test(rawEnvelopeId))badRequest('invalid_envelope','Неверный идентификатор конверта.');
+    const devices=await this.repository.listDevices(actor.userId,false);
+    const own=devices.find(x=>x.deviceId===deviceId);
+    if(!own)throw new ApiError(403,'device_untrusted','Недоверенное устройство.');
+    if(!/^[A-Za-z0-9_-]{86}$/.test(signature) ||
+      !await verifyDeviceSignature(own.identitySigning,
+        JSON.stringify(['bulbam/e2ee-envelope-ack/v2',conversation.conversationId,actor.userId,deviceId,rawEnvelopeId]),signature))
+      badRequest('invalid_envelope_ack','Подтверждение доставки должно быть подписано устройством.');
+    const acknowledged=await this.repository.acknowledgeDeviceEnvelope(rawEnvelopeId,
+      conversation.conversationId,actor.userId,deviceId);
+    if(!acknowledged)throw new ApiError(404,'envelope_not_found','Конверт уже прочитан или недоступен.');
+    return {acknowledged:true};
   }
 
   async registerE2eeDevice(actor:MessagingActor,raw:Record<string,unknown>){
