@@ -5,6 +5,7 @@ import { getSecureChatState } from "./secure-chat-ui.js";
 import { decryptVoiceFile, parseEncryptedVoiceMime } from "./secure-voice.js";
 import { createProtectedVoiceStream } from "./secure-voice-stream.js";
 import { effectiveVoicePositionMs, voiceSeekTargetMs } from "./voice-position.js";
+import { prepareVoiceOutput } from "./voice-output-route.js";
 
 const SPEED_KEY = "bulbam.voice.playbackRate";
 const SPEEDS = [1, 1.5, 2];
@@ -108,6 +109,7 @@ export function renderVoiceMessage(message, mine) {
     preparingProtected: null,
     protectedSession: null,
     streamingUnsupported: false,
+    audioOutput: null,
     pendingCleanupGeneration: 0,
     disposing: false
   };
@@ -187,8 +189,18 @@ export function renderVoiceMessage(message, mine) {
     if (controller.objectUrl) {
       try { URL.revokeObjectURL(controller.objectUrl); } catch {}
       controller.objectUrl=null;
-      controller.audio.src=controller.message.voice.localUrl || voiceUrl(controller.message);
-      controller.preparedSource=true;
+      if(controller.protectedMime){
+        // Never pass encrypted bytes to Safari's audio decoder on retry.
+        controller.protectedSession?.stop();
+        controller.protectedSession=null;
+        controller.audio.removeAttribute("src");
+        controller.audio.load();
+        controller.preparedSource=false;
+        controller.streamingUnsupported=true;
+      }else{
+        controller.audio.src=controller.message.voice.localUrl || voiceUrl(controller.message);
+        controller.preparedSource=true;
+      }
     }
     announce(reason);
   });
@@ -287,12 +299,21 @@ function disposeController(controller) {
   controller.remoteStaleTimer = null;
   try { controller.audio.pause(); } catch {}
   controller.protectedSession?.stop();
+  if(controller.audioOutput)void controller.audioOutput.close().catch(()=>undefined);
   controller.audio.remove();
   if (controller.objectUrl) URL.revokeObjectURL(controller.objectUrl);
 }
 
 async function togglePlayback(controller) {
   if (controller.audio.paused) {
+    // Activate the two-ear voice output during the original user tap,
+    // before any Safari media or network await can lose audio permission.
+    if (controller.protectedMime) {
+      if (!controller.audioOutput)
+        controller.audioOutput=prepareVoiceOutput(controller.audio,true);
+      if(controller.audioOutput)
+        void controller.audioOutput.resume().catch(()=>undefined);
+    }
     if (controller.protectedMime && !controller.preparedSource && !controller.streamingUnsupported) {
       try {
         if (startStreamingProtectedVoice(controller)) {

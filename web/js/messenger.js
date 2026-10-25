@@ -4,7 +4,8 @@ import { api } from "./api.js";
 import { decryptText, encryptText, importConversationSecret, isEncryptedText } from "./secure-messages.js";
 import { receiveDeviceText, sendDeviceText, resumeDeviceOutbox } from './e2ee-device-envelopes.js';
 import { isEncryptionFeatureEnabled, refreshFeatures } from './owner-features.js';
-import { shouldUseDeviceE2EE } from './message-encryption-route.js';
+import { shouldUseDeviceE2EE, checkDeviceE2EEReadiness } from './message-encryption-route.js';
+import { deviceStatus } from './device-identity.js';
 import { readEncryptedHistory } from './e2ee-history.js';
 import { decryptVoiceFile } from "./secure-voice.js";
 import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
@@ -618,6 +619,11 @@ async function sendCurrentMessage(event) {
       // A failed feature check must never silently become an unencrypted send.
       await refreshFeatures();
       deviceRoute = shouldUseDeviceE2EE(selectedChat,secure,isEncryptionFeatureEnabled());
+      if(deviceRoute) deviceRoute = await checkDeviceE2EEReadiness({
+        accountId:expectedAccount,conversationId:expectedChat,
+        recipientUserId:selectedChat.peer.userId,
+        status:()=>deviceStatus(expectedAccount),request:api
+      });
     }
   } catch (error) {
     announce("Не удалось проверить защиту переписки: " + error.message);
@@ -627,6 +633,12 @@ async function sendCurrentMessage(event) {
       secure.accountId !== expectedAccount || secure.conversationId !== expectedChat) return;
   if (!deviceRoute && secure.blocked) {
     announce("Невозможно проверить ключ переписки. Сообщение не отправлено.");
+    return;
+  }
+  // When protection is on, the unavailable device transport may fall back
+  // only to an already verified legacy encryption key, NEVER to plaintext.
+  if (!deviceRoute && !secure.sendKey && !secure.disabled) {
+    announce("Защита включена, но доверенные устройства или ключи пока недоступны. Сообщение не отправлено.");
     return;
   }
   if (!deviceRoute && !secure.sendKey && !secure.disabled &&

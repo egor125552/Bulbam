@@ -26,7 +26,8 @@ import { createRecordingClock } from "./voice-recording-clock.js";
 import { getSecureChatState } from "./secure-chat-ui.js";
 import {isEncryptionFeatureEnabled,refreshFeatures} from './owner-features.js';
 import {prepareDeviceVoice,importDeviceVoiceKey,publishDeviceVoice} from './e2ee-device-voice.js';
-import {shouldUseDeviceE2EE} from './message-encryption-route.js';
+import {shouldUseDeviceE2EE,checkDeviceE2EEReadiness} from './message-encryption-route.js';
+import {deviceStatus} from './device-identity.js';
 import {
   encryptedVoiceMime, generateVoiceNonce, encryptVoicePart,
   VOICE_PLAIN_CHUNK_BYTES, MAX_PROTECTED_VOICE_BYTES
@@ -181,7 +182,14 @@ async function startRecording(trigger) {
     // If the server cannot confirm the setting, recording is postponed.
     if(chat.kind==='direct' && !security.disabled)
       await refreshFeatures();
-    const e2eeV2=shouldUseDeviceE2EE(chat,security,isEncryptionFeatureEnabled());
+    let e2eeV2=shouldUseDeviceE2EE(chat,security,isEncryptionFeatureEnabled());
+    if(e2eeV2)e2eeV2=await checkDeviceE2EEReadiness({
+      accountId:expectedAccountId,conversationId:expectedConversationId,
+      recipientUserId:chat.peer.userId,
+      status:()=>deviceStatus(expectedAccountId),request:api
+    });
+    if(!e2eeV2 && !security.disabled && chat.kind==='direct' && !security.sendKey)
+      throw new Error('Защита включена, но доверенные устройства или ключи недоступны.');
     if(!e2eeV2 && (security.blocked || security.requiresKey))
       throw new Error('Не удалось проверить ключ переписки.');
     if (isCallActive()) {
