@@ -10,6 +10,7 @@ let foregroundTimer = null;
 export function setupPushNotifications() {
   elements.pushEnableButton.addEventListener("click", () => void enablePush());
   elements.pushDisableButton.addEventListener("click", () => void disablePush());
+  document.querySelector('#push-test')?.addEventListener('click',()=>void testPush());
 
   window.addEventListener("bulbam:account-changed", () => {
     logDiagnostic('Сеть','настройки уведомлений обновляются');
@@ -54,19 +55,15 @@ async function refreshPushState() {
     return;
   }
 
-  if (!pushSupported()) {
+  if (isIosFamily() && !isStandalone()) {
     setPushActive(false);
-    setUi("Этот браузер не поддерживает Web Push для Бульбама.", false, false);
+    setUi("На iPhone откройте Бульбам с экрана Домой, не во вкладке Safari. Только установленное веб-приложение может получать push.",false,false);
     return;
   }
 
-  if (isIosFamily() && !isStandalone()) {
+  if (!pushSupported()) {
     setPushActive(false);
-    setUi(
-      "На iPhone или iPad сначала добавьте Бульбам на экран Домой и откройте его как приложение.",
-      false,
-      false
-    );
+    setUi("Этот браузер не поддерживает Web Push для Бульбама.", false, false);
     return;
   }
 
@@ -258,4 +255,19 @@ function base64UrlToUint8Array(value) {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+async function testPush(){
+  const button=document.querySelector('#push-test');
+  const status=document.querySelector('#push-test-status');
+  if(!button||!status)return;
+  button.disabled=true;
+  status.textContent='Проверяю серверную отправку push.';
+  try{
+    const result=await api('/api/v1/push/test',{method:'POST',body:'{}'});
+    if(!result.registered)status.textContent='На сервере нет подписанных устройств. Включите уведомления в Бульбаме на этом устройстве.';
+    else if(!result.accepted)status.textContent=`Зарегистрировано устройств: ${result.registered}. Push-сервис не принял проверку. Проверьте разрешения и повторите включение.`;
+    else status.textContent=`Push-сервис принял проверку для ${result.accepted} из ${result.registered} устройств. Это не гарантия показа: сверните Бульбам и проверьте уведомления iOS.`;
+  }catch(error){status.textContent='Проверить уведомления не удалось: '+error.message;}
+  finally{button.disabled=false;}
 }

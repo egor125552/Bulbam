@@ -104,3 +104,44 @@ test('protected private chats enforce ciphertext across both devices and reject 
  expect((await api(`${path}/voice/uploads`,a,'POST',{mimeType:'application/vnd.bulbam.encrypted-voice;v=1;codec=mp4;nonce=1234567890123456',bitrateBps:64000})).status).toBe(201);
  expect((await (await api(`${path}/messages`,b)).json()).messages[0].text).toBe('Открытый текст');
 });
+
+test('immutable public identity keys and atomic automatic protection of direct chats',async()=>{
+ const [a,b,c]=await Promise.all(['alpha','beta','gamma'].map(register));
+ const chat=(await (await api('/api/v1/chats/direct',a,'POST',{userId:b.id})).json()).chat;
+ const path=`/api/v1/chats/${chat.conversationId}`;
+ const keysBefore=await api(`${path}/keys`,a);
+ expect((await keysBefore.json()).keys).toEqual({});
+ expect((await api(`${path}/keys`,c)).status).toBe(404);
+ expect((await api(`${path}/protection/auto`,a,'POST',{})).status).toBe(409);
+ const pub=async()=>{
+   const pair=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},false,['deriveBits']);
+   const key=await crypto.subtle.exportKey('jwk',pair.publicKey);
+   return {kty:key.kty,crv:key.crv,x:key.x,y:key.y};
+ };
+ const key1=await pub(),key2=await pub();
+ expect((await api('/api/v1/keys/identity',a,'PUT',{publicKey:key1})).status).toBe(200);
+ expect((await api('/api/v1/keys/identity',a,'PUT',{publicKey:key1})).status).toBe(200);
+ expect((await api('/api/v1/keys/identity',a,'PUT',{publicKey:key2})).status).toBe(409);
+ expect((await api(`${path}/protection/auto`,a,'POST',{})).status).toBe(409);
+ expect((await api('/api/v1/keys/identity',b,'PUT',{publicKey:key2})).status).toBe(200);
+ expect((await (await api(`${path}/keys`,b)).json()).keys).toEqual({[a.id]:key1,[b.id]:key2});
+ const enabled=await api(`${path}/protection/auto`,b,'POST',{});
+ expect(enabled.status).toBe(200);
+ expect((await enabled.json()).autoProtection).toBe(true);
+ expect((await api(`${path}/protection/auto`,a,'POST',{})).status).toBe(200);
+ expect((await (await api('/api/v1/chats',a)).json()).chats[0].autoProtection).toBe(true);
+ expect((await api(`${path}/protection`,a,'POST',{})).status).toBe(409);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'auto_open_0001',text:'Открытый текст'})).status).toBe(409);
+ expect((await api(`${path}/messages`,a,'POST',{clientMessageId:'auto_secret_0002',text:'bmsec1:1234567890123456.'+'A'.repeat(32)})).status).toBe(201);
+ const group=(await (await api('/api/v1/chats/groups',a,'POST',{title:'Ключи',historyMode:'all',userIds:[b.id]})).json()).chat;
+ expect((await api(`/api/v1/chats/${group.conversationId}/protection/auto`,a,'POST',{})).status).toBe(400);
+ const legacy=(await (await api('/api/v1/chats/direct',a,'POST',{userId:c.id})).json()).chat;
+ const oldPath=`/api/v1/chats/${legacy.conversationId}`;
+ expect((await api(`${oldPath}/protection`,a,'POST',{})).status).toBe(200);
+ const key3=await pub();
+ expect((await api('/api/v1/keys/identity',c,'PUT',{publicKey:key3})).status).toBe(200);
+ expect((await api(`${oldPath}/protection/auto`,c,'POST',{})).status).toBe(409);
+ const testing=await api('/api/v1/push/test',a,'POST',{});
+ expect(testing.status).toBe(200);
+ expect((await testing.json())).toMatchObject({registered:0,accepted:0});
+});

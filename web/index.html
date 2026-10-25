@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.c26ce81f9071.js">
+  <link rel="modulepreload" href="/boot.d57f759a45e4.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -365,9 +365,11 @@
         </div>
         <p id="secure-chat-status" role="status" aria-live="polite">Проверяю ключ переписки.</p>
         <button id="secure-chat-activate" type="button" hidden>Включить защиту чата</button>
+        <button id="secure-chat-enroll-auto" type="button" hidden>Включить автоматическую защиту</button>
+        <button id="secure-chat-retry-auto" type="button" hidden>Повторить автоматический обмен</button>
         <button id="secure-chat-forget" type="button" hidden>Забыть ключ на этом устройстве</button>
-        <p class="hint">Экспериментальная защита только личных переписок. После включения сервер отклоняет открытые новые сообщения и голосовые. Старые сообщения и звонки не защищены. Это не Signal: нет автоматического обмена ключами и прямой секретности.</p>
-        <p class="hint">Ключ необходимо передать собеседнику через другой надёжный канал, НЕ в сообщении Бульбама. Без ключа сообщения не восстановить. Этот ключ останется только на текущем устройстве.</p>
+        <p class="hint">Автоматический обмен ключами ECDH для личных переписок доступен на первом зарегистрированном устройстве каждого аккаунта. Это эксперимент: подключение остальных устройств пока не реализовано. После включения сервер отклоняет открытые новые сообщения и голосовые. Старые сообщения и звонки не защищены. Это не Signal: нет полноценного управления несколькими устройствами и прямой секретности.</p>
+        <p id="secure-chat-manual-hint" class="hint">Ключ необходимо передать собеседнику через другой надёжный канал, НЕ в сообщении Бульбама. Без ключа сообщения не восстановить. Этот ключ останется только на текущем устройстве.</p>
         <div id="secure-chat-onboarding">
           <button id="secure-chat-generate" type="button">Создать ключ переписки</button>
           <div class="secure-chat-import">
@@ -484,6 +486,8 @@
             <p id="push-status">Проверяю поддержку уведомлений.</p>
             <button id="push-enable" class="button-with-icon" data-icon="bell" type="button">Включить уведомления</button>
             <button id="push-disable" class="button-with-icon" data-icon="bell-off" type="button" hidden>Отключить уведомления</button>
+            <button id="push-test" type="button">Проверить доставку уведомлений</button>
+            <p id="push-test-status" role="status" aria-live="polite"></p>
           </section>
 
           <section class="card" aria-labelledby="accessibility-title">
@@ -645,7 +649,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.c26ce81f9071.js");
+      await import("/boot.d57f759a45e4.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

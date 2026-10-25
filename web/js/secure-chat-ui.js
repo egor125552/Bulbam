@@ -1,5 +1,6 @@
 import { generateConversationSecret, loadConversationKey, saveConversationKey, forgetConversationKey } from "./secure-messages.js";
 import { api } from "./api.js";
+import { deriveAutoChatKey, registerIdentity, existingIdentity } from './auto-keys.js';
 
 let selectedAccountId = null;
 let selectedConversationId = null;
@@ -8,6 +9,11 @@ let keyIsLoading = false;
 let loadFailed = false;
 let protectedHistorySeen = false;
 let serverProtected = false;
+let automaticMode = false;
+let waitingPeer = false;
+let autoError = '';
+let currentPeerId = null;
+let autoOptedIn = false;
 let groupConversation = false;
 let activationFailed = false;
 let updateMessages = null;
@@ -24,34 +30,45 @@ function setStatus(value) {
 function updatePresentation() {
   const hasChat = Boolean(selectedAccountId && selectedConversationId && !groupConversation);
   const active = Boolean(serverProtected && encryptionKey && !keyIsLoading && !loadFailed);
+  const autoPending=Boolean(currentPeerId && (autoOptedIn || automaticMode) && !encryptionKey && !serverProtected);
   const open = element("secure-chat-open");
   const label = element("secure-chat-label");
   if (open) open.hidden = !hasChat;
   if (label) {
     label.hidden = !hasChat;
-    label.textContent = active ? "Новые текстовые и голосовые сообщения защищены (эксперимент)" :
+    label.textContent = active && automaticMode ? "Автоматическая защита сообщений и голосовых включена" :
+      active ? "Новые текстовые и голосовые сообщения защищены (эксперимент)" :
+      autoPending ? "Ожидаю автоматический обмен ключами. Отправка заблокирована" :
       keyIsLoading || loadFailed || Boolean(encryptionKey && !serverProtected) ? "Защита не готова. Отправка остановлена" :
         serverProtected || protectedHistorySeen ? "Защищённый чат: для отправки нужен ключ" :
         "Обычные сообщения. Без сквозного шифрования";
   }
+  const manualHint=element('secure-chat-manual-hint');
+  if(manualHint)manualHint.hidden=automaticMode || autoPending || (!serverProtected && autoOptedIn);
   const onboarding = element("secure-chat-onboarding");
-  if (onboarding) onboarding.hidden = !hasChat || Boolean(encryptionKey) || keyIsLoading || loadFailed;
+  if (onboarding) onboarding.hidden = !hasChat || automaticMode || autoPending || Boolean(encryptionKey) || keyIsLoading || loadFailed;
   const generate = element("secure-chat-generate");
-  if (generate) generate.hidden = serverProtected || protectedHistorySeen;
+  if (generate) generate.hidden = serverProtected || protectedHistorySeen || autoPending;
   const forget = element('secure-chat-forget');
-  if(forget) forget.hidden=!hasChat || !encryptionKey;
+  if(forget) forget.hidden=!hasChat || !encryptionKey || automaticMode;
   const activate = element("secure-chat-activate");
-  if (activate) activate.hidden = !hasChat || !encryptionKey || serverProtected;
+  if (activate) activate.hidden = !hasChat || !encryptionKey || serverProtected || automaticMode;
+  const enroll=element('secure-chat-enroll-auto');
+  if(enroll)enroll.hidden=!hasChat || Boolean(encryptionKey) || serverProtected || autoOptedIn || keyIsLoading;
+  const retry=element('secure-chat-retry-auto');
+  if(retry)retry.hidden=!hasChat || !currentPeerId || (!autoOptedIn && !automaticMode) || Boolean(encryptionKey) || (!waitingPeer && !loadFailed && !autoPending);
   const recording = document.querySelector("#voice-record-button");
   const draftSend = element("voice-draft-send");
   if (recording) {
-    recording.disabled = keyIsLoading || loadFailed || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey);
+    recording.disabled = keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey);
     recording.title = active ? "Запись защищённого голосового сообщения" : "";
   }
-  if (draftSend) draftSend.disabled = keyIsLoading || loadFailed || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey);
+  if (draftSend) draftSend.disabled = keyIsLoading || loadFailed || autoPending || Boolean(encryptionKey && !serverProtected) || (serverProtected && !encryptionKey);
   if (!hasChat) setStatus("Откройте переписку.");
-  else if (keyIsLoading) setStatus("Проверяю наличие ключа на этом устройстве.");
-  else if (loadFailed) setStatus("Не удалось проверить сохранённые ключи. Обычная отправка отключена во избежание ошибки.");
+  else if (keyIsLoading) setStatus("Проверяю и автоматически согласовываю ключи с собеседником.");
+  else if (loadFailed) setStatus(autoError || "Не удалось проверить ключи. Открытая отправка отключена.");
+  else if (waitingPeer) setStatus("Жду, когда собеседник откроет обновлённый Бульбам и зарегистрирует ключ. Открытая отправка заблокирована. Нажмите «Повторить автоматический обмен» для проверки.");
+  else if (active && automaticMode) setStatus("Ключ согласован автоматически через ECDH. Сервер не знает общего секрета. На новых устройствах аккаунта потребуется отдельное безопасное подключение.");
   else if (active) setStatus("Новые текстовые и голосовые сообщения шифруются на этом устройстве. Ключ сохраняется локально; передайте его через надёжный независимый канал.");
   else if(encryptionKey && !serverProtected) setStatus("Ключ есть на устройстве, но сервер ещё не подтвердил защиту чата. Нажмите «Включить защиту чата».");
   else if (serverProtected || protectedHistorySeen) setStatus("Защищённый диалог. Введите проверенный ключ через другой канал. Открытая отправка заблокирована.");
@@ -63,9 +80,11 @@ export function getSecureChatState() {
     accountId: selectedAccountId,
     conversationId: selectedConversationId,
     key: encryptionKey,
-    blocked: keyIsLoading || loadFailed || Boolean(encryptionKey && !serverProtected),
-    requiresKey: (serverProtected || protectedHistorySeen) && !encryptionKey,
-    protected: serverProtected
+    blocked: keyIsLoading || loadFailed || Boolean(currentPeerId && autoOptedIn && !encryptionKey && !serverProtected) || Boolean(encryptionKey && !serverProtected),
+    requiresKey: (serverProtected || protectedHistorySeen || waitingPeer) && !encryptionKey,
+    protected: serverProtected,
+    automatic: automaticMode,
+    waitingPeer
   };
 }
 
@@ -75,13 +94,14 @@ export function requireProtectedConversationKey(accountId, conversationId, seen)
   updatePresentation();
 }
 
-export async function setSecureConversation(account, chat) {
+export async function setSecureConversation(account, chat, {force=false}={}) {
   // Refreshing a chat after enabling protection must NOT erase the one-time
   // secret from the still-open dialog or invalidate its freshly saved key.
-  if (account?.userId && chat?.conversationId &&
+  if (!force && account?.userId && chat?.conversationId &&
       selectedAccountId === account.userId && selectedConversationId === chat.conversationId &&
       !groupConversation && chat.kind !== 'group') {
     serverProtected = serverProtected || chat.encryptionMode === 'protected';
+    automaticMode = automaticMode || Boolean(chat.autoProtection);
     updatePresentation();
     return;
   }
@@ -89,7 +109,12 @@ export async function setSecureConversation(account, chat) {
   selectedAccountId = account?.userId ?? null;
   selectedConversationId = chat?.conversationId ?? null;
   groupConversation = chat?.kind === 'group';
+  currentPeerId=!groupConversation ? chat?.peer?.userId??null : null;
+  autoOptedIn=false;
   serverProtected = !groupConversation && chat?.encryptionMode === 'protected';
+  automaticMode=Boolean(chat?.autoProtection && serverProtected);
+  waitingPeer=false;
+  autoError='';
   activationFailed = false;
   encryptionKey = null;
   keyIsLoading = Boolean(selectedAccountId && selectedConversationId && !groupConversation);
@@ -104,8 +129,29 @@ export async function setSecureConversation(account, chat) {
     const found = await loadConversationKey(accountId, conversationId);
     if (serial !== requestSerial) return;
     encryptionKey = found;
-  } catch {
+    const identity=currentPeerId ? await existingIdentity(accountId) : null;
+    if(serial!==requestSerial)return;
+    autoOptedIn=Boolean(identity);
+    if(!found && currentPeerId &&
+       ((!serverProtected && autoOptedIn) || (serverProtected && automaticMode))){
+      const key=await deriveAutoChatKey({accountId,peerUserId:currentPeerId,conversationId});
+      if(serial!==requestSerial)return;
+      if(!key){waitingPeer=true;return;}
+      if(!serverProtected){
+        const result=await api(`/api/v1/chats/${conversationId}/protection/auto`,{
+          method:'POST',body:'{}'
+        });
+        if(serial!==requestSerial)return;
+        if(!result.autoProtection)throw new Error('Сервер не подтвердил автоматическую защиту.');
+      }
+      encryptionKey=key;
+      serverProtected=true;
+      automaticMode=true;
+      waitingPeer=false;
+    }
+  } catch(error) {
     if (serial !== requestSerial) return;
+    autoError='Автоматический обмен не удался: '+error.message;
     loadFailed = true;
   } finally {
     if (serial === requestSerial) {
@@ -171,6 +217,30 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
     }catch(error){setStatus('Не удалось удалить местный ключ: '+error.message);}
   });
   element('secure-chat-activate')?.addEventListener('click',()=>void activateProtection(selectedAccountId,selectedConversationId,requestSerial));
+  element('secure-chat-enroll-auto')?.addEventListener('click',async()=>{
+    if(!selectedAccountId||!selectedConversationId||serverProtected||autoOptedIn)return;
+    if(document.querySelector('#voice-record-button')?.getAttribute('aria-pressed')==='true'){
+      setStatus('Сначала завершите запись голосового перед сменой режима шифрования.');
+      return;
+    }
+    if(!window.confirm('Автоматическая защита пока поддерживает только первое зарегистрированное устройство аккаунта. Другой iPhone или Mac не сможет читать новые сообщения без будущей процедуры подключения. Включить на этом устройстве?'))return;
+    const serial=requestSerial;
+    try{
+      await registerIdentity(selectedAccountId);
+      if(serial!==requestSerial)return;
+      autoOptedIn=true;
+      await setSecureConversation({userId:selectedAccountId},{kind:'direct',conversationId:selectedConversationId,
+        peer:{userId:currentPeerId},encryptionMode:'plain'},{force:true});
+    }catch(error){setStatus('Не удалось включить обмен: '+error.message);}
+  });
+  element('secure-chat-retry-auto')?.addEventListener('click',()=>{
+    const account={userId:selectedAccountId};
+    const chat={conversationId:selectedConversationId,kind:'direct',
+      peer:{userId:currentPeerId},encryptionMode:serverProtected?'protected':'plain',
+      autoProtection:automaticMode};
+    if(account.userId && chat.conversationId && chat.peer.userId)
+      void setSecureConversation(account,chat,{force:true});
+  });
   dialog?.addEventListener("close", () => {
     clearGeneratedSecret();
     const input = element("secure-chat-key-input");
@@ -179,7 +249,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
   });
   element("secure-chat-generate")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    if (encryptionKey || keyIsLoading || loadFailed || !selectedConversationId ||
+    if (encryptionKey || keyIsLoading || loadFailed || !selectedConversationId || autoOptedIn ||
         serverProtected || protectedHistorySeen) return;
     if (document.querySelector("#voice-record-button")?.getAttribute("aria-pressed") === "true") {
       setStatus("Сначала завершите или отмените текущую запись голосового.");
@@ -211,7 +281,7 @@ export function setupSecureChat({ onKeyChanged, verifyCandidateKey } = {}) {
   });
   element("secure-chat-save")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    if (encryptionKey || keyIsLoading || loadFailed || !selectedConversationId) return;
+    if (encryptionKey || keyIsLoading || loadFailed || !selectedConversationId || automaticMode) return;
     if (document.querySelector("#voice-record-button")?.getAttribute("aria-pressed") === "true") {
       setStatus("Сначала завершите или отмените текущую запись голосового.");
       return;

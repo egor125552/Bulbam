@@ -125,10 +125,57 @@ export class MessagingService {
     return messages;
   }
 
+  async registerAutoIdentity(actor:MessagingActor,raw:Record<string,unknown>){
+    const key=raw.publicKey;
+    if(!key||typeof key!=='object'||Array.isArray(key))badRequest('invalid_public_key','Неверный открытый ключ устройства.');
+    const fields=key as Record<string,unknown>;
+    const canonical=JSON.stringify({kty:fields.kty,crv:fields.crv,x:fields.x,y:fields.y});
+    if(fields.kty!=='EC'||fields.crv!=='P-256'||
+      typeof fields.x!=='string'||typeof fields.y!=='string'||
+      !/^[A-Za-z0-9_-]{43}$/.test(fields.x)||!/^[A-Za-z0-9_-]{43}$/.test(fields.y))
+      badRequest('invalid_public_key','Нужен открытый ECDH P-256 ключ.');
+    const previouslyRegistered=(await this.repository.identityKeys([actor.userId])).has(actor.userId);
+    // Never permanently pin an invalid EC point. Web Crypto validates the curve.
+    try{await crypto.subtle.importKey('jwk',JSON.parse(canonical),{name:'ECDH',namedCurve:'P-256'},false,[]);}
+    catch{badRequest('invalid_public_key','Открытый ключ не принадлежит кривой P-256.');}
+    if(!await this.repository.registerIdentityKey(actor.userId,canonical))
+      throw new ApiError(409,'identity_key_conflict','У аккаунта уже есть другой ключ устройства. Не заменяем секрет незаметно.');
+    if(!previouslyRegistered){
+      const existing=await this.repository.listConversationsForUser(actor.userId,100);
+      await Promise.all(existing.map(chat=>this.realtime.publishToUsers(
+        [chat.participantAId===actor.userId?chat.participantBId:chat.participantAId],
+        {type:'chat.updated',conversationId:chat.conversationId}
+      )));
+    }
+    return {registered:true};
+  }
+
+  async autoIdentityKeys(actor:MessagingActor,rawConversationId:string){
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)badRequest('auto_keys_direct_only','Автоматический обмен доступен только личным чатам.');
+    const keys=await this.repository.identityKeys([conversation.participantAId,conversation.participantBId]);
+    return {autoProtection:conversation.autoProtection,keys:Object.fromEntries([...keys].map(([id,jwk])=>[id,JSON.parse(jwk)]))};
+  }
+
+  async activateAutoProtection(actor:MessagingActor,rawConversationId:string){
+    const conversation=await this.requireConversation(validateConversationId(rawConversationId),actor.userId);
+    if('title' in conversation)badRequest('auto_keys_direct_only','Автоматический обмен доступен только личным чатам.');
+    if(conversation.encryptionMode==='protected'&&!conversation.autoProtection)
+      throw new ApiError(409,'legacy_manual_protection','В этом чате уже включён ручной ключ. Автоматическая смена нарушила бы историю.');
+    const enabled=await this.repository.activateAutoProtection(conversation.conversationId);
+    if(!enabled)throw new ApiError(409,'auto_keys_not_ready','Для автоматической защиты оба собеседника должны зарегистрировать свои ключи.');
+    await this.realtime.publishToUsers([conversation.participantAId,conversation.participantBId],{
+      type:'chat.updated',conversationId:conversation.conversationId
+    });
+    return {encryptionMode:'protected' as const,autoProtection:true};
+  }
+
   async enableDirectProtection(actor:MessagingActor,rawConversationId:string){
     const conversationId=validateConversationId(rawConversationId);
     const conversation=await this.requireConversation(conversationId,actor.userId);
     if('title' in conversation)throw new ApiError(400,'group_encryption_not_supported','Защита групп пока не поддерживается.');
+    if(conversation.autoProtection)
+      throw new ApiError(409,'already_auto_protected','Этот чат уже защищён автоматическим обменом.');
     await this.repository.protectDirectConversation(conversationId);
     await this.realtime.publishToUsers([conversation.participantAId,conversation.participantBId],{
       type:'chat.updated',conversationId
@@ -353,6 +400,7 @@ export class MessagingService {
     return {
       kind:'direct',
       encryptionMode:conversation.encryptionMode,
+      autoProtection:conversation.autoProtection,
       conversationId: conversation.conversationId,
       peer,
       createdAt: conversation.createdAt,
