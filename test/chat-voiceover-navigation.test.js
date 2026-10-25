@@ -18,11 +18,13 @@ describe("VoiceOver navigation on long chats", () => {
 
   test("keeps chat buttons visible by constraining viewport and scrolling history only", () => {
     const css = readFileSync(new URL("../web/canonical-ui.css", import.meta.url), "utf8");
-    expect(css).toMatch(/body\.signed-in-mode\s*\{[^}]*height:\s*100dvh;[^}]*overflow:\s*hidden/);
-    expect(css).toMatch(/\.signed-in-mode \.messenger-shell\s*\{[^}]*height:\s*calc\(100dvh - 1\.2rem\)/);
+    expect(css).toMatch(/body\.signed-in-mode\s*\{[^}]*min-height:\s*0;[^}]*height:\s*var\(--bulbam-usable-height, 100dvh\)/);
+    expect(css).not.toMatch(/body\.signed-in-mode\s*\{[^}]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.signed-in-mode \.composer\s*\{[^}]*z-index:\s*4/);
+    expect(css).toMatch(/\.signed-in-mode \.messenger-shell\s*\{[^}]*height:\s*calc\(var\(--bulbam-usable-height, 100dvh\) - 1\.2rem\)/);
     expect(css).toMatch(/\.signed-in-mode \.conversation-pane\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*hidden/);
     expect(css).toMatch(/\.signed-in-mode \.message-list\s*\{[^}]*overflow-y:\s*auto/);
-    expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.messenger-shell\s*\{[^}]*height:\s*100dvh/);
+    expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.messenger-shell\s*\{[^}]*height:\s*var\(--bulbam-usable-height, 100dvh\)/);
   });
 
   test("diagnostics count is visible on demand but never announces every event", () => {

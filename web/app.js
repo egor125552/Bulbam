@@ -13,6 +13,7 @@ import { checkServer, setupHealth } from "./js/health.js";
 import { setupInvites } from "./js/invites.js";
 import { setupMessageAnnouncements } from "./js/message-announcements.js";
 import { setupMessageScroll } from "./js/message-scroll.js";
+import { setupComposerViewport } from "./js/composer-viewport.js";
 import { setupMessenger } from "./js/messenger.js";
 import { setupPushNotifications } from "./js/push.js";
 import { setupPresence } from "./js/presence.js";
@@ -38,6 +39,7 @@ export function startApp() {
   setupMessenger();
   setupMessageAnnouncements();
   setupMessageScroll();
+  setupComposerViewport();
   setupPushNotifications();
   setupPresence();
   setupVoiceSettings();

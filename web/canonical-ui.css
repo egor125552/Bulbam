@@ -25,12 +25,12 @@ body.signed-in-mode {
 
 /* The chat is one viewport-high surface. Only message history scrolls,
    so the call button and composer never disappear behind older messages. */
-body.signed-in-mode { height: 100dvh; overflow: hidden; }
+body.signed-in-mode { min-height: 0; height: var(--bulbam-usable-height, 100dvh); overflow-x: hidden; overflow-y: auto; }
 
 .signed-in-mode main {
   width: min(var(--shell-max), calc(100% - 1.2rem));
   min-height: 0;
-  height: 100dvh;
+  height: var(--bulbam-usable-height, 100dvh);
   padding: 0.6rem 0;
 }
 
@@ -43,7 +43,7 @@ body.signed-in-mode { height: 100dvh; overflow: hidden; }
 
 .signed-in-mode .messenger-shell {
   grid-template-columns: minmax(18rem, 23.5rem) minmax(0, 1fr);
-  height: calc(100dvh - 1.2rem);
+  height: calc(var(--bulbam-usable-height, 100dvh) - 1.2rem);
   min-height: 0;
   border-radius: 1.25rem;
   box-shadow: 0 22px 70px color-mix(in srgb, #000 18%, transparent);
@@ -206,6 +206,7 @@ body.signed-in-mode { height: 100dvh; overflow: hidden; }
 /* Keep the header/composer as fixed grid rows and scroll only the history. */
 .signed-in-mode .conversation-pane { height: 100%; min-height: 0; overflow: hidden; }
 .signed-in-mode .message-list { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.signed-in-mode .composer { z-index: 4; }
 
 .conversation-header { padding: 0.62rem 0.85rem; }
 
@@ -504,13 +505,13 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
   .signed-in-mode main,
   .signed-in-mode .signed-in,
   .signed-in-mode .messenger-shell {
-    min-height: 100dvh;
+    min-height: 0;
     width: 100%;
     padding: 0;
   }
 
   .signed-in-mode .messenger-shell {
-    height: 100dvh;
+    height: var(--bulbam-usable-height, 100dvh);
     min-height: 0;
     border: 0;
     border-radius: 0;
