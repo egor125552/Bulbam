@@ -8,7 +8,7 @@ import { shouldUseDeviceE2EE } from './message-encryption-route.js';
 import { readEncryptedHistory } from './e2ee-history.js';
 import { decryptVoiceFile } from "./secure-voice.js";
 import { getSecureChatState, requireProtectedConversationKey, setSecureConversation, setupSecureChat } from "./secure-chat-ui.js";
-import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
+import { chatAccessibleLabel, chatPreview, chatPreviewForConversation, chatLatestTime, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -295,12 +295,14 @@ function renderChats() {
     const preview = document.createElement("span");
     preview.className = "chat-preview";
     preview.dataset.userContent = "true";
-    const deliveryState = messageDeliveryState(chat.lastMessage, account.userId);
-    preview.textContent = [chatPreview(chat.lastMessage, account.userId), deliveryState].filter(Boolean).join(" · ");
+    const hasNewEncryptedActivity = chat.kind==='direct' &&
+      chat.lastMessageAt && chatLatestTime(chat) > (chat.lastMessage?.createdAt ?? 0);
+    const deliveryState = hasNewEncryptedActivity ? '' : messageDeliveryState(chat.lastMessage, account.userId);
+    preview.textContent = [chatPreviewForConversation(chat, account.userId), deliveryState].filter(Boolean).join(" · ");
 
     const time = document.createElement("time");
     time.className = "chat-time";
-    const lastMessageAt = chat.lastMessage?.createdAt ?? chat.lastMessageAt;
+    const lastMessageAt = chatLatestTime(chat);
     time.textContent = lastMessageAt ? chatTimeLabel(lastMessageAt) : "";
     time.hidden = !time.textContent;
     if (lastMessageAt && Number.isFinite(new Date(lastMessageAt).getTime())) {

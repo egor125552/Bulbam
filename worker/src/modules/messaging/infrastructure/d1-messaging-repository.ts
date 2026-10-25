@@ -166,6 +166,12 @@ export class D1MessagingRepository implements MessagingRepository {
        stored.nonce!==envelope.nonce||stored.recipientUserId!==envelope.recipientUserId||
        JSON.stringify(stored.ephemeralPublicKey)!==JSON.stringify(envelope.ephemeralPublicKey))
       throw new Error('ENVELOPE_IDEMPOTENCY_CONFLICT');
+    // Activity ordering can be updated without ever storing plaintext.
+    if(Number(inserted.meta?.changes??0)>0)
+      await this.db.prepare(`UPDATE conversations
+        SET last_message_at=MAX(COALESCE(last_message_at,0),?)
+        WHERE conversation_id=? AND kind='direct'`)
+        .bind(createdAt,conversationId).run();
     return {envelope:stored,created:Number(inserted.meta?.changes??0)>0};
   }
 

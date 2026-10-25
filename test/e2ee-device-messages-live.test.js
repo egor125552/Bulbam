@@ -41,6 +41,9 @@ test('actual Worker + D1: Alice encrypts, Bob decrypts, server sees only ciphert
  const secret='Бульбам: настоящий шифротекст через D1. 1234567890';
  const sent=await sendDeviceText({accountId:a.id,conversationId:chat.conversationId,recipientUserId:b.id,text:secret,request:alice});
  expect(sent.recipientDeviceCount).toBe(1);
+ const chatSummary=(await bob('/api/v1/chats')).chats.find(x=>x.conversationId===chat.conversationId);
+ expect(chatSummary.lastMessageAt).toBeGreaterThan(0);
+ expect(JSON.stringify(chatSummary)).not.toContain(secret);
  const raw=await bob(path+'?deviceId='+db.deviceId);
  await expect(bob(path+'/'+(await bob(path+'?deviceId='+db.deviceId)).envelopes[0].envelopeId+'/ack',{method:'POST',body:JSON.stringify({deviceId:db.deviceId,signature:'A'.repeat(86)})})).rejects.toMatchObject({status:400});
  expect(raw.envelopes).toHaveLength(1);

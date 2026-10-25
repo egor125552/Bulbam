@@ -54,6 +54,20 @@ export function chatPreview(lastMessage, ownUserId) {
 }
 
 
+export function chatLatestTime(chat) {
+  const legacy=validDate(chat?.lastMessage?.createdAt)?.getTime() ?? 0;
+  const activity=validDate(chat?.lastMessageAt)?.getTime() ?? 0;
+  return Math.max(legacy,activity) || null;
+}
+
+export function chatPreviewForConversation(chat,ownUserId) {
+  const previous=validDate(chat?.lastMessage?.createdAt)?.getTime() ?? 0;
+  const latest=validDate(chat?.lastMessageAt)?.getTime() ?? 0;
+  if(chat?.kind==='direct' && latest>previous)
+    return translateText('Сообщение');
+  return chatPreview(chat?.lastMessage,ownUserId);
+}
+
 export function messageDeliveryState(message, ownUserId) {
   if (!message || message.senderUserId !== ownUserId) return "";
   if (message.readAt) return translateText("прочитано");
@@ -64,9 +78,12 @@ export function messageDeliveryState(message, ownUserId) {
 export function chatAccessibleLabel(chat, ownUserId, now = new Date()) {
   const name = chat.peer?.displayName || translateText("Собеседник");
   const username = chat.peer?.username ? `@${chat.peer.username}` : "";
-  const preview = chatPreview(chat.lastMessage, ownUserId);
-  const time = chatTimeLabel(chat.lastMessage?.createdAt ?? chat.lastMessageAt, now);
-  const state = messageDeliveryState(chat.lastMessage, ownUserId);
+  const preview = chatPreviewForConversation(chat, ownUserId);
+  const time = chatTimeLabel(chatLatestTime(chat), now);
+  const encryptedActivity = chat?.kind==='direct' &&
+    (validDate(chat.lastMessageAt)?.getTime() ?? 0) >
+      (validDate(chat.lastMessage?.createdAt)?.getTime() ?? 0);
+  const state = encryptedActivity ? '' : messageDeliveryState(chat.lastMessage, ownUserId);
   return [name, username, preview, state, time, translateText("Открыть чат")].filter(Boolean).join(". ");
 }
 
