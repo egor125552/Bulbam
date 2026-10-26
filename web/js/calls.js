@@ -1663,6 +1663,8 @@ function setCallPresentation(mode) {
   elements.callDismissButton.hidden = mode !== "finished";
   const labButton=document.querySelector("#voice-lab-open");
   if(labButton)labButton.hidden=mode==="idle" || mode==="finished";
+  const bleepButton=document.querySelector("#call-bleep-toggle");
+  if(bleepButton)bleepButton.hidden=mode==="idle" || mode==="finished";
   const fullScreen = !elements.callPanel.hidden && !minimized;
   const shell = document.querySelector(".messenger-shell");
   if (shell) shell.inert = fullScreen;

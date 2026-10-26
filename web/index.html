@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
   <link rel="stylesheet" href="/canonical-ui.css?v=d6faf9500cf5" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.1cdba872ce40.js">
+  <link rel="modulepreload" href="/boot.aa4b52d72503.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -309,6 +309,7 @@
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
               <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
               <button id="voice-lab-open" type="button" class="button-with-icon" hidden>Настройки звонка</button>
+              <button id="call-bleep-toggle" type="button" class="button-with-icon" aria-pressed="false" hidden>Запикивание выключено</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
@@ -347,8 +348,10 @@
             <p class="hint" id="voice-lab-tremolo-period">Период тремоло: 200 мс</p>
           </section>
           <section id="voice-lab-reverb-options" aria-label="Параметры реверберации" class="voice-lab-options" hidden>
-            <label for="voice-lab-reverb">Количество отражений <output id="voice-lab-reverb-value">0.35</output></label>
-            <input type="range" id="voice-lab-reverb" min="0" max="1" step="0.05" value="0.35">
+            <label for="voice-lab-reverb">Сила реверберации <output id="voice-lab-reverb-value">2</output></label>
+            <input type="range" id="voice-lab-reverb" min="0" max="4" step="0.1" value="2">
+            <label for="voice-lab-reverbTail">Продолжительность отражений, секунд <output id="voice-lab-reverbTail-value">5</output></label>
+            <input type="range" id="voice-lab-reverbTail" min="0.6" max="12" step="0.2" value="5">
           </section>
           <section id="voice-lab-radio-options" aria-label="Параметры радио" class="voice-lab-options" hidden>
             <label for="voice-lab-radioNoise">Шипение рации <output id="voice-lab-radioNoise-value">0.18</output></label>
@@ -366,11 +369,9 @@
           <input type="range" id="voice-lab-y" min="-4" max="4" step="0.5" value="0">
           <label for="voice-lab-distance">Расстояние <output id="voice-lab-distance-value">1</output></label>
           <input type="range" id="voice-lab-distance" min="0.5" max="16" step="0.5" value="1">
-          <h3>Запикивание</h3>
-          <label class="voice-lab-toggle"><input id="voice-lab-auto" type="checkbox" disabled> Автоматически запикивать мат при разговоре</label>
-          <p id="voice-lab-auto-availability" class="hint">Проверяю локальное распознавание русской речи.</p>
-          <p class="hint">Эксперимент: распознавание может запаздывать или пропускать слова. Точная цензура речи без задержки не гарантируется.</p>
-          <button id="voice-lab-bleep" type="button">Запикать мой голос сейчас</button>
+          <h3>Запикивание по переключателю</h3>
+          <label class="voice-lab-toggle"><input id="voice-lab-bleep-enabled" type="checkbox"> Непрерывно запикивать мой голос</label>
+          <p class="hint">Включено: собеседник постоянно слышит сигнал вместо вашего голоса. Выключено: снова слышит ваш голос. Распознавания слов и дополнительной задержки нет.</p>
           <button id="voice-lab-reset" type="button">Сбросить эффекты</button>
           <p id="voice-lab-status" role="status" aria-live="polite"></p>
         </div>
@@ -677,7 +678,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.1cdba872ce40.js");
+      await import("/boot.aa4b52d72503.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

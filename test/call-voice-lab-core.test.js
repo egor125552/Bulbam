@@ -2,14 +2,15 @@ import {describe,expect,test} from "vitest";
 import {parseHTML} from "linkedom";
 import {readFileSync} from "node:fs";
 import {
-  VOICE_LAB_DEFAULTS,VOICE_PRESETS,hasProfanity,
-  normalizeVoiceLabState,radioNoiseBuffer,canUseLocalRussianRecognition
+  VOICE_LAB_DEFAULTS,VOICE_PRESETS,
+  normalizeVoiceLabState,radioNoiseBuffer
 } from "../web/js/call-voice-lab-core.js";
 
 describe("separate opt-in voice laboratory",()=>{
-  test("starts disabled and does not silently restore auto-censorship",()=>{
+  test("starts disabled and reverb has a strong 5-second tail",()=>{
     expect(VOICE_LAB_DEFAULTS.enabled).toBe(false);
-    expect(normalizeVoiceLabState({enabled:true,autoBleep:true}).autoBleep).toBe(false);
+    expect(VOICE_LAB_DEFAULTS.reverb).toBe(2);
+    expect(VOICE_LAB_DEFAULTS.reverbTail).toBe(5);
     expect(normalizeVoiceLabState({target:"unknown",preset:"unknown"})).toMatchObject({target:"remote",preset:"clean",enabled:false});
   });
   test("limits spatial position, distance and noise to safe numeric ranges",()=>{
@@ -28,24 +29,10 @@ describe("separate opt-in voice laboratory",()=>{
     expect(a.some(x=>x<0)).toBe(true);
     expect(new Set(a.slice(0,500)).size).toBeGreaterThan(450);
   });
-  test("recognizes whole Russian profanity stems without matching ordinary words",()=>{
-    expect(hasProfanity("ну пиздец что происходит")).toBe(true);
-    expect(hasProfanity("ПИЗДА")).toBe(true);
-    expect(hasProfanity("нахуй")).toBe(true);
-    expect(hasProfanity("хорошо, друзья")).toBe(false);
-    expect(hasProfanity("это сучок дерева")).toBe(false);
-  });
-  test("refuses non-local or missing ASR even if browser offers cloud speech",async()=>{
-    class LocalSpeech { processLocally=false; }
-    LocalSpeech.available=async()=> "available";
-    expect(await canUseLocalRussianRecognition({SpeechRecognition:LocalSpeech})).toBe(true);
-    class FakeCloudSpeech {}
-    FakeCloudSpeech.available=async()=> "available";
-    expect(await canUseLocalRussianRecognition({SpeechRecognition:FakeCloudSpeech})).toBe(false);
-    expect(await canUseLocalRussianRecognition({webkitSpeechRecognition:class {}})).toBe(false);
-    class OfflineSpeech { processLocally=false; }
-    OfflineSpeech.available=async()=> "downloadable";
-    expect(await canUseLocalRussianRecognition({SpeechRecognition:OfflineSpeech})).toBe(false);
+  test("reverb settings allow extended 12-second reflection tails",()=>{
+    const intense=normalizeVoiceLabState({reverb:100,reverbTail:300});
+    expect(intense.reverb).toBe(4);
+    expect(intense.reverbTail).toBe(12);
   });
 });
 
@@ -62,11 +49,14 @@ describe("call effects screen remains accessible and separate from messaging",()
     expect(dialog?.contains(document.getElementById("call-remote-audio"))).toBe(false);
   });
   test("every slider has a distinct label and no effect changes call controls",()=>{
-    for(const id of ["tremoloHz","reverb","radioNoise","interference","noiseFrequency","x","y","distance"]){
+    for(const id of ["tremoloHz","reverb","radioNoise","interference","noiseFrequency","reverbTail","x","y","distance"]){
       expect(document.querySelector('label[for="voice-lab-'+id+'"]')).toBeTruthy();
       expect(document.getElementById("voice-lab-"+id)?.getAttribute("type")).toBe("range");
     }
-    expect(document.querySelector("#voice-lab-auto").disabled).toBe(true);
+    expect(document.querySelector("#voice-lab-auto")).toBeNull();
     expect(document.querySelector("#voice-lab-target option[value=outgoing]")).toBeTruthy();
+    expect(document.querySelector("#voice-lab-bleep-enabled")?.getAttribute("type")).toBe("checkbox");
+    expect(document.querySelector("#call-bleep-toggle")?.getAttribute("aria-pressed")).toBe("false");
+    expect(html).not.toContain("SpeechRecognition");
   });
 });

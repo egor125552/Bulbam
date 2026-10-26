@@ -14,7 +14,8 @@ export function makeVoiceLabChain(ctx, stream, settings, destination) {
   source.connect(high);high.connect(low);low.connect(distort);distort.connect(gate);
   const dry=node(ctx.createGain()),wet=node(ctx.createGain());
   const verb=node(ctx.createConvolver());
-  verb.buffer=createImpulse(ctx);
+  let impulseTail=state.reverbTail;
+  verb.buffer=createImpulse(ctx,impulseTail);
   const speechGate=node(ctx.createGain());speechGate.gain.value=1;
   gate.connect(speechGate);speechGate.connect(dry);speechGate.connect(verb);verb.connect(wet);
   const spatial=node(ctx.createPanner());
@@ -43,8 +44,14 @@ export function makeVoiceLabChain(ctx, stream, settings, destination) {
     high.frequency.value=radio?420:interference?230:65;
     low.frequency.value=radio?2500:interference?4600:20000;
     distort.curve=radio?makeSaturation(300):null;
-    dry.gain.value=s.preset==="reverb"?0.85:1;
-    wet.gain.value=s.preset==="reverb"?s.reverb:0;
+    // Dry output is deliberately lowered at high reverb settings so the
+    // tail becomes audible instead of disappearing beneath the direct voice.
+    dry.gain.value=s.preset==="reverb"?Math.max(0.38,0.92-s.reverb*0.13):1;
+    wet.gain.value=s.preset==="reverb"?Math.min(2.5,s.reverb*0.66):0;
+    if(s.reverbTail!==impulseTail){
+      impulseTail=s.reverbTail;
+      verb.buffer=createImpulse(ctx,impulseTail);
+    }
     band.frequency.value=s.noiseFrequency;
     noiseGain.gain.value=radio?s.radioNoise:interference?s.interference:0;
     tremoloOsc.frequency.value=s.tremoloHz;
@@ -85,8 +92,12 @@ function makeSaturation(amount){
   }
   return curve;
 }
-function createImpulse(ctx){
-  const seconds=.85,length=Math.max(256,Math.floor(ctx.sampleRate*seconds));
+export function createImpulse(ctx,seconds=5){
+  // Long stereo diffuse impulse with a recognizable tail. Unlike the old
+  // 0.85-second impulse, this reaches up to 12 seconds for cathedral-style
+  // reflections, but allocates only when the tail duration changes.
+  seconds=Math.max(.6,Math.min(12,Number(seconds)||5));
+  const length=Math.max(256,Math.floor(ctx.sampleRate*seconds));
   const buffer=ctx.createBuffer(2,length,ctx.sampleRate);
   let seed=832945;
   for(let channel=0;channel<2;channel++){
@@ -94,7 +105,11 @@ function createImpulse(ctx){
     for(let i=0;i<length;i++){
       seed=(seed*1664525+1013904223)>>>0;
       const noise=(seed/2147483648)-1;
-      data[i]=noise*Math.pow(1-i/length,2.4)*0.44;
+      const t=i/ctx.sampleRate;
+      const tail=Math.exp(-4.3*t/seconds);
+      const predelay=i<Math.floor(ctx.sampleRate*.025)?0.16:1;
+      const early=(t>.055&&t<.075)||(t>.11&&t<.135)?1.35:1;
+      data[i]=noise*tail*predelay*early*0.24;
     }
   }
   return buffer;
