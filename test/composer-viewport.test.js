@@ -22,6 +22,9 @@ describe("iPhone text input with an onscreen keyboard", () => {
     const field = document.querySelector("#message-input");
     expect(document.documentElement.style.getPropertyValue("--bulbam-usable-height")).toBe("");
     field.dispatchEvent(new window.Event("focus"));
+    // Focus itself must NOT relayout the textarea. On iOS that can cancel
+    // VoiceOver activation / the software keyboard before it opens.
+    expect(document.documentElement.style.getPropertyValue("--bulbam-usable-height")).toBe("");
     viewport.height = 405;
     viewport.dispatch("resize");
     expect(document.documentElement.style.getPropertyValue("--bulbam-usable-height")).toBe("405px");

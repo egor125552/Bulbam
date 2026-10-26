@@ -25,6 +25,10 @@ describe("VoiceOver navigation on long chats", () => {
     expect(css).toMatch(/\.signed-in-mode \.conversation-pane\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*hidden/);
     expect(css).toMatch(/\.signed-in-mode \.message-list\s*\{[^}]*overflow-y:\s*auto/);
     expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.messenger-shell\s*\{[^}]*height:\s*var\(--bulbam-usable-height, 100dvh\)/);
+    // Mobile Safari must be allowed to move a focused input into view;
+    // clipping the ancestors and stickying a grid-row footer prevents that.
+    expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.conversation-pane\s*\{[^}]*overflow:\s*visible/);
+    expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.messenger-shell\s*\{[^}]*overflow:\s*visible/);
   });
 
   test("diagnostics count is visible on demand but never announces every event", () => {
