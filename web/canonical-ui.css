@@ -23,9 +23,9 @@ body.signed-in-mode {
 
 .signed-in-mode .site-header { display: none; }
 
-/* The chat is one viewport-high surface. Only message history scrolls,
-   so the call button and composer never disappear behind older messages. */
-body.signed-in-mode { min-height: 0; height: var(--bulbam-usable-height, 100dvh); overflow-x: hidden; overflow-y: auto; }
+/* The chat shell is viewport-constrained, but the document itself must keep
+   native scrolling. In iOS VoiceOver, overflow-x:hidden on an ancestor can
+   cause the rotor to locate the textarea but fail to activate it. */
 
 .signed-in-mode main {
   width: min(var(--shell-max), calc(100% - 1.2rem));

@@ -17,8 +17,23 @@ const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 12);
 const file = `boot.${hash}.js`;
 const indexPath = "web/index.html";
 const index = await readFile(indexPath, "utf8");
-const revised = index.replace(/\/boot(?:\.bundle|\.[a-f0-9]{12})?\.js/g, `/${file}`);
+// CSS URLs are content-versioned just like the JS bundle. The service worker
+// serves cached styles before background refresh, so unversioned URLs could
+// keep shipping obsolete iPhone/VoiceOver layouts after a successful deploy.
+let revised = index.replace(/\/boot(?:\.bundle|\.[a-f0-9]{12})?\.js/g, `/${file}`);
 if (revised === index && !index.includes(`/${file}`)) throw Error("Boot import not found in HTML");
+for (const stylesheet of ["styles.css", "canonical-ui.css"]) {
+  const cssHash = createHash("sha256")
+    .update(await readFile(`web/${stylesheet}`))
+    .digest("hex").slice(0, 12);
+  const pattern = stylesheet === "styles.css"
+    ? /href="\/styles\.css(?:\?v=[a-f0-9]{12})?"/g
+    : /href="\/canonical-ui\.css(?:\?v=[a-f0-9]{12})?"/g;
+  const before = revised;
+  revised = revised.replace(pattern, `href="/${stylesheet}?v=${cssHash}"`);
+  if (before === revised && !revised.includes(`/${stylesheet}?v=${cssHash}`))
+    throw Error(`Stylesheet reference not found for ${stylesheet}`);
+}
 const oldBundles = (await readdir("web")).filter((name) => /^boot\.[a-f0-9]{12}\.js$/.test(name));
 const swPath = "web/sw.js";
 const swOriginal = await readFile(swPath, "utf8");
