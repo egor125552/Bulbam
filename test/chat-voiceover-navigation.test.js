@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { parseHTML } from "linkedom";
 import { describe, expect, test } from "vitest";
 
@@ -18,8 +19,13 @@ describe("VoiceOver navigation on long chats", () => {
 
   test("keeps chat buttons visible by constraining viewport and scrolling history only", () => {
     const css = readFileSync(new URL("../web/canonical-ui.css", import.meta.url), "utf8");
-    expect(css).toMatch(/body\.signed-in-mode\s*\{[^}]*min-height:\s*0;[^}]*height:\s*var\(--bulbam-usable-height, 100dvh\)/);
-    expect(css).not.toMatch(/body\.signed-in-mode\s*\{[^}]*overflow:\s*hidden/);
+    // iOS VoiceOver can select but fail to activate an offscreen field inside
+    // an overflow-x:hidden ancestor. The document must retain native scrolling.
+    const bodyRules = [...css.matchAll(/body\.signed-in-mode\s*\{([^}]*)\}/g)].map((match) => match[1]);
+    for (const rule of bodyRules) {
+      expect(rule).not.toMatch(/(?:min-)?height\s*:/);
+      expect(rule).not.toMatch(/overflow(?:-[xy])?\s*:/);
+    }
     expect(css).toMatch(/\.signed-in-mode \.composer\s*\{[^}]*z-index:\s*4/);
     expect(css).toMatch(/\.signed-in-mode \.messenger-shell\s*\{[^}]*height:\s*calc\(var\(--bulbam-usable-height, 100dvh\) - 1\.2rem\)/);
     expect(css).toMatch(/\.signed-in-mode \.conversation-pane\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*hidden/);
@@ -29,6 +35,15 @@ describe("VoiceOver navigation on long chats", () => {
     // clipping the ancestors and stickying a grid-row footer prevents that.
     expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.conversation-pane\s*\{[^}]*overflow:\s*visible/);
     expect(css).toMatch(/@media \(max-width: 48rem\)[\s\S]*?\.signed-in-mode \.messenger-shell\s*\{[^}]*overflow:\s*visible/);
+  });
+
+  test("ships content-versioned stylesheets instead of stale Service Worker CSS", () => {
+    for (const asset of ["styles.css", "canonical-ui.css"]) {
+      const data = readFileSync(new URL(`../web/${asset}`, import.meta.url));
+      const hash = createHash("sha256").update(data).digest("hex").slice(0, 12);
+      const link = document.querySelector(`link[href^="/${asset}"]`);
+      expect(link?.getAttribute("href")).toBe(`/${asset}?v=${hash}`);
+    }
   });
 
   test("diagnostics count is visible on demand but never announces every event", () => {
