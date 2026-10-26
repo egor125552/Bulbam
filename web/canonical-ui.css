@@ -513,6 +513,7 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
   .signed-in-mode .messenger-shell {
     height: var(--bulbam-usable-height, 100dvh);
     min-height: 0;
+    overflow: visible;
     border: 0;
     border-radius: 0;
     box-shadow: none;
@@ -521,6 +522,10 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
   .sidebar-brand { padding-top: calc(0.75rem + env(safe-area-inset-top)); }
   .chat-sidebar,
   .conversation-pane { height: 100%; min-height: 0; }
+  /* Keep the scroll inside the message list, but never clip the textarea's
+     native Safari focus/keyboard scrolling at the shell or pane boundary. */
+  .signed-in-mode .conversation-pane { overflow: visible; }
+  .signed-in-mode .composer { position: relative; bottom: auto; }
   .conversation-header { padding-top: calc(0.55rem + env(safe-area-inset-top)); }
   .message-list { padding-inline: 0.6rem; }
 

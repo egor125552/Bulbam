@@ -20,13 +20,16 @@ export function setupComposerViewport({ document: doc = document, window: win = 
     if (root.style.getPropertyValue(property) !== value)
       root.style.setProperty(property, value);
   };
-  const focus = () => { editing = true; update(); };
+  // Let iOS finish focusing the textarea and opening its keyboard before
+  // changing layout. A synchronous CSS height write during focus can disrupt
+  // VoiceOver's activation in a nested scroll/grid layout.
+  const focus = () => { editing = true; };
   const blur = () => { editing = false; update(); };
   field.addEventListener("focus", focus);
   field.addEventListener("blur", blur);
   viewport.addEventListener("resize", update);
   viewport.addEventListener("scroll", update);
-  update();
+  // No geometry writes on initial setup or during the focus event.
   return () => {
     field.removeEventListener("focus", focus);
     field.removeEventListener("blur", blur);
