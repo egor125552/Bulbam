@@ -19,6 +19,10 @@ import {
   tuneAudioSender
 } from "./audio-profiles.js";
 import { announce, elements, getCurrentSession } from "./ui.js";
+import {
+  setupCallVoiceLab, refreshVoiceLabCall, stopVoiceLabCall,
+  pauseVoiceLabForMicSwitch, setVoiceLabMuted
+} from "./call-voice-lab.js";
 
 let account = null;
 let currentCall = null;
@@ -126,6 +130,12 @@ function restoreCallAudioOnReturn() {
 }
 
 export function setupCalls() {
+  setupCallVoiceLab(() => ({
+    callId: currentCall?.callId,
+    pc: peerConnection,
+    localStream,
+    remoteAudio: elements.callRemoteAudio
+  }));
   window.addEventListener("pagehide", markCallAudioInterrupted);
   window.addEventListener("pageshow", restoreCallAudioOnReturn);
   document.addEventListener("visibilitychange", () => {
@@ -826,6 +836,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     }
   }
 
+  void refreshVoiceLabCall();
   pc.addEventListener("icecandidate", (event) => {
     if (!event.candidate || !currentCall || peerConnection !== pc) return;
     const candidate = event.candidate;
@@ -864,6 +875,7 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     logCallEvent("SDP ответ", "удалённая аудиодорожка");
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     elements.callRemoteAudio.srcObject = stream;
+    void refreshVoiceLabCall();
     applyJitterBufferTargetToReceiver(event.receiver, jitterBufferTargetMs);
     void Promise.resolve().then(() => elements.callRemoteAudio.play()).then(() => {
       if (peerConnection !== pc) return;
@@ -1145,6 +1157,7 @@ function applyAudioProfileDuringCall() {
   // appearing to apply only on the *next* quality change.
   profileSwitchQueue = profileSwitchQueue.catch(() => {}).then(async () => {
     if (epoch !== profileSwitchEpoch) return;
+    await pauseVoiceLabForMicSwitch();
     const oldStream = localStream;
     const track = oldStream?.getAudioTracks?.()[0];
     if (!track || !currentCall) return;
@@ -1190,6 +1203,10 @@ function applyAudioProfileDuringCall() {
       trace('непредвиденная ошибка переключения',mediaErrorCategory(error));
       logDiagnostic("Микрофон", "ошибка переключения", mediaErrorCategory(error));
       if (currentCall?.callId === callId) announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
+    } finally {
+      // New microphone and old processing sources may differ. Re-attach only
+      // to the current stream; failure never prevents normal WebRTC audio.
+      void refreshVoiceLabCall();
     }
   });
   return profileSwitchQueue;
@@ -1644,6 +1661,8 @@ function setCallPresentation(mode) {
   elements.callMinimizeButton.hidden = !canMinimize || minimized;
   elements.callExpandButton.hidden = !canMinimize || !minimized;
   elements.callDismissButton.hidden = mode !== "finished";
+  const labButton=document.querySelector("#voice-lab-open");
+  if(labButton)labButton.hidden=mode==="idle" || mode==="finished";
   const fullScreen = !elements.callPanel.hidden && !minimized;
   const shell = document.querySelector(".messenger-shell");
   if (shell) shell.inert = fullScreen;
@@ -1730,6 +1749,7 @@ function setMuted(nextMuted) {
   if (next === muted) return;
   muted = next;
   for (const track of localStream.getAudioTracks()) track.enabled = !muted;
+  setVoiceLabMuted(muted);
   elements.callMuteButton.textContent = muted ? "Включить микрофон" : "Выключить микрофон";
   elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
   headsetControls?.updateMuted(muted);
@@ -1737,6 +1757,7 @@ function setMuted(nextMuted) {
 }
 
 function cleanupMedia() {
+  stopVoiceLabCall();
   initialConnectionWatchdog.disarm();
   recoveryGate.reset();
   networkRestoration.reset();
@@ -1808,6 +1829,7 @@ function stopLocalStream() {
 }
 
 function resetCallRuntime() {
+  stopVoiceLabCall();
   initialConnectionWatchdog.disarm();
   recoveryGate.reset();
   networkRestoration.reset();

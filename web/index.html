@@ -9,8 +9,8 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
-  <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.3b79ffc9b29c.js">
+  <link rel="stylesheet" href="/canonical-ui.css?v=d6faf9500cf5" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.1cdba872ce40.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -308,6 +308,7 @@
               <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
               <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
+              <button id="voice-lab-open" type="button" class="button-with-icon" hidden>Настройки звонка</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
@@ -315,6 +316,65 @@
           </section>
 
   
+      <!-- Independent opt-in voice-lab dialog. Never changes default call routing. -->
+      <dialog id="voice-lab-dialog" class="voice-lab-dialog" aria-labelledby="voice-lab-title" aria-describedby="voice-lab-description">
+        <div class="voice-lab-heading">
+          <div>
+            <h2 id="voice-lab-title" tabindex="-1">Создать голос · экспериментально</h2>
+            <p id="voice-lab-description">Эффекты настраиваются здесь. Ваш обработанный голос слышит собеседник, а обработанный голос собеседника слышите только вы. Без включения обработки звук остаётся обычным.</p>
+          </div>
+          <button id="voice-lab-close" type="button">Закрыть</button>
+        </div>
+        <div class="voice-lab-form">
+          <label class="voice-lab-toggle"><input id="voice-lab-enabled" type="checkbox"> Включить голосовые эффекты</label>
+          <label for="voice-lab-target">Чей звук изменять?</label>
+          <select id="voice-lab-target">
+            <option value="remote">Голос собеседника у меня в наушниках</option>
+            <option value="outgoing">Мой голос, который слышит собеседник</option>
+          </select>
+          <h3>Готовые голоса</h3>
+          <label for="voice-lab-preset">Эффект</label>
+          <select id="voice-lab-preset">
+            <option value="clean">Без эффекта</option>
+            <option value="tremolo">Тремоло, периодическая дрожь громкости</option>
+            <option value="reverb">Реверберация, пространство</option>
+            <option value="radio">Рация, шипение и узкая полоса голоса</option>
+            <option value="interference">Радиопомехи и белый шум</option>
+          </select>
+          <section id="voice-lab-tremolo-options" aria-label="Параметры тремоло" class="voice-lab-options" hidden>
+            <label for="voice-lab-tremoloHz">Частота тремоло, герц <output id="voice-lab-tremoloHz-value">5</output></label>
+            <input type="range" id="voice-lab-tremoloHz" min="0.4" max="18" step="0.2" value="5">
+            <p class="hint" id="voice-lab-tremolo-period">Период тремоло: 200 мс</p>
+          </section>
+          <section id="voice-lab-reverb-options" aria-label="Параметры реверберации" class="voice-lab-options" hidden>
+            <label for="voice-lab-reverb">Количество отражений <output id="voice-lab-reverb-value">0.35</output></label>
+            <input type="range" id="voice-lab-reverb" min="0" max="1" step="0.05" value="0.35">
+          </section>
+          <section id="voice-lab-radio-options" aria-label="Параметры радио" class="voice-lab-options" hidden>
+            <label for="voice-lab-radioNoise">Шипение рации <output id="voice-lab-radioNoise-value">0.18</output></label>
+            <input type="range" id="voice-lab-radioNoise" min="0" max="0.65" step="0.05" value="0.18">
+            <label for="voice-lab-interference">Сила радиопомех <output id="voice-lab-interference-value">0.15</output></label>
+            <input type="range" id="voice-lab-interference" min="0" max="0.7" step="0.05" value="0.15">
+            <label for="voice-lab-noiseFrequency">Частота помех, герц <output id="voice-lab-noiseFrequency-value">1800</output></label>
+            <input type="range" id="voice-lab-noiseFrequency" min="250" max="5200" step="50" value="1800">
+          </section>
+          <h3>Пространство</h3>
+          <p class="hint">В наушниках панорама выражена лучше. На одном динамике высота и глубина могут не различаться.</p>
+          <label for="voice-lab-x">Влево / вправо <output id="voice-lab-x-value">0</output></label>
+          <input type="range" id="voice-lab-x" min="-4" max="4" step="0.5" value="0">
+          <label for="voice-lab-y">Вниз / вверх <output id="voice-lab-y-value">0</output></label>
+          <input type="range" id="voice-lab-y" min="-4" max="4" step="0.5" value="0">
+          <label for="voice-lab-distance">Расстояние <output id="voice-lab-distance-value">1</output></label>
+          <input type="range" id="voice-lab-distance" min="0.5" max="16" step="0.5" value="1">
+          <h3>Запикивание</h3>
+          <label class="voice-lab-toggle"><input id="voice-lab-auto" type="checkbox" disabled> Автоматически запикивать мат при разговоре</label>
+          <p id="voice-lab-auto-availability" class="hint">Проверяю локальное распознавание русской речи.</p>
+          <p class="hint">Эксперимент: распознавание может запаздывать или пропускать слова. Точная цензура речи без задержки не гарантируется.</p>
+          <button id="voice-lab-bleep" type="button">Запикать мой голос сейчас</button>
+          <button id="voice-lab-reset" type="button">Сбросить эффекты</button>
+          <p id="voice-lab-status" role="status" aria-live="polite"></p>
+        </div>
+      </dialog>
       <dialog id="group-editor" aria-labelledby="group-editor-title" class="group-dialog">
         <form id="group-editor-form" class="form-stack">
           <h2 id="group-editor-title" tabindex="-1">Создать группу</h2>
@@ -617,7 +677,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.3b79ffc9b29c.js");
+      await import("/boot.1cdba872ce40.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
