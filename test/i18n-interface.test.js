@@ -78,3 +78,14 @@ describe("Belarusian localization",()=>{
     expect(translateText("Вы вошли как Настя.")).toBe("Вы ўвайшлі як Настя.");
   });
 });
+
+test("translates dynamic group interface phrases",()=>{
+  prepare('<!doctype html><html lang="ru"><body></body></html>');
+  setupI18n();
+  setLanguage("be");
+  expect(translateText("3 участников")).toBe("3 удзельнікаў");
+  expect(translateText("2 в сети")).toBe("2 у сетцы");
+  expect(translateText("Выбрано: 4")).toBe("Выбрана: 4");
+  expect(translateText("Участники группы Друзья")).toBe("Удзельнікі групы Друзья");
+  expect(translateText("Исключить Светлана из группы")).toBe("Выключыць Светлана з групы");
+});

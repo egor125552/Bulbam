@@ -148,7 +148,7 @@ export function announce(message) {
   if (message === VOICE_RESUMED_MESSAGE) {
     clearTimeout(bufferingAnnouncementTimer);
     bufferingAnnouncementTimer = null;
-    if (elements.liveStatus.textContent === VOICE_BUFFERING_MESSAGE) {
+    if (originalText(elements.liveStatus.textContent) === VOICE_BUFFERING_MESSAGE) {
       elements.liveStatus.textContent = "";
     }
     return;

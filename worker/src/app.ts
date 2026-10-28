@@ -22,7 +22,7 @@ import { PresenceService, handlePresenceHttp } from "./modules/presence/presence
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
-const VERSION = "0.7.0-continuity-i18n-recovery";
+const VERSION = "0.7.3";
 
 function storageBindingMissing(): Response {
   return json({ ok: false, error: { code: "storage_binding_missing", message: "Хранилище D1 не подключено к Worker." } }, { status: 503 });
