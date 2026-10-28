@@ -205,7 +205,9 @@ async function loadChats({ quiet = false } = {}) {
     chats = result.chats ?? [];
     logTraceEvent('Сервер','список чатов получен','',{count:chats.length});
     if (selectedChat) {
-      selectedChat = chats.find((chat) => chat.conversationId === selectedChat.conversationId) ?? selectedChat;
+      const refreshed = chats.find((chat) => chat.conversationId === selectedChat.conversationId);
+      if (refreshed) selectedChat = refreshed;
+      else closeSelectedConversation();
     }
     renderChats();
   } catch (error) {
@@ -243,7 +245,7 @@ function renderChats() {
     const username = document.createElement("span");
     username.className = "chat-username";
     username.dataset.userContent = "true";
-    username.textContent = chat.kind==='group'?`${chat.members?.length??0} участников`:`@${chat.peer.username}`;
+    username.textContent = chat.kind==='group'?translateText(`${chat.members?.length??0} участников`):`@${chat.peer.username}`;
 
     const preview = document.createElement("span");
     preview.className = "chat-preview";
@@ -321,6 +323,7 @@ function renderConversation() {
     const groupInfo=document.querySelector('#group-info-open');
     if(groupInfo)groupInfo.hidden=true;
     elements.messageForm.hidden = true;
+    elements.callStartButton.hidden = true;
     delete elements.messageForm.dataset.conversationId;
     delete elements.messageForm.dataset.chatKind;
     delete elements.conversationTitle.dataset.avatarIcon;
@@ -332,7 +335,7 @@ function renderConversation() {
   elements.conversationTitle.dataset.avatarIcon = chat.kind==='group'?chat.avatarIcon??'👥':'';
   elements.conversationTitle.textContent = chat.kind==='group'?chat.title:chat.peer.displayName;
   elements.conversationPeer.textContent = chat.kind==='group'
-    ? `${chat.members?.length??0} участников · ${groupPresenceLabel(chat)}`
+    ? translateText(`${chat.members?.length??0} участников · ${groupPresenceLabel(chat)}`)
     : `@${chat.peer.username} · ${presenceLabel(chat.peer.userId)}`;
   const groupInfo=document.querySelector('#group-info-open');
   if(groupInfo)groupInfo.hidden=chat.kind!=='group';
@@ -342,18 +345,26 @@ function renderConversation() {
   renderMessages();
 }
 
+function closeSelectedConversation() {
+  selectedChat = null;
+  messages = [];
+  resetVoicePlayers();
+  renderConversation();
+  window.dispatchEvent(new CustomEvent("bulbam:chat-changed", { detail: { chat: null } }));
+}
+
 function presenceLabel(userId) {
   return presenceByUserId.get(userId)?.label ?? translateText("Статус неизвестен");
 }
 
 function peerChatLabel(chat) {
-  if(chat.kind==='group')return `Группа ${chat.title}. ${chat.members?.length??0} участников. ${groupPresenceLabel(chat)}. ${chatPreview(chat.lastMessage,account?.userId)}. Открыть чат`;
+  if(chat.kind==='group')return translateText(`Группа ${chat.title}. ${chat.members?.length??0} участников. ${groupPresenceLabel(chat)}. ${chatPreview(chat.lastMessage,account?.userId)}. Открыть чат`);
   return chatAccessibleLabel(chat, account?.userId) + ". " + presenceLabel(chat.peer.userId);
 }
 function groupPresenceLabel(chat){
   const count=(chat.members??[]).filter(member=>member.userId===account?.userId
     ?document.visibilityState==='visible':presenceByUserId.get(member.userId)?.online===true).length;
-  return `${count} в сети`;
+  return translateText(`${count} в сети`);
 }
 
 function updatePeerPresence() {
@@ -367,7 +378,7 @@ function updatePeerPresence() {
     button.setAttribute("aria-label",peerChatLabel(chat));
   }
   if(selectedChat)elements.conversationPeer.textContent=selectedChat.kind==='group'
-    ? `${selectedChat.members?.length??0} участников · ${groupPresenceLabel(selectedChat)}`
+    ? translateText(`${selectedChat.members?.length??0} участников · ${groupPresenceLabel(selectedChat)}`)
     : `@${selectedChat.peer.username} · ${presenceLabel(selectedChat.peer.userId)}`;
 }
 
@@ -621,7 +632,7 @@ function connectRealtime() {
       logDiagnostic("Сервер", "событие новое сообщение");
       handleRealtimeMessage(payload);
     } else if(payload?.type==='chat.removed'){
-      if(selectedChat?.conversationId===payload.conversationId){selectedChat=null;messages=[];renderConversation();}
+      if(selectedChat?.conversationId===payload.conversationId)closeSelectedConversation();
       void loadChats({quiet:true});
     } else if(payload?.type==='chat.created'||payload?.type==='chat.updated'){
       void loadChats({quiet:true});
@@ -804,8 +815,8 @@ function openGroupEditor(mode){
   }
   const editor=document.querySelector('#group-editor');
   document.querySelector('#group-create-fields').hidden=mode==='add';
-  document.querySelector('#group-editor-title').textContent=mode==='add'?'Добавить участников':'Создать группу';
-  document.querySelector('#group-submit').textContent=mode==='add'?'Добавить участников':'Создать группу';
+  document.querySelector('#group-editor-title').textContent=translateText(mode==='add'?'Добавить участников':'Создать группу');
+  document.querySelector('#group-submit').textContent=translateText(mode==='add'?'Добавить участников':'Создать группу');
   document.querySelector('#group-user-search').value='';
   document.querySelector('#group-editor-status').textContent='';
   if(mode==='create'){
@@ -832,15 +843,15 @@ async function searchGroupUsers(query){
 
 function renderGroupChoices(){
   const count=document.querySelector('#group-selected-count');
-  count.textContent=`Выбрано: ${groupSelected.size}`;
+  count.textContent=translateText(`Выбрано: ${groupSelected.size}`);
   const picked=document.querySelector('#group-picked-users');
   picked.replaceChildren();
   for(const id of groupSelected){
     const user=groupCandidates.get(id);
     if(!user)continue;
     const li=document.createElement('li');const button=document.createElement('button');
-    button.type='button';button.textContent=`${user.displayName} · Убрать`;
-    button.setAttribute('aria-label',`Убрать ${user.displayName} из выбранных`);
+    button.type='button';button.textContent=translateText(`${user.displayName} · Убрать`);
+    button.setAttribute('aria-label',translateText(`Убрать ${user.displayName} из выбранных`));
     button.addEventListener('click',()=>{groupSelected.delete(id);renderGroupChoices();});
     li.append(button);picked.append(li);
   }
@@ -851,24 +862,24 @@ function renderGroupChoices(){
     const li=document.createElement('li');const button=document.createElement('button');
     button.type='button';button.className='group-user-choice';
     button.setAttribute('aria-pressed',String(groupSelected.has(user.userId)));
-    button.textContent=`${user.displayName}, @${user.username}${groupSelected.has(user.userId)?' · Выбран':''}`;
+    button.textContent=`${user.displayName}, @${user.username}${groupSelected.has(user.userId)?translateText(' · Выбран'):''}`;
     button.addEventListener('click',()=>{if(groupSelected.has(user.userId))groupSelected.delete(user.userId);else groupSelected.add(user.userId);renderGroupChoices();});
     li.append(button);list.append(li);
   }
-  if(!users.length){const li=document.createElement('li');li.textContent='Совпадений нет. Найдите человека по имени.';list.append(li);}
+  if(!users.length){const li=document.createElement('li');li.textContent=translateText('Совпадений нет. Найдите человека по имени.');list.append(li);}
 }
 
 async function saveGroup(event){
   event.preventDefault();
   const status=document.querySelector('#group-editor-status');
   const submit=document.querySelector('#group-submit');
-  if(!groupSelected.size){status.textContent='Выберите хотя бы одного участника.';return;}
+  if(!groupSelected.size){status.textContent=translateText('Выберите хотя бы одного участника.');return;}
   const create=groupEditorMode==='create';
   const title=document.querySelector('#group-title-input').value.trim();
-  if(create&&!title){status.textContent='Введите название группы.';return;}
+  if(create&&!title){status.textContent=translateText('Введите название группы.');return;}
   const conversationId=groupEditorConversation;
   const accountId=account?.userId;
-  submit.disabled=true;status.textContent=create?'Создаём группу…':'Добавляем участников…';
+  submit.disabled=true;status.textContent=translateText(create?'Создаём группу…':'Добавляем участников…');
   try{
     const url=create?'/api/v1/chats/groups':`/api/v1/chats/${conversationId}/members`;
     const payload=create?{
@@ -884,7 +895,7 @@ async function saveGroup(event){
       selectedChat=chats.find(c=>c.conversationId===conversationId)??selectedChat;
       renderConversation();await loadMessages({quiet:true});
     }
-    announce(create?'Группа создана.':'Участники добавлены.');
+    announce(translateText(create?'Группа создана.':'Участники добавлены.'));
   }catch(error){status.textContent=`Не удалось сохранить группу: ${error.message}`;}
   finally{submit.disabled=false;}
 }
@@ -893,7 +904,7 @@ async function openGroupMembers(){
   if(selectedChat?.kind!=='group')return;
   const id=selectedChat.conversationId;
   const dialog=document.querySelector('#group-members-dialog');
-  document.querySelector('#group-members-title').textContent=`Участники группы ${selectedChat.title}`;
+  document.querySelector('#group-members-title').textContent=translateText(`Участники группы ${selectedChat.title}`);
   document.querySelector('#group-members-presence').textContent=groupPresenceLabel(selectedChat);
   document.querySelector('#group-members-add').hidden=selectedChat.ownerUserId!==account?.userId;
   const list=document.querySelector('#group-members-list');list.replaceChildren();
@@ -920,8 +931,8 @@ function renderGroupMembersList(list){
     const isMe=member.userId===account?.userId;
     if(member.userId!==selectedChat.ownerUserId&&(owner||isMe)){
       const action=document.createElement('button');action.type='button';
-      action.textContent=isMe?'Выйти из группы':'Исключить из группы';
-      action.setAttribute('aria-label',isMe?'Выйти из группы':`Исключить ${member.displayName} из группы`);
+      action.textContent=translateText(isMe?'Выйти из группы':'Исключить из группы');
+      action.setAttribute('aria-label',translateText(isMe?'Выйти из группы':`Исключить ${member.displayName} из группы`));
       action.addEventListener('click',()=>void removeGroupUser(member));
       li.append(action);
     }
@@ -938,8 +949,8 @@ async function removeGroupUser(member){
     await api(`/api/v1/chats/${id}/members/${member.userId}`,{method:'DELETE'});
     if(selectedChat?.conversationId!==id)return;
     document.querySelector('#group-members-dialog').close();
-    if(own){selectedChat=null;messages=[];renderConversation();}
+    if(own)closeSelectedConversation();
     await loadChats({quiet:true});
-    announce(own?'Вы вышли из группы.':'Участник исключён из группы.');
+    announce(translateText(own?'Вы вышли из группы.':'Участник исключён из группы.'));
   }catch(error){announce(`Не удалось изменить состав группы: ${error.message}`);}
 }

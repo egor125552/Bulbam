@@ -571,3 +571,31 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
   border-radius: 0;
 }
 #settings-dialog .settings-grid { grid-template-columns: 1fr; }
+
+
+/* The opt-in voice lab is not part of the call screen's WebRTC focus lifecycle. */
+.voice-lab-dialog {
+  width: min(38rem, calc(100vw - 1rem));
+  max-width: 100%;
+  max-height: min(90dvh, 50rem);
+  overflow: auto;
+  color: CanvasText;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.15rem;
+}
+.voice-lab-dialog::backdrop { background: rgb(0 0 0 / 0.52); }
+.voice-lab-heading { display: flex; gap: 0.8rem; align-items: start; justify-content: space-between; }
+.voice-lab-heading h2 { margin: 0 0 0.35rem; font-size: 1.25rem; }
+.voice-lab-heading p { margin: 0 0 0.8rem; line-height: 1.45; }
+.voice-lab-form { display: flex; flex-direction: column; gap: 0.65rem; }
+.voice-lab-form h3 { margin: 0.7rem 0 0.1rem; font-size: 1.08rem; }
+.voice-lab-form > input[type="range"], .voice-lab-options > input[type="range"] { width: 100%; min-height: 2rem; }
+.voice-lab-form select, .voice-lab-form button { min-height: 2.75rem; }
+.voice-lab-toggle { display: flex; align-items: center; gap: 0.7rem; min-height: 2.7rem; }
+.voice-lab-toggle input { width: 1.35rem; height: 1.35rem; }
+.voice-lab-options { display: grid; gap: 0.6rem; padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: 0.6rem; }
+.voice-lab-options[hidden] { display: none; }
+.voice-lab-form output { font-variant-numeric: tabular-nums; }
+@media (max-width: 48rem) { .voice-lab-dialog { width: 100%; max-height: 92dvh; padding: 0.9rem; } }

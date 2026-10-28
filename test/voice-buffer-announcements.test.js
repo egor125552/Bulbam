@@ -55,3 +55,10 @@ async function loadUi() {
   const module = await import("../web/js/ui.js");
   return { announce: module.announce, liveStatus };
 }
+test("clears an already translated Belarusian buffering status after playback resumes", async () => {
+  vi.useFakeTimers();
+  const { announce, liveStatus } = await loadUi();
+  liveStatus.textContent = "Буферызацыя галасавога паведамлення.";
+  announce("Воспроизведение голосового продолжено.");
+  expect(liveStatus.textContent).toBe("");
+});
