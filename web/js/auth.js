@@ -65,9 +65,11 @@ function restoreUsernameHint() {
   if (adminRecoveryInput && !adminRecoveryInput.value) adminRecoveryInput.value = username;
 }
 
-export function showRecoveryCodes(codes) {
+export function showRecoveryCodes(codes, { afterRecovery = false } = {}) {
   if (!Array.isArray(codes) || !codes.length) {
-    announce("Не удалось получить резервные коды. Создайте их в настройках безопасности.");
+    announce(afterRecovery
+      ? "Пароль восстановлен. Старые сеансы и ключи доступа отключены. Новые резервные коды не созданы. Создайте их в настройках безопасности."
+      : "Не удалось получить резервные коды. Создайте их в настройках безопасности.");
     return;
   }
   visibleRecoveryCodes = [...codes];
@@ -77,7 +79,9 @@ export function showRecoveryCodes(codes) {
   area.value = codes.join("\n");
   dialog.showModal();
   document.querySelector("#recovery-codes-title")?.focus();
-  announce("Восемь резервных кодов созданы. Сохраните их. Повторно посмотреть их нельзя.");
+  announce(afterRecovery
+    ? "Пароль восстановлен. Старые устройства и ключи доступа отключены. Сохраните восемь новых резервных кодов. Прежние ключи доступа нужно создать заново."
+    : "Восемь резервных кодов созданы. Сохраните их. Повторно посмотреть их нельзя.");
 }
 
 export function setupAuth() {
@@ -350,8 +354,7 @@ async function recoverWithCode(event) {
     clearAuthCheckProblem();
     showSignedIn(result.account, result.session);
     rememberUsername(result.account);
-    announce("Пароль восстановлен. Вы вошли в прежний аккаунт. Старые устройства отключены.");
-    showRecoveryCodes(result.recoveryCodes);
+    showRecoveryCodes(result.recoveryCodes, { afterRecovery: true });
     await loadSessions({ quiet: true });
   } catch (error) {
     announce(`Не удалось восстановить аккаунт: ${error.message}`);
@@ -371,7 +374,7 @@ async function changePassword(event) {
       method: "POST", body: JSON.stringify({ newPassword })
     });
     form.reset();
-    announce("Пароль изменён. Другие устройства отключены, прежние резервные коды недействительны. Создайте новые коды.");
+    announce("Пароль изменён. Другие устройства и прежние ключи доступа отключены, старые резервные коды недействительны. Создайте новые коды и при необходимости добавьте ключи доступа заново.");
     await loadSessions({ quiet: true });
   } catch (error) {
     announce(`Не удалось изменить пароль: ${error.message}`);
