@@ -152,7 +152,7 @@ export async function handleIdentityHttp(
     const body = await readJsonObject(request);
     const password = validatePassword(String(body.newPassword ?? ""));
     await service.changePasswordFromSession(authenticated, password);
-    return json({ ok: true, note: "Другие устройства отключены. Создайте новые резервные коды." });
+    return json({ ok: true, note: "Другие устройства и ключи доступа отключены. Создайте новые резервные коды и при необходимости новые ключи доступа." });
   }
 
   if (url.pathname === "/api/v1/auth/profile") {

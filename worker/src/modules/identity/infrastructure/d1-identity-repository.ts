@@ -349,6 +349,10 @@ export class D1IdentityRepository implements IdentityRepository {
       this.db.prepare(`UPDATE sessions SET revoked_at = ?
         WHERE user_id = (${owner}) AND revoked_at IS NULL`)
         .bind(input.now, input.codeHash, input.username),
+      this.db.prepare(`DELETE FROM account_passkeys WHERE user_id = (${owner})`)
+        .bind(input.codeHash, input.username),
+      this.db.prepare(`DELETE FROM passkey_challenges WHERE user_id = (${owner})`)
+        .bind(input.codeHash, input.username),
       this.db.prepare(`DELETE FROM password_recovery_codes WHERE user_id = (${owner})`)
         .bind(input.codeHash, input.username)
     ]);
@@ -368,6 +372,8 @@ export class D1IdentityRepository implements IdentityRepository {
       this.db.prepare(`UPDATE sessions SET revoked_at = ?
         WHERE user_id = ? AND session_id <> ? AND revoked_at IS NULL`)
         .bind(input.now, input.userId, input.sessionId),
+      this.db.prepare("DELETE FROM account_passkeys WHERE user_id = ?").bind(input.userId),
+      this.db.prepare("DELETE FROM passkey_challenges WHERE user_id = ?").bind(input.userId),
       this.db.prepare("DELETE FROM password_recovery_codes WHERE user_id = ?").bind(input.userId)
     ]);
     if ((result[0]?.meta?.changes ?? 0) !== 1) throw new Error("Could not update account password.");
