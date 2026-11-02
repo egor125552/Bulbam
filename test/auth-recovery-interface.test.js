@@ -32,6 +32,9 @@ describe("accessible authentication and password recovery",()=>{
     expect(page).toContain('id="recovery-form"');
     expect(page).toContain('id="recovery-codes-dialog" aria-labelledby="recovery-codes-title"');
     expect(page).toContain('id="recovery-codes-text"');
+    expect(page).toContain('id="recovery-codes-one-code-help"');
+    expect(page).toContain('id="recovery-code-paste-status" role="status" aria-live="polite"');
+    expect(page).toContain('aria-describedby="recovery-code-help recovery-code-paste-status"');
     expect(page).toContain('id="change-password-form"');
     expect(page).toContain('id="new-recovery-codes"');
     const auth=await readFile(new URL("../web/js/auth.js",import.meta.url),"utf8");

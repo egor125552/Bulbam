@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
   <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.5039131510c2.js">
+  <link rel="modulepreload" href="/boot.780432b9b832.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -102,9 +102,11 @@
           <label>Имя пользователя
             <input name="username" autocomplete="username" required minlength="3" maxlength="32">
           </label>
+          <p id="recovery-code-help" class="hint">Для восстановления нужен только один резервный код. Если вы вставите сразу список, Бульбам выберет первый.</p>
           <label>Резервный код восстановления
-            <input name="code" autocomplete="one-time-code" required placeholder="BRC-XXXXXX-XXXXXX-XXXXXX-XXXXXX">
+            <input name="code" autocomplete="one-time-code" required spellcheck="false" autocapitalize="characters" aria-describedby="recovery-code-help recovery-code-paste-status" placeholder="BRC-XXXXXX-XXXXXX-XXXXXX-XXXXXX">
           </label>
+          <p id="recovery-code-paste-status" role="status" aria-live="polite" aria-atomic="true"></p>
           <label>Новый пароль
             <input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
           </label>
@@ -148,6 +150,7 @@
     <dialog id="recovery-codes-dialog" aria-labelledby="recovery-codes-title">
       <h2 id="recovery-codes-title" tabindex="-1">Сохраните резервные коды</h2>
       <p>Это одноразовые ключи от вашего аккаунта. Сохраните их в безопасном месте. После закрытия они больше не будут показаны.</p>
+      <p id="recovery-codes-one-code-help" class="hint">Для восстановления доступа вам понадобится только один код из этого списка. Не нужно вставлять все коды сразу.</p>
       <label for="recovery-codes-text">Ваши восемь кодов</label>
       <textarea id="recovery-codes-text" rows="10" readonly spellcheck="false"></textarea>
       <button id="copy-recovery-codes" type="button">Скопировать коды</button>
@@ -617,7 +620,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.5039131510c2.js");
+      await import("/boot.780432b9b832.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

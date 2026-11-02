@@ -4,6 +4,7 @@ import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
 import { setupPasskeys, startPasskeyAutofill, cancelPasskeyAutofill } from "./passkeys.js";
 import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut, updateAccountProfile } from "./ui.js";
+import { firstRecoveryCode, setupRecoveryCodeSmartPaste } from "./recovery-code-paste.js";
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
 const ACCOUNT_HINT_KEY = "bulbam.account.lastUsername";
@@ -80,7 +81,7 @@ export function showRecoveryCodes(codes, { afterRecovery = false } = {}) {
   dialog.showModal();
   document.querySelector("#recovery-codes-title")?.focus();
   announce(afterRecovery
-    ? "Пароль восстановлен. Старые устройства и ключи доступа отключены. Сохраните восемь новых резервных кодов. Прежние ключи доступа нужно создать заново."
+    ? "Пароль восстановлен. Старые устройства, прежние ключи доступа и все старые резервные коды больше не действуют. Сохраните восемь новых резервных кодов. При необходимости создайте ключи доступа заново."
     : "Восемь резервных кодов созданы. Сохраните их. Повторно посмотреть их нельзя.");
 }
 
@@ -115,6 +116,7 @@ export function setupAuth() {
   document.querySelector("#auth-login-from-register")?.addEventListener("click", () => showAuthView("login"));
   document.querySelector("#auth-login-from-recovery")?.addEventListener("click", () => showAuthView("login"));
   document.querySelector("#recovery-form")?.addEventListener("submit", recoverWithCode);
+  setupRecoveryCodeSmartPaste(document.querySelector('#recovery-form [name="code"]'), document.querySelector("#recovery-code-paste-status"));
   document.querySelector("#change-password-form")?.addEventListener("submit", changePassword);
   document.querySelector("#new-recovery-codes")?.addEventListener("click", () => void regenerateRecoveryCodes());
   document.querySelector("#copy-recovery-codes")?.addEventListener("click", async () => {
@@ -343,10 +345,12 @@ async function recoverWithCode(event) {
   try {
     const data = new FormData(form);
     const newPassword = passwordsMatch(data);
+    const oneCode = firstRecoveryCode(data.get("code"));
+    if (!oneCode) throw new Error("Не найден полный резервный код. Вставьте один код из сохранённого списка.");
     const result = await api("/api/v1/auth/reset-with-recovery-code", {
       method: "POST",
       body: JSON.stringify({
-        username: data.get("username"), code: String(data.get("code") ?? "").trim(),
+        username: data.get("username"), code: oneCode,
         newPassword, deviceName: deviceName()
       })
     });
@@ -354,6 +358,8 @@ async function recoverWithCode(event) {
     clearAuthCheckProblem();
     showSignedIn(result.account, result.session);
     rememberUsername(result.account);
+    const pasteStatus = document.querySelector("#recovery-code-paste-status");
+    if (pasteStatus) pasteStatus.textContent = "";
     showRecoveryCodes(result.recoveryCodes, { afterRecovery: true });
     await loadSessions({ quiet: true });
   } catch (error) {
