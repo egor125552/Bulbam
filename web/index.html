@@ -9,8 +9,8 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
-  <link rel="stylesheet" href="/canonical-ui.css?v=38f4aab4a5e5" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.632fa987b054.js">
+  <link rel="stylesheet" href="/canonical-ui.css?v=88a4be9a6ad6" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.e21fe443fd52.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -314,6 +314,8 @@
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
+            <button id="call-pocket" type="button" hidden>Режим в кармане</button>
+            <audio id="call-keepalive-audio" src="/audio/call-keepalive.wav" preload="auto" loop playsinline aria-hidden="true"></audio>
             <audio id="call-remote-audio" autoplay playsinline></audio>
           </section>
 
@@ -621,7 +623,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.632fa987b054.js");
+      await import("/boot.e21fe443fd52.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
