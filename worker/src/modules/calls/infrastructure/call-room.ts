@@ -268,7 +268,10 @@ export class CallRoom {
     const kind = stringValue(body.kind);
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, actorUserId)) return notFoundResponse();
-    if (call.status !== "accepted") return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
+    const preoffer=call.status==="ringing" && actorUserId===call.callerUserId &&
+      (kind==="offer" || kind==="ice");
+    if(call.status!=="accepted" && !preoffer)
+      return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
     if (kind !== "offer" && kind !== "answer" && kind !== "ice" && kind !== "resume") {
       return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
     }
