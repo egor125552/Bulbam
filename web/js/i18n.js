@@ -94,10 +94,12 @@ function shouldSkip(node) {
   if(!node || node.nodeType===Node.COMMENT_NODE)return true;
   const parent=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
   if(!parent || parent.closest("script, style, noscript"))return true;
-  if(parent.closest("[contenteditable=true], [data-user-content]"))return true;
-  if(parent.closest(blocked)) {
-    // Only interface controls inside user-generated message areas may be translated.
-    if(!parent.closest("button, option, label, summary"))return true;
+  // Voice message chrome is application UI, even when nested under user content.
+  const voiceControl=parent.closest(".voice-message, .voice-actions, .voice-progress, .voice-time, .voice-listen-status");
+  if(parent.closest("[contenteditable=true], [data-user-content]") && !voiceControl)return true;
+  if(parent.closest(blocked) && !voiceControl) {
+    // Keep authored messages and names intact, but translate their controls.
+    if(!parent.closest("button, option, label, summary, select"))return true;
   }
   return false;
 }
@@ -111,7 +113,7 @@ function updateText(node){
   originalStrings.set(node,memo);
   if(value!==desired)node.nodeValue=desired;
 }
-const attrs=["aria-label","placeholder","title","alt"];
+const attrs=["aria-label","aria-valuetext","placeholder","title","alt"];
 function updateAttributes(el){
   if(el.nodeType!==Node.ELEMENT_NODE||shouldSkip(el))return;
   let map=originalAttributes.get(el);
@@ -129,7 +131,9 @@ function updateAttributes(el){
 }
 function translateSubtree(root) {
   if(root.nodeType===Node.TEXT_NODE){updateText(root);return;}
-  if(root.nodeType!==Node.ELEMENT_NODE||shouldSkip(root))return;
+  if(root.nodeType!==Node.ELEMENT_NODE)return;
+  // A blocked container can still have accessible interface controls inside.
+  // Apply the skip rule to each descendant, not to the whole subtree.
   updateAttributes(root);
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);
   let node;
