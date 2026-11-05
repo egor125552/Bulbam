@@ -66,6 +66,8 @@ afterEach(() => {
   delete globalThis.window;
   delete globalThis.document;
   delete globalThis.localStorage;
+  delete globalThis.location;
+  delete globalThis.history;
 });
 
 describe("approval checkbox and VoiceOver", () => {
@@ -84,6 +86,38 @@ describe("approval checkbox and VoiceOver", () => {
     await flush();
     expect(doc.querySelector("#admin-recovery-requests input[type=checkbox]")).toBe(checkbox);
     expect(checkbox.checked).toBe(true);
+  });
+  test("opens a reset link immediately and removes its secret from the address",async()=>{
+    const id="00000000-0000-0000-0000-000000000001";
+    const secret="ar_"+"b".repeat(64);
+    globalThis.location=new URL("https://bulbam.test/#recoveryId="+id+"&recoveryToken="+secret);
+    const changes=[];
+    globalThis.history={replaceState:(_state,_title,url)=>changes.push(url)};
+    const section=doc.createElement("section");
+    section.id="auth-view-recovery";
+    section.hidden=true;
+    section.innerHTML=`
+      <div id="admin-recovery-progress" hidden>
+        <p id="admin-recovery-state"></p>
+        <form id="admin-recovery-complete" hidden>
+          <input name="newPassword" type="password">
+          <button type="submit">Установить пароль</button>
+        </form>
+      </div>`;
+    doc.body.append(section);
+    vi.mocked(api).mockImplementation(async path=>{
+      if(path==="/api/v1/auth/admin-recovery/status")
+        return {ok:true,status:"approved",expiresAt:Date.now()+15*60_000};
+      if(path==="/api/v1/admin/recovery-requests")return {requests:[]};
+      throw new Error("unexpected path "+path);
+    });
+    setupAdminRecovery();
+    await flush();
+    expect(changes).toEqual(["/"]);
+    expect(doc.querySelector("#auth-view-recovery").hidden).toBe(false);
+    expect(doc.querySelector("#admin-recovery-complete").hidden).toBe(false);
+    expect(doc.querySelector("#auth-view-recovery").dataset.recoveryLink).toBe("active");
+    expect(doc.querySelector("#admin-recovery-state").textContent).toContain("Администратор подтвердил");
   });
   test("requires identity confirmation and then submits approval with confirmed state", async () => {
     click("#settings-button");
