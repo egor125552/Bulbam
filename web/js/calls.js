@@ -238,7 +238,7 @@ export function setupCalls() {
           void handleVisibleCallPush({
             callId:url.searchParams.get("call"),
             conversationId:url.searchParams.get("chat")
-          });
+          },url.searchParams.get("answer")==="1");
         }
       }
     });
@@ -258,11 +258,16 @@ async function switchAccount(nextAccount) {
   await restoreCallFromUrl();
 }
 
-async function handleVisibleCallPush(data) {
-  if (!account || currentCall) return;
+async function handleVisibleCallPush(data,autoAnswer=false) {
+  if (!account) return;
   const callId = typeof data?.callId === "string" ? data.callId : "";
   const conversationId = typeof data?.conversationId === "string" ? data.conversationId : "";
   if (!callId || !conversationId) return;
+  if(currentCall){
+    if(autoAnswer && !answeredLocally && currentCall.callId===callId && currentCall.status==="ringing" &&
+       currentCall.direction==="incoming")void answerCall();
+    return;
+  }
 
   try {
     const result = await api(
@@ -279,6 +284,7 @@ async function handleVisibleCallPush(data) {
       void prefetchIceServers();
       startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      if(autoAnswer)void answerCall();
       return;
     }
 
@@ -1441,6 +1447,8 @@ async function restoreCallFromUrl() {
   const callId = url.searchParams.get("call");
   const conversationId = url.searchParams.get("chat");
   if (!callId || !conversationId || !account) return;
+  const autoAnswer=url.searchParams.get("answer")==="1";
+  url.searchParams.delete("answer");
   url.searchParams.delete("call");
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 
@@ -1455,6 +1463,7 @@ async function restoreCallFromUrl() {
       startStatePolling();
       elements.callTitle.focus();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      if(autoAnswer)void answerCall();
     } else if (currentCall?.status === "ringing" || currentCall?.status === "accepted") {
       recoveryPending = true;
       showRecoveredCall(
