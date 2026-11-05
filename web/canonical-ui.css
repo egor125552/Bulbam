@@ -355,6 +355,30 @@ body.signed-in-mode {
   box-shadow: 0 22px 70px color-mix(in srgb, #000 20%, transparent);
 }
 
+/* Final call feedback must not remain a full-screen overlay on the chat. */
+.call-banner.is-finished:not([hidden]) {
+  position: fixed;
+  inset: max(0.5rem, env(safe-area-inset-top)) 0.5rem auto auto;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(26rem, calc(100vw - 1rem));
+  min-height: auto;
+  max-height: 35dvh;
+  margin: 0;
+  padding: 0.85rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.call-banner.is-finished .call-copy h2 { font-size: 1rem; }
+.call-banner.is-finished #call-status { margin: 0.35rem 0; }
+
 .call-banner .call-copy {
   max-width: 32rem;
   text-align: center;

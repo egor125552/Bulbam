@@ -191,10 +191,8 @@ function filterChats() {
 function prepareViewSelect() {
   const old = document.querySelector("#message-view");
   if (!old) return null;
-  const select = old.cloneNode(true);
-  select.querySelector('option[value="table"]')?.remove();
-  old.replaceWith(select);
-  return select;
+  old.querySelector('option[value="table"]')?.remove();
+  return old;
 }
 
 function prepareAppearance(viewSelect) {

@@ -80,3 +80,85 @@ test('group voice upload is shared with members but inaccessible to outsiders',a
  expect(audio.status).toBe(206);expect((await audio.arrayBuffer()).byteLength).toBe(32);
  expect((await api(`${path}/messages/${message.messageId}/voice/audio`,c)).status).toBe(404);
 });
+
+test('creator transfers ownership, leaves safely, and new creator can dissolve the group',async()=>{
+ const [a,b,c]=await Promise.all(['alpha','beta','gamma'].map(register));
+ let res=await api('/api/v1/chats/groups',a,'POST',{title:'Передача',historyMode:'all',userIds:[b.id,c.id]});
+ expect(res.status).toBe(201);
+ const group=(await res.json()).chat;
+ const path=`/api/v1/chats/${group.conversationId}/group-actions`;
+ expect((await api(path,b,'POST',{action:'delete'})).status).toBe(403);
+ expect((await api(path,a,'POST',{action:'transfer',newOwnerUserId:'00000000-0000-0000-0000-000000000001'})).status).toBe(400);
+ res=await api(path,a,'POST',{action:'transfer',newOwnerUserId:b.id});
+ expect(res.status).toBe(200);
+ expect((await api(`/api/v1/chats/${group.conversationId}/messages`,a)).status).toBe(404);
+ const bChats=(await (await api('/api/v1/chats',b)).json()).chats;
+ expect(bChats.find(ch=>ch.conversationId===group.conversationId).ownerUserId).toBe(b.id);
+ expect((await api(path,a,'POST',{action:'delete'})).status).toBe(404);
+ expect((await api(path,b,'POST',{action:'delete'})).status).toBe(200);
+ for(const member of [b,c]){
+   expect((await api(`/api/v1/chats/${group.conversationId}/messages`,member)).status).toBe(404);
+ }
+});
+
+test('history pages have a stable cursor and no gaps when messages share timestamps',async()=>{
+ const [a,b]=await Promise.all(['alpha','beta'].map(register));
+ const created=await api('/api/v1/chats/groups',a,'POST',{title:'История длинная',historyMode:'all',userIds:[b.id]});
+ const group=(await created.json()).chat;
+ const env=await server.getWorker('bulbam-api-test').getEnv();
+ const base=Date.now()-500000;
+ for(let batch=0;batch<5;batch++){
+   const statements=[];
+   for(let index=batch*42;index<(batch+1)*42;index++){
+     const id=index.toString(16).padStart(8,'0')+'-1111-4111-8111-111111111111';
+     statements.push(env.DB.prepare(`INSERT INTO messages
+       (message_id,conversation_id,sender_user_id,client_message_id,message_type,body,created_at)
+       VALUES(?,?,?,?,'text',?,?)`)
+       .bind(id,group.conversationId,a.id,'batch_'+index,'msg '+index,base+Math.floor(index/3)));
+   }
+   await env.DB.batch(statements);
+ }
+ const path=`/api/v1/chats/${group.conversationId}/messages`;
+ const newest=await (await api(path,b)).json();
+ expect(newest.messages).toHaveLength(200);
+ expect(newest.hasMore).toBe(true);
+ const oldest=newest.messages[0];
+ const cursor=`${oldest.createdAt}_${oldest.messageId}`;
+ const previous=await (await api(path+'?before='+encodeURIComponent(cursor),b)).json();
+ expect(previous.messages).toHaveLength(10);
+ expect(previous.hasMore).toBe(false);
+ const ids=[...previous.messages,...newest.messages].map(message=>message.messageId);
+ expect(new Set(ids).size).toBe(210);
+ const invalid=await api(path+'?before=oops',b);
+ expect(invalid.status).toBe(400);
+});
+
+test('group voice progress persists for the sender while respecting listener privacy',async()=>{
+ const [a,b,c]=await Promise.all(['alpha','beta','gamma'].map(register));
+ const created=await api('/api/v1/chats/groups',a,'POST',{title:'Прослушивание',historyMode:'all',userIds:[b.id,c.id]});
+ const group=(await created.json()).chat;
+ const env=await server.getWorker('bulbam-api-test').getEnv();
+ const id=crypto.randomUUID(),now=Date.now();
+ await env.DB.batch([
+   env.DB.prepare("INSERT INTO messages(message_id,conversation_id,sender_user_id,client_message_id,message_type,body,created_at) VALUES(?,?,?,?,'voice','',?)")
+     .bind(id,group.conversationId,a.id,'voice_test_group',now),
+   env.DB.prepare('INSERT INTO voice_message_attachments(message_id,object_key,duration_ms,mime_type,bitrate_bps,size_bytes) VALUES(?,?,?,?,?,?)')
+     .bind(id,'group-test-object-'+id,2000,'audio/webm',64000,1024)
+ ]);
+ await env.DB.batch([
+   env.DB.prepare('INSERT INTO voice_listen_receipts(message_id,listener_user_id,listened_ms,resume_ms,heard_ranges,completed_at,updated_at) VALUES(?,?,?,?,?,?,?)')
+     .bind(id,b.id,1200,1200,'[[0,1200]]',null,now),
+   env.DB.prepare('INSERT INTO voice_listen_receipts(message_id,listener_user_id,listened_ms,resume_ms,heard_ranges,completed_at,updated_at) VALUES(?,?,?,?,?,?,?)')
+     .bind(id,c.id,2000,2000,'[[0,2000]]',now,now)
+ ]);
+ const path=`/api/v1/chats/${group.conversationId}/messages`;
+ let bySender=(await (await api(path,a)).json()).messages[0];
+ expect(bySender.voice.progress.completedAt).toBe(now);
+ await env.DB.prepare('INSERT INTO voice_privacy_settings(user_id,share_progress,updated_at) VALUES(?,0,?)')
+   .bind(c.id,now).run();
+ bySender=(await (await api(path,a)).json()).messages[0];
+ expect(bySender.voice.progress.completedAt).toBeNull();
+ expect(bySender.voice.progress.listenedMs).toBe(1200);
+ const byListener=(await (await api(path,c)).json()).messages[0];
+ expect(byListener.voice.progress.completedAt).toBe(now);
+});

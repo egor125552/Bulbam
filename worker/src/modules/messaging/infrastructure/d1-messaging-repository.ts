@@ -51,10 +51,15 @@ const MESSAGE_COLUMNS = `
 
 const MESSAGE_JOINS = `
   LEFT JOIN voice_message_attachments v ON v.message_id = m.message_id
-  LEFT JOIN voice_listen_receipts vl ON vl.message_id = m.message_id AND (
-    vl.listener_user_id = ? OR (m.sender_user_id = ? AND EXISTS (
-      SELECT 1 FROM conversations direct_chat WHERE direct_chat.conversation_id=m.conversation_id AND direct_chat.kind='direct'
-    ))
+  LEFT JOIN voice_listen_receipts vl ON vl.rowid = (
+    SELECT candidate.rowid FROM voice_listen_receipts candidate
+    LEFT JOIN voice_privacy_settings privacy ON privacy.user_id=candidate.listener_user_id
+    WHERE candidate.message_id=m.message_id AND (
+      candidate.listener_user_id=? OR
+      (m.sender_user_id=? AND COALESCE(privacy.share_progress,1)=1)
+    )
+    ORDER BY (candidate.completed_at IS NOT NULL) DESC,
+      candidate.listened_ms DESC, candidate.updated_at DESC LIMIT 1
   )
   LEFT JOIN voice_privacy_settings vps ON vps.user_id = vl.listener_user_id
 `;
@@ -158,6 +163,31 @@ export class D1MessagingRepository implements MessagingRepository {
       .bind(conversationId,userId).run();
   }
 
+  async transferGroupOwner(conversationId:string,oldOwner:string,newOwner:string):Promise<void> {
+    await this.initialize();
+    const results=await this.db.batch([
+      this.db.prepare("UPDATE conversations SET owner_user_id=? WHERE conversation_id=? AND kind='group' AND owner_user_id=?")
+        .bind(newOwner,conversationId,oldOwner),
+      this.db.prepare("DELETE FROM group_members WHERE conversation_id=? AND user_id=?")
+        .bind(conversationId,oldOwner)
+    ]);
+    if(results[0]?.meta?.changes!==1||results[1]?.meta?.changes!==1)throw new Error("Group owner transfer failed");
+  }
+
+  async deleteGroup(conversationId:string):Promise<void> {
+    await this.initialize();
+    // These child records are removed with FK cascades, but deleting message
+    // records explicitly also supports pre-migration databases.
+    await this.db.batch([
+      this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id=?)").bind(conversationId),
+      this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id=?)").bind(conversationId),
+      this.db.prepare("DELETE FROM voice_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id=?)").bind(conversationId),
+      this.db.prepare("DELETE FROM messages WHERE conversation_id=?").bind(conversationId),
+      this.db.prepare("DELETE FROM group_members WHERE conversation_id=?").bind(conversationId),
+      this.db.prepare("DELETE FROM conversations WHERE conversation_id=? AND kind='group'").bind(conversationId)
+    ]);
+  }
+
   async listGroupMembers(conversationId: string): Promise<GroupMember[]> {
     await this.initialize();
     const result=await this.db.prepare('SELECT user_id,joined_at FROM group_members WHERE conversation_id=? ORDER BY joined_at,user_id')
@@ -203,7 +233,7 @@ export class D1MessagingRepository implements MessagingRepository {
     return output;
   }
 
-  async listMessages(conversationId: string, limit: number, viewerUserId: string): Promise<StoredMessage[]> {
+  async listMessages(conversationId: string, limit: number, viewerUserId: string, before?: {createdAt:number;messageId:string}): Promise<StoredMessage[]> {
     await this.initialize();
     const result = await this.db
       .prepare(`
@@ -215,12 +245,13 @@ export class D1MessagingRepository implements MessagingRepository {
         JOIN conversations c ON c.conversation_id=m.conversation_id
         LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
         WHERE m.conversation_id = ?
+        AND (? IS NULL OR m.created_at<? OR (m.created_at=? AND m.message_id<?))
         AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
           (c.history_mode='all' OR m.created_at>=gm.joined_at)))
         ORDER BY m.created_at DESC, m.message_id DESC
         LIMIT ?
       `)
-      .bind(viewerUserId,viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
+      .bind(viewerUserId,viewerUserId,viewerUserId,viewerUserId,conversationId, before?.createdAt??null,before?.createdAt??null,before?.createdAt??null,before?.messageId??null,limit)
       .all<Row>();
     return (result.results ?? []).map((row) => mapMessage(row, viewerUserId)).reverse();
   }
