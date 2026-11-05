@@ -196,6 +196,10 @@ export function setupCalls() {
   window.addEventListener("bulbam:account-changed", (event) => {
     void switchAccount(event.detail?.account ?? null);
   });
+  window.addEventListener("bulbam:profile-updated",event=>{
+    if(account?.userId===event.detail?.account?.userId)
+      account={...account,displayName:event.detail.account.displayName};
+  });
   window.addEventListener("bulbam:audio-profile-changed", () => {
     void applyAudioProfileDuringCall();
   });
@@ -616,12 +620,19 @@ async function handleCallEvent(event) {
   }
 
   if (event.type === "call.answered") {
-    if (currentCall.status === "accepted") return;
+    if(event.actorUserId===account.userId && event.actorSessionId){
+      currentCall.sessionOwnerId=event.actorSessionId;
+    }
+    if (currentCall.status === "accepted") {
+      if(recoveryPending)showRecoveredCall("Звонок принят на другом устройстве.");
+      return;
+    }
     logCallEvent("звонок принят");
     stopRingback();
     playCallCue("answered");
     currentCall.status = "accepted";
     currentCall.answeredAt = event.answeredAt ?? Date.now();
+
     clearTimeout(ringTimeout);
     ringTimeout = null;
     if (currentCall.direction === "outgoing") {
@@ -634,7 +645,9 @@ async function handleCallEvent(event) {
         await beginOfferIfNeeded();
       }
     } else if (!answeredLocally) {
-      finishCall("На звонок ответили на другом устройстве.");
+      recoveryPending=true;
+      showRecoveredCall("На звонок ответили на другом устройстве. Можно перенести его сюда.");
+      startStatePolling();
     }
     return;
   }
@@ -1392,7 +1405,9 @@ async function pollCallState() {
           await beginOfferIfNeeded();
         }
       } else if (!answeredLocally) {
-        finishCall("На звонок ответили на другом устройстве.");
+        recoveryPending=true;
+        showRecoveredCall("На звонок ответили на другом устройстве. Можно перенести его сюда.");
+        startStatePolling();
       }
       return;
     }

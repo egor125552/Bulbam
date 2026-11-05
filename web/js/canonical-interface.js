@@ -1,3 +1,4 @@
+import { matchesChatFilter } from "./chat-filter-policy.js";
 import { announce, elements } from "./ui.js";
 import { originalText } from "./i18n.js";
 import { normalizeFontScale, normalizeMessageView, normalizeTheme } from "./interface-preferences.js";
@@ -178,7 +179,12 @@ function filterChats() {
   const buttons = document.querySelectorAll(".chat-item");
   let visible = 0;
   for (const button of buttons) {
-    const hidden = Boolean(filterValue) && !button.textContent.toLocaleLowerCase("ru").includes(filterValue);
+    const searchText = [
+      button.querySelector("strong")?.textContent,
+      button.querySelector(".chat-username")?.textContent,
+      button.dataset.searchPreview ?? button.querySelector(".chat-preview")?.textContent
+    ].filter(Boolean).join(" ").toLocaleLowerCase("ru");
+    const hidden = !matchesChatFilter(searchText,filterValue);
     if (button.hidden !== hidden) button.hidden = hidden;
     if (!hidden) visible += 1;
   }
@@ -187,6 +193,7 @@ function filterChats() {
   if (clear) clear.hidden = !filterValue;
   if (empty) empty.hidden = !filterValue || !buttons.length || visible > 0;
 }
+
 
 function prepareViewSelect() {
   const old = document.querySelector("#message-view");

@@ -105,7 +105,7 @@ function updateText(node){
   if(node.nodeType!==Node.TEXT_NODE || shouldSkip(node))return;
   const value=node.nodeValue??"";
   let memo=originalStrings.get(node);
-  if(!memo || value!==memo.displayed) memo={original:value,displayed:value};
+  if(!memo || value!==memo.displayed) memo={original:originalText(value),displayed:value};
   const desired=current==="be"?translateText(memo.original):memo.original;
   memo.displayed=desired;
   originalStrings.set(node,memo);
@@ -120,7 +120,7 @@ function updateAttributes(el){
     if(!el.hasAttribute(attr))continue;
     const value=el.getAttribute(attr);
     let memo=map.get(attr);
-    if(!memo || value!==memo.displayed)memo={original:value,displayed:value};
+    if(!memo || value!==memo.displayed)memo={original:originalText(value),displayed:value};
     const desired=current==="be"?translateText(memo.original):memo.original;
     memo.displayed=desired;
     map.set(attr,memo);

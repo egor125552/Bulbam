@@ -1,9 +1,27 @@
 let context = null;
+export function resetVoiceCueAudio() {
+  const previous=context;
+  context=null;
+  if(previous)void previous.close?.().catch?.(()=>{});
+}
+export function setupVoiceCueRestoration() {
+  window.addEventListener("pageshow",resetVoiceCueAudio);
+  document.addEventListener("visibilitychange",()=>{
+    if(document.visibilityState==="visible")resetVoiceCueAudio();
+  });
+}
 
 export async function prepareVoiceCues() {
   try {
     context ??= new AudioContext();
-    if (context.state === "suspended") await context.resume();
+    if (context.state !== "running") {
+      try { await context.resume(); } catch { /* An interrupted WebKit context may be unrecoverable. */ }
+    }
+    if (context.state !== "running") {
+      resetVoiceCueAudio();
+      context = new AudioContext();
+      if (context.state !== "running") await context.resume();
+    }
   } catch {
     // Recording still works when Web Audio cannot be armed.
   }
