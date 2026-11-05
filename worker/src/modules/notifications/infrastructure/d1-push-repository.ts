@@ -4,6 +4,7 @@ import { ensureNotificationSchema } from "./schema";
 export interface PushSubscriptionRecord {
   endpoint: string;
   userId: string;
+  sessionId: string;
   expirationTime: number | null;
   keys: {
     p256dh: string;
@@ -28,10 +29,11 @@ export class D1PushRepository {
     const result = await this.db
       .prepare(
         `INSERT INTO push_subscriptions(
-          endpoint, user_id, expiration_time, p256dh, auth, user_agent, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          endpoint, user_id, session_id, expiration_time, p256dh, auth, user_agent, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(endpoint) DO UPDATE SET
           user_id = excluded.user_id,
+          session_id = excluded.session_id,
           expiration_time = excluded.expiration_time,
           p256dh = excluded.p256dh,
           auth = excluded.auth,
@@ -41,6 +43,7 @@ export class D1PushRepository {
       .bind(
         input.endpoint,
         input.userId,
+        input.sessionId,
         input.expirationTime,
         input.keys.p256dh,
         input.keys.auth,
@@ -60,6 +63,13 @@ export class D1PushRepository {
       .run();
   }
 
+  async isCurrentSession(subscription:PushSubscriptionRecord):Promise<boolean> {
+    await this.initialize();
+    return Boolean(await this.db.prepare(`SELECT 1 AS active FROM sessions WHERE
+      user_id=? AND session_id=? AND revoked_at IS NULL AND expires_at>?`)
+      .bind(subscription.userId,subscription.sessionId,Date.now()).first());
+  }
+
   async removeEndpoint(endpoint: string): Promise<void> {
     await this.initialize();
     await this.db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(endpoint).run();
@@ -69,15 +79,17 @@ export class D1PushRepository {
     await this.initialize();
     const rows = await this.db
       .prepare(
-        `SELECT endpoint, user_id, expiration_time, p256dh, auth
-         FROM push_subscriptions
-         WHERE user_id = ?
-         ORDER BY updated_at DESC`
+        `SELECT p.endpoint, p.user_id, p.session_id, p.expiration_time, p.p256dh, p.auth
+         FROM push_subscriptions AS p
+         JOIN sessions AS s ON s.session_id=p.session_id AND s.user_id=p.user_id
+         WHERE p.user_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+         ORDER BY p.updated_at DESC`
       )
-      .bind(userId)
+      .bind(userId,Date.now())
       .all<{
         endpoint: string;
         user_id: string;
+        session_id: string;
         expiration_time: number | null;
         p256dh: string;
         auth: string;
@@ -86,12 +98,22 @@ export class D1PushRepository {
     return (rows.results ?? []).map((row) => ({
       endpoint: row.endpoint,
       userId: row.user_id,
+      sessionId: row.session_id,
       expirationTime: row.expiration_time === null ? null : Number(row.expiration_time),
       keys: {
         p256dh: row.p256dh,
         auth: row.auth
       }
     }));
+  }
+
+  async removeRevokedForUser(userId:string):Promise<void> {
+    await this.initialize();
+    await this.db.prepare(`DELETE FROM push_subscriptions
+      WHERE user_id=? AND (session_id IS NULL OR NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.session_id=push_subscriptions.session_id
+        AND s.user_id=push_subscriptions.user_id AND s.revoked_at IS NULL AND s.expires_at>?
+      ))`).bind(userId,Date.now()).run();
   }
 
   async setForeground(userId: string, visible: boolean, now: number): Promise<void> {

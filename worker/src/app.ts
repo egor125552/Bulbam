@@ -93,6 +93,12 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
         for(const peer of await messagingRepository.listConversationRecipients(chat))
           recipients.add(peer);
       await realtime.publishToUsers([...recipients],{type:"chat.profile-updated",userId,displayName});
+    },async userId=>{
+      // Notifications and presence own their own tables; sessions are the authority.
+      await Promise.all([
+        pushRepository?.removeRevokedForUser(userId),
+        env.DB ? new PresenceService(env.DB).removeRevokedForUser(userId) : undefined
+      ]);
     }) : null;
     const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;

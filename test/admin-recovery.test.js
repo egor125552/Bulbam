@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import {beforeAll,afterAll,afterEach,describe,test,expect} from "vitest";
 import {createTestHarness} from "wrangler";
+import {D1PushRepository} from "../worker/src/modules/notifications/infrastructure/d1-push-repository";
 const server=createTestHarness({workers:[{configPath:"./wrangler.test.jsonc"}]});
 beforeAll(()=>server.listen());
 afterEach(()=>server.reset());
@@ -63,7 +64,16 @@ describe("administrator-assisted account recovery",()=>{
     expect((await post(url,{approve:true,verifiedIdentity:true},owner)).status).toBe(400);
   });
   test("approval allows one-time password reset and revokes old sessions",async()=>{
-    const {owner,member}=await users();
+    const {owner,member,env}=await users();
+    const memberView=await server.fetch("/api/v1/auth/me",{headers:{cookie:member}});
+    const memberState=await memberView.json();
+    const repo=new D1PushRepository(env.DB);
+    await repo.upsert({
+      userId:memberState.account.userId,sessionId:memberState.session.sessionId,
+      endpoint:"https://push.example.org/admin-recovery-session",expirationTime:null,
+      keys:{p256dh:"abcdefghijkl",auth:"abcdefghij"},userAgent:"test"
+    });
+    expect(await repo.listForUser(memberState.account.userId)).toHaveLength(1);
     const application=await post("/api/v1/auth/admin-recovery/request",{
       username:"recovery_member",deviceName:"Android"
     });
@@ -76,6 +86,10 @@ describe("administrator-assisted account recovery",()=>{
       requestId,secret,newPassword:password,deviceName:"Android"
     });
     expect(completed.status).toBe(200);
+    expect(await repo.listForUser(memberState.account.userId)).toEqual([]);
+    const lingering=await env.DB.prepare("SELECT endpoint FROM push_subscriptions WHERE user_id=?")
+      .bind(memberState.account.userId).all();
+    expect(lingering.results).toEqual([]);
     const data=await completed.json();
     expect(data.account.username).toBe("recovery_member");
     expect(data.recoveryCodes).toHaveLength(8);
