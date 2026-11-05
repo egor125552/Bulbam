@@ -107,7 +107,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
         callId: input.callId,
         conversationId: input.conversationId
       }
-    }, 120);
+    }, 15);
   }
 
   async notifyAdminRecoveryRequest(recipientUserId:string):Promise<void> {

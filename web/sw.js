@@ -82,6 +82,15 @@ self.addEventListener("notificationclick", (event) => {
   const target = new URL(rawUrl, self.location.origin);
   if (target.origin !== self.location.origin) return;
 
+  const action=event.action||"";
+  const details=event.notification.data;
+  if(action==="decline" && details?.kind==="call"){
+    event.waitUntil(declineFromNotification(details));
+    return;
+  }
+  if(action==="answer" && details?.kind==="call"){
+    target.searchParams.set("answer","1");
+  }
   event.waitUntil(openOrFocus(target.href));
 });
 
@@ -104,17 +113,53 @@ async function handlePush(data) {
     return;
   }
 
-  const message=localizedNotification(data,await preferredLocale());
-  await self.registration.showNotification(message.title, {
+  const locale=await preferredLocale();
+  const message=localizedNotification(data,locale);
+  const call=data.kind==="call";
+  if(call && data.tag && typeof self.registration.getNotifications==="function"){
+    try {
+      const old=await self.registration.getNotifications({tag:data.tag});
+      for(const notification of old)notification.close();
+    }catch(error){console.warn("[CallPush] notification replacement failed",error);}
+  }
+  const basics={
     body: message.body,
     icon: data.icon || "/icon.svg",
     tag: data.tag,
-    data: data.data || { url: "/" }
-  });
+    data: {...(data.data||{url:"/"}),kind:data.kind}
+  };
+  if(call){
+    try {
+      await self.registration.showNotification(message.title,{
+        ...basics,renotify:true,
+        actions:[
+          {action:"answer",title:locale==="be"?"Адказаць":"Ответить"},
+          {action:"decline",title:locale==="be"?"Адхіліць":"Отклонить"}
+        ]
+      });
+    }catch(error){
+      // Some WebKit implementations reject action/renotify options. A basic
+      // incoming-call notification is preferable to silently missing a call.
+      await self.registration.showNotification(message.title,basics);
+    }
+  }else await self.registration.showNotification(message.title,basics);
 
   if (data.kind === "message" && typeof self.navigator?.setAppBadge === "function") {
     try { await self.navigator.setAppBadge(); } catch {}
   }
+}
+
+const CALL_ID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+async function declineFromNotification(details){
+  const chat=details.conversationId,call=details.callId;
+  if(typeof chat!=="string" || typeof call!=="string" ||
+     !CALL_ID_PATTERN.test(chat) || !CALL_ID_PATTERN.test(call))return;
+  // Cookies are browser-managed; no tokens or other secrets enter push data.
+  try {
+    await fetch(`/api/v1/chats/${chat}/calls/${call}/decline`,{
+      method:"POST",credentials:"same-origin",cache:"no-store"
+    });
+  }catch(error){console.warn("[CallPush] could not decline notification",error);}
 }
 
 async function openOrFocus(targetUrl) {
@@ -141,7 +186,7 @@ async function openOrFocus(targetUrl) {
 
 // Public application shell only. Never cache authenticated /api endpoints,
 // voice messages, WebSocket traffic, or user data.
-const SHELL_CACHE = "bulbam-shell-c3b04a6192ac";
+const SHELL_CACHE = "bulbam-shell-f109b9a6aab9";
 const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
 
 self.addEventListener("fetch", (event) => {

@@ -143,6 +143,7 @@ describe("whole-product Belarusian localization",()=>{
    body:"Нажмите, чтобы открыть Бульбам и ответить.",data:{url:"/"}})}});
   expect(notifications.at(-1).title).toBe("Уваходны званок — Егор");
   expect(notifications.at(-1).body).toBe("Націсніце, каб адкрыць Бульбам і адказаць.");
+  expect(notifications.at(-1).actions.map(item=>item.title)).toEqual(["Адказаць","Адхіліць"]);
   await send("push",{data:{json:()=>({kind:"admin-recovery",title:"Бульбам: запрос восстановления",
    body:"Новая заявка. Прежде чем одобрить, проверьте личность пользователя.",data:{url:"/"}})}});
   expect(notifications.at(-1).title).toBe("Бульбам: запыт аднаўлення");
