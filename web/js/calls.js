@@ -232,6 +232,14 @@ export function setupCalls() {
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "bulbam.call-push") {
         void handleVisibleCallPush(event.data.data ?? {});
+      } else if(event.data?.type==="bulbam.notification-open"){
+        const url=new URL(event.data.url??"/",location.origin);
+        if(url.origin===location.origin && url.searchParams.has("call")){
+          void handleVisibleCallPush({
+            callId:url.searchParams.get("call"),
+            conversationId:url.searchParams.get("chat")
+          });
+        }
       }
     });
   }

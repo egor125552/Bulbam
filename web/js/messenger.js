@@ -34,6 +34,7 @@ let groupSelected=new Set();
 let groupEditorMode='create';
 let groupEditorConversation=null;
 let groupSearchTimer=null;
+let pendingNotificationChat=null;
 
 export function setupMessenger() {
   jumpButton = document.querySelector("#jump-to-latest");
@@ -67,6 +68,24 @@ export function setupMessenger() {
     presenceByUserId = new Map((event.detail?.users ?? []).map(user=>[user.userId,user]));
     updatePeerPresence();
   });
+  window.addEventListener("bulbam:notification-open",event=>{
+    const url=event.detail?.url;
+    if(typeof url!=="string" || !account)return;
+    const target=new URL(url,location.origin);
+    if(target.origin!==location.origin || !target.searchParams.has("chat"))return;
+    const chatId=target.searchParams.get("chat");
+    if(!/^[0-9a-f-]{36}$/i.test(chatId??""))return;
+    // Protect an active recording and any unsent text in the composer.
+    if(document.body.classList.contains("voice-recording") ||
+       (elements.messageInput.value.trim() && selectedChat?.conversationId!==chatId)){
+      pendingNotificationChat=chatId;
+      announce("Открою новый чат, когда вы завершите запись или отправите текст.");
+      return;
+    }
+    void openNotificationChat(chatId);
+  });
+  window.addEventListener("bulbam:voice-recording-finished",maybeOpenPendingNotification);
+  elements.messageInput.addEventListener("input",maybeOpenPendingNotification);
   window.addEventListener("bulbam:profile-updated",event=>{
     if(account?.userId===event.detail?.account?.userId)
       account={...account,displayName:event.detail.account.displayName};
@@ -102,6 +121,7 @@ export async function refreshChatsAfterExternalMessage() {
 
 async function switchAccount(nextAccount) {
   generation += 1;
+  pendingNotificationChat=null;
   account = nextAccount;
   logTraceEvent('Навигация','смена пользователя','',{active:Boolean(nextAccount)});
   chats = [];
@@ -127,6 +147,24 @@ async function switchAccount(nextAccount) {
   if (generation !== currentGeneration) return;
   await openRequestedChat();
   connectRealtime();
+}
+
+function maybeOpenPendingNotification(){
+  if(!pendingNotificationChat || document.body.classList.contains("voice-recording") ||
+     elements.messageInput.value.trim())return;
+  const id=pendingNotificationChat;
+  pendingNotificationChat=null;
+  void openNotificationChat(id);
+}
+
+async function openNotificationChat(id){
+  if(!account)return;
+  let chat=chats.find(item=>item.conversationId===id);
+  if(!chat){
+    await loadChats({quiet:true});
+    chat=chats.find(item=>item.conversationId===id);
+  }
+  if(chat && account)await selectChat(chat,{focusHeading:true});
 }
 
 async function openRequestedChat() {
@@ -596,6 +634,8 @@ async function sendCurrentMessage(event) {
   messages.push(pending);
   logTraceEvent('Интерфейс','сообщение поставлено в очередь','',{count:messages.length});
   elements.messageInput.value = "";
+  // The outgoing message is already pinned to its original conversation.
+  maybeOpenPendingNotification();
   renderMessages({ preserveVoicePlayback: true, scrollToBottom: true });
   await transmitPending(pending);
 }

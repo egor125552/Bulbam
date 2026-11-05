@@ -48,7 +48,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     };
   }
 
-  async subscribe(userId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
+  async subscribe(userId: string, sessionId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
     if (!this.configured()) {
       badRequest(
         "push_not_configured",
@@ -59,6 +59,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     await this.repository.upsert({
       ...subscription,
       userId,
+      sessionId,
       userAgent
     });
   }
@@ -149,6 +150,8 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
 
   private async send(subscription: PushSubscriptionRecord, payload: string, ttl: number): Promise<void> {
     try {
+      // A session may be revoked while the fanout is being prepared.
+      if(!(await this.repository.isCurrentSession(subscription)))return;
       await webpush.sendNotification(
         {
           endpoint: subscription.endpoint,
@@ -176,7 +179,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   }
 }
 
-function validateSubscription(raw: Record<string, unknown>): Omit<PushSubscriptionRecord, "userId"> {
+function validateSubscription(raw: Record<string, unknown>): Omit<PushSubscriptionRecord, "userId" | "sessionId"> {
   const endpoint = validateEndpoint(raw.endpoint);
   const expirationTime = raw.expirationTime === null || raw.expirationTime === undefined
     ? null

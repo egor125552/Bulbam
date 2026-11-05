@@ -474,6 +474,7 @@ async function finishStoppedRecorder(state) {
   }
 
   await refreshRecoverableDraft();
+  window.dispatchEvent(new CustomEvent("bulbam:voice-recording-finished"));
 }
 
 async function sendDraftById(id, existingTransport = null) {

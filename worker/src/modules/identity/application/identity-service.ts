@@ -22,7 +22,8 @@ const DUMMY_PASSWORD_HASH =
 export class IdentityService {
   constructor(
     private readonly repository: IdentityRepository,
-    private readonly onProfileChanged?: (userId:string,displayName:string)=>Promise<void>
+    private readonly onProfileChanged?: (userId:string,displayName:string)=>Promise<void>,
+    private readonly onSessionsRevoked?: (userId:string)=>Promise<void>
   ) {}
 
   async register(input: {
@@ -116,6 +117,7 @@ export class IdentityService {
     const accountCredentials = await this.repository.findAccountCredentialsByUsername(input.username);
     if (!accountCredentials) throw new Error("Recovered account was not found.");
     const { passwordHash: _hash, ...account } = accountCredentials;
+    await this.cleanupRevokedSessions(account.userId);
     const issued = await this.issueSession(account.userId, input.deviceName, Date.now());
     let recoveryCodes: string[] = [];
     try {
@@ -149,6 +151,7 @@ export class IdentityService {
       sessionId: authenticated.session.sessionId,
       passwordHash, now: Date.now()
     });
+    await this.cleanupRevokedSessions(authenticated.account.userId);
   }
 
   async authenticate(token: string | null): Promise<AuthenticatedSession> {
@@ -177,6 +180,7 @@ export class IdentityService {
       authenticated.session.sessionId,
       Date.now()
     );
+    await this.cleanupRevokedSessions(authenticated.account.userId);
   }
 
   async listSessions(authenticated: AuthenticatedSession): Promise<Session[]> {
@@ -191,6 +195,19 @@ export class IdentityService {
     );
     if (!revoked) {
       throw new ApiError(404, "session_not_found", "Сессия не найдена.");
+    }
+    await this.cleanupRevokedSessions(authenticated.account.userId);
+  }
+
+  async cleanupRevokedSessions(userId:string):Promise<void> {
+    // Database-backed delivery always filters revoked sessions, even when
+    // physical cleanup has to be retried after a transient storage failure.
+    try { await this.onSessionsRevoked?.(userId); }
+    catch(error){
+      // The push recipient query independently excludes revoked and expired
+      // sessions, so a cleanup failure cannot leak data or invalidate a
+      // successful password reset or logout.
+      console.warn("[Identity] revoked-session cleanup deferred",error);
     }
   }
 
