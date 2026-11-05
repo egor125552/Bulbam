@@ -21,7 +21,7 @@ import {
   updateVoiceDraft
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
-import { VoiceUploadSocket } from "./voice-upload-socket.js";
+import { VoiceUploadSocket,canReuseVoiceUploadTransport } from "./voice-upload-socket.js";
 import { createRecordingClock } from "./voice-recording-clock.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
@@ -484,7 +484,8 @@ async function sendDraftById(id, existingTransport = null) {
     if (!totalBytes) throw new Error("запись пустая");
 
     logDiagnostic("Голосовые", "подготовка серверной загрузки");
-    const upload = await ensureDraftUpload(draft);
+    const liveUpload=canReuseVoiceUploadTransport(transport,draft.upload);
+    const upload = liveUpload ? draft.upload : await ensureDraftUpload(draft);
     logDiagnostic("Голосовые", "сервер подтвердил загрузку");
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     const partCount = Math.ceil(totalBytes / partSize);

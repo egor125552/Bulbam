@@ -1,4 +1,8 @@
 import { logDiagnostic } from "./diagnostics-log.js";
+export function canReuseVoiceUploadTransport(transport,upload){
+  return Boolean(transport?.sessionId && upload?.sessionId===transport.sessionId
+    && transport.socket?.readyState===WebSocket.OPEN);
+}
 const CONNECT_TIMEOUT_MS = 10_000;
 const ACK_TIMEOUT_MS = 15_000;
 const MAX_SEND_ATTEMPTS = 3;

@@ -72,8 +72,17 @@ export class PresenceService {
       FROM peers
       LEFT JOIN activity ON activity.user_id=peers.peer_id
       LEFT JOIN account_presence_settings settings ON settings.user_id=peers.peer_id
-      ORDER BY peers.peer_id LIMIT 100
-    `).bind(userId,userId,userId,userId,userId,now).all<{
+      ORDER BY COALESCE((
+        SELECT MAX(m.created_at) FROM messages m
+        JOIN conversations c ON c.conversation_id=m.conversation_id
+        LEFT JOIN group_members a ON a.conversation_id=c.conversation_id AND a.user_id=?
+        LEFT JOIN group_members b ON b.conversation_id=c.conversation_id AND b.user_id=peers.peer_id
+        WHERE (c.kind='direct' AND (
+          (c.participant_a_id=? AND c.participant_b_id=peers.peer_id) OR
+          (c.participant_b_id=? AND c.participant_a_id=peers.peer_id)
+        )) OR (c.kind='group' AND a.user_id IS NOT NULL AND b.user_id IS NOT NULL)
+      ),0) DESC, peers.peer_id LIMIT 500
+    `).bind(userId,userId,userId,userId,userId,now,userId,userId,userId).all<{
       user_id:string;last_seen_at:number|null;online:number;share_presence:number
     }>();
     return (result.results??[]).map(row=>({
