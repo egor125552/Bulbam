@@ -33,8 +33,7 @@ function state(message) {
 function updateForm(){
   const area=document.querySelector("#admin-recovery-progress");
   if(area)area.hidden=!pending;
-  const code=document.querySelector("#admin-recovery-verification");
-  if(code)code.textContent=pending?.verificationCode||"";
+
 }
 async function requestRecovery(event){
   event.preventDefault();
@@ -44,7 +43,7 @@ async function requestRecovery(event){
     const data=new FormData(form);
     const result=await api("/api/v1/auth/admin-recovery/request",{
       method:"POST",
-      body:JSON.stringify({username:data.get("username"),deviceName:deviceName()})
+      body:JSON.stringify({username:data.get("username"),deviceName:deviceName(),note:data.get("note")||""})
     });
     pending={requestId:result.requestId,secret:result.secret,
       verificationCode:result.verificationCode,expiresAt:result.expiresAt};
@@ -73,6 +72,7 @@ async function checkStatus(quiet=false){
       stopPolling();
       if(complete)complete.hidden=false;
       state("Администратор подтвердил заявку. Установите новый пароль в течение 15 минут.");
+      if(current.fromLink)document.querySelector("#admin-recovery-complete [name=newPassword]")?.focus();
       if(!quiet)announce("Заявка одобрена. Можно установить новый пароль.");
     }else if(result.status==="denied" || result.status==="expired" || result.status==="consumed"){
       stopPolling();if(complete)complete.hidden=true;
@@ -102,6 +102,7 @@ async function completeRecovery(event){
       })
     });
     pending=null;save();stopPolling();form.reset();updateForm();
+    document.querySelector("#auth-view-recovery")?.removeAttribute("data-recovery-link");
     // This user is returning after account recovery, not a new registrant.
     try{localStorage.setItem("bulbam.welcome.v1."+result.account.userId,"yes");}catch{}
     showSignedIn(result.account,result.session);
@@ -148,14 +149,22 @@ async function refreshQueue(){
       li.dataset.requestId=req.requestId;
       const details=document.createElement("p");
       details.textContent="Пользователь @"+req.username+", устройство: "+req.deviceName+
-        ", код заявки: "+req.verificationCode+", время: "+
-        new Date(req.createdAt).toLocaleString()+".";
+        ", статус: "+(req.knownDevice?"Знакомое устройство (входил ранее)":"Новое неизвестное устройство")+
+        ", время: "+new Date(req.createdAt).toLocaleString()+".";
+      const noteLabel=document.createElement("p");
+      noteLabel.textContent="Сообщение для администратора:";
+      const note=document.createElement("p");
+      if(req.note)note.dataset.userContent="";
+      note.textContent=req.note||"Сообщение не оставлено.";
       const check=document.createElement("label");
       const verified=document.createElement("input");
       verified.type="checkbox";
       check.append(verified," Я независимо проверил личность владельца по заранее известному мне способу связи.");
       const approve=document.createElement("button");
       approve.type="button";approve.textContent="Одобрить";
+      const linkButton=document.createElement("button");
+      linkButton.type="button";linkButton.textContent="Одобрить и скопировать ссылку";
+      linkButton.addEventListener("click",()=>void issueLink(req.username,verified.checked,req.requestId,linkButton));
       const deny=document.createElement("button");
       deny.type="button";deny.textContent="Отклонить";
       async function decide(yes){
@@ -181,16 +190,85 @@ async function refreshQueue(){
       }
       approve.addEventListener("click",()=>void decide(true));
       deny.addEventListener("click",()=>void decide(false));
-      li.append(details,check,document.createTextNode(" "),approve,document.createTextNode(" "),deny);
+      li.append(details,noteLabel,note,check,document.createTextNode(" "),approve,document.createTextNode(" "),linkButton,document.createTextNode(" "),deny);
       list.append(li);
     }
   }catch(error){status.textContent="Не удалось загрузить заявки: "+error.message;}
   finally{refreshing=false;}
 }
+async function issueLink(username,verifiedIdentity,requestId,button){
+  if(!verifiedIdentity){
+    announce("Сначала независимо проверьте личность пользователя и подтвердите это флажком.");
+    return;
+  }
+  button.disabled=true;
+  const status=document.querySelector("#admin-recovery-link-status") || document.querySelector("#admin-recovery-queue-status");
+  try{
+    const result=await api("/api/v1/admin/recovery-link",{
+      method:"POST",body:JSON.stringify({username,verifiedIdentity,requestId})
+    });
+    const url=new URL(location.pathname,location.origin);
+    url.hash=new URLSearchParams({recoveryId:result.requestId,recoveryToken:result.secret}).toString();
+    const output=document.querySelector("#admin-recovery-link-output");
+    const value=document.querySelector("#admin-recovery-link-value");
+    if(value)value.value=url.href;
+    if(output)output.hidden=false;
+    try{
+      await navigator.clipboard.writeText(url.href);
+      if(status)status.textContent="Ссылка скопирована. Она действует 15 минут и подходит только для одного сброса пароля.";
+      announce("Ссылка для сброса пароля скопирована.");
+    }catch{
+      if(status)status.textContent="Ссылка создана. Нажмите «Скопировать ссылку» или скопируйте её из поля.";
+      announce("Ссылка создана. Скопируйте её отдельной кнопкой.");
+    }
+    void refreshQueue();
+  }catch(error){
+    if(status)status.textContent="Не удалось создать или скопировать ссылку: "+error.message;
+    announce(status?.textContent||error.message);
+  }finally{button.disabled=false;}
+}
+function restoreLink(){
+  if(typeof location==="undefined")return;
+  const url=new URL(location.href);
+  const fragment=new URLSearchParams(url.hash.slice(1));
+  const id=fragment.get("recoveryId");
+  const secret=fragment.get("recoveryToken");
+  if(!id&&!secret)return;
+  url.hash="";
+  history.replaceState(null,"",url.pathname+url.search+url.hash);
+  if(!/^[0-9a-f-]{36}$/i.test(id||"")||!/^ar_[a-f0-9]{64}$/.test(secret||""))return;
+  pending={requestId:id,secret,expiresAt:Date.now()+15*60_000,fromLink:true};
+  updateForm();
+  document.querySelector("#auth-view-login")?.setAttribute("hidden","");
+  document.querySelector("#auth-view-register")?.setAttribute("hidden","");
+  const recovery=document.querySelector("#auth-view-recovery");
+  if(recovery){
+    recovery.hidden=false;
+    recovery.dataset.recoveryLink="active";
+  }
+  void checkStatus(true);
+}
 export function setupAdminRecovery(){
-  restore();updateForm();startPolling();
-  if(pending)void checkStatus(true);
+  restore();updateForm();startPolling();restoreLink();
+  if(pending && !pending.fromLink)void checkStatus(true);
+  document.querySelector("#admin-recovery-copy-link")?.addEventListener("click",async()=>{
+    const field=document.querySelector("#admin-recovery-link-value");
+    if(!field?.value)return;
+    try{
+      await navigator.clipboard.writeText(field.value);
+      announce("Ссылка для сброса пароля скопирована.");
+    }catch{
+      field.focus();field.select();
+      announce("Не удалось скопировать автоматически. Ссылка выделена, скопируйте её вручную.");
+    }
+  });
   document.querySelector("#admin-recovery-form")?.addEventListener("submit",requestRecovery);
+  document.querySelector("#admin-recovery-link-form")?.addEventListener("submit",event=>{
+    event.preventDefault();
+    const form=event.currentTarget;
+    const submit=form.querySelector("button[type=submit]");
+    void issueLink(form.elements.username.value,form.elements.verifiedIdentity.checked,undefined,submit);
+  });
   document.querySelector("#admin-recovery-complete")?.addEventListener("submit",completeRecovery);
   document.querySelector("#admin-recovery-check")?.addEventListener("click",()=>void checkStatus());
   document.querySelector("#admin-recovery-refresh")?.addEventListener("click",()=>void refreshQueue());

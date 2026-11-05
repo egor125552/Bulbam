@@ -9,7 +9,8 @@ import { DurableObjectRealtime } from "../../realtime/public";
 
 const TTL = 24 * 60 * 60_000;
 const APPROVAL_TTL = 15 * 60_000;
-const MAX_REQUESTS_PER_DAY = 2;
+const MAX_REQUESTS_PER_IP_PER_DAY = 8;
+const DEVICE_TTL = 180 * 24 * 60 * 60_000;
 type Row=Record<string,unknown>;
 function invalid(): never {throw new ApiError(400,"invalid_recovery_request","Запрос восстановления недействителен или срок его действия истёк.");}
 function isManager(auth:AuthenticatedSession):boolean {
@@ -30,32 +31,55 @@ export class AdminRecoveryService {
     private readonly push?:PushNotificationService,
     private readonly defer?:(job:Promise<unknown>)=>void
   ){}
-  async request(username:string,deviceName:string,requester:string) {
+  async revokeTrustedDevices(userId:string):Promise<void> {
     await ensureIdentitySchema(this.db);
-    const now=Date.now();
+    await this.db.prepare("DELETE FROM admin_recovery_devices WHERE user_id=?").bind(userId).run();
+  }
+
+  async trustDevice(userId:string):Promise<string> {
+    await ensureIdentitySchema(this.db);
+    const value=token();
+    await this.db.prepare("INSERT INTO admin_recovery_devices(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)")
+      .bind(await sha256Hex(value),userId,Date.now(),Date.now()+DEVICE_TTL).run();
+    return value;
+  }
+
+  async request(username:string,deviceName:string,requester:string, note="", deviceToken="") {
+    await ensureIdentitySchema(this.db);
+    if(typeof note!=="string" || [...note].length>200)
+      throw new ApiError(400,"invalid_recovery_note","Сообщение администратору должно содержать не более 200 символов.");
+    const now=Date.now(), expiresAt=now+TTL;
     const requesterHash=await sha256Hex(requester.slice(0,128));
-    const globalCount=await this.db.prepare(
-      "SELECT COUNT(*) AS total FROM admin_recovery_requests WHERE requester_hash=? AND created_at>?"
-    ).bind(requesterHash,now-TTL).first<{total:number}>();
     const row=await this.db.prepare(
       "SELECT user_id,role FROM accounts WHERE username=? COLLATE NOCASE AND disabled_at IS NULL LIMIT 1"
     ).bind(username).first<{user_id:string;role:string}>();
     const requestId=crypto.randomUUID(), secret=token();
+    const secretHash=await sha256Hex(secret);
+    // Every request, including a nonexistent account, gets a persisted expiration.
+    await this.db.prepare("INSERT INTO admin_recovery_receipts(request_id,secret_hash,requester_hash,expires_at) VALUES(?,?,?,?)")
+      .bind(requestId,secretHash,requesterHash,expiresAt).run();
     const verificationCode=Array.from(crypto.getRandomValues(new Uint8Array(6))).map(n=>String(n%10)).join("").slice(0,6);
-    // Manager accounts may NOT be recovered by a second manager's approval alone.
-    // Unknown accounts and ineligible accounts return the same generic payload.
-    if(row?.role === "member" && Number(globalCount?.total??0)<8) {
-      const recent=await this.db.prepare(
-        "SELECT COUNT(*) AS total FROM admin_recovery_requests WHERE user_id=? AND created_at>?"
-      ).bind(row.user_id,now-TTL).first<{total:number}>();
-      const active=await this.db.prepare(
-        "SELECT COUNT(*) AS total FROM admin_recovery_requests WHERE user_id=? AND status IN ('pending','approved') AND expires_at>?"
+    const known=Boolean(row?.role==="member" && /^ar_[a-f0-9]{64}$/.test(deviceToken) &&
+      await this.db.prepare("SELECT token_hash FROM admin_recovery_devices WHERE token_hash=? AND user_id=? AND expires_at>?")
+        .bind(await sha256Hex(deviceToken),row.user_id,now).first());
+    // Count receipts in the current day using expiry (issued expiry is immutable).
+    const ipCount=await this.db.prepare(
+      "SELECT COUNT(*) AS total FROM admin_recovery_receipts WHERE requester_hash=? AND expires_at>?"
+    ).bind(requesterHash,now).first<{total:number}>();
+    if(row?.role==="member" && (known || Number(ipCount?.total??0)<=MAX_REQUESTS_PER_IP_PER_DAY)) {
+      const protectedPending=await this.db.prepare(
+        "SELECT COUNT(*) AS total FROM admin_recovery_requests WHERE user_id=? AND status='pending' AND known_device=1 AND expires_at>?"
       ).bind(row.user_id,now).first<{total:number}>();
-      if(Number(recent?.total??0)<MAX_REQUESTS_PER_DAY && Number(active?.total??0)===0){
-        await this.db.prepare(`INSERT INTO admin_recovery_requests
-          (request_id,user_id,secret_hash,device_name,requester_hash,verification_code,status,created_at,expires_at)
-          VALUES (?,?,?,?,?,?,'pending',?,?)`
-        ).bind(requestId,row.user_id,await sha256Hex(secret),deviceName,requesterHash,verificationCode,now,now+TTL).run();
+      if(known || Number(protectedPending?.total??0)===0) {
+        // A new request supersedes earlier unapproved requests, never an approved reset.
+        await this.db.batch([
+          this.db.prepare("UPDATE admin_recovery_requests SET status='denied',reviewed_at=? WHERE user_id=? AND status='pending'")
+            .bind(now,row.user_id),
+          this.db.prepare(`INSERT INTO admin_recovery_requests
+          (request_id,user_id,secret_hash,device_name,requester_hash,verification_code,status,created_at,expires_at,note,known_device)
+          VALUES (?,?,?,?,?,?,'pending',?,?,?,?)`)
+          .bind(requestId,row.user_id,secretHash,deviceName,requesterHash,verificationCode,now,expiresAt,note,known?1:0)
+        ]);
         const owners=await this.db.prepare("SELECT user_id FROM accounts WHERE role='owner' AND disabled_at IS NULL").all<{user_id:string}>();
         const task=Promise.all((owners.results??[]).map(async owner=>{
           await Promise.all([
@@ -66,7 +90,7 @@ export class AdminRecoveryService {
         if(this.defer)this.defer(task);else await task;
       }
     }
-    return {ok:true,requestId,secret,verificationCode,expiresAt:now+TTL,
+    return {ok:true,requestId,secret,verificationCode,expiresAt,
       message:"Если аккаунт допускает восстановление, заявка передана администратору. Проверьте её статус на этом устройстве."};
   }
 
@@ -77,17 +101,30 @@ export class AdminRecoveryService {
     const row=await this.db.prepare(
       "SELECT status,expires_at,reviewed_at FROM admin_recovery_requests WHERE request_id=? AND secret_hash=?"
     ).bind(requestId,await sha256Hex(secret)).first<{status:string;expires_at:number;reviewed_at:number|null}>();
-    // Unknown accounts don't leak existence: show pending until the generic request expires.
-    if(!row)return {ok:true,status:"pending",expiresAt:Date.now()+TTL};
-    if(row.expires_at<=Date.now())return {ok:true,status:"expired",expiresAt:row.expires_at};
-    return {ok:true,status:row.status,expiresAt:row.expires_at};
+    const initial=await this.db.prepare("SELECT expires_at FROM admin_recovery_receipts WHERE request_id=?")
+      .bind(requestId).first<{expires_at:number}>();
+    // The submission expiration is fixed, including after an approval or denial.
+    if(!row) {
+      const receipt=await this.db.prepare(
+        "SELECT expires_at FROM admin_recovery_receipts WHERE request_id=? AND secret_hash=?"
+      ).bind(requestId,await sha256Hex(secret)).first<{expires_at:number}>();
+      if(!receipt) {
+        const generic=await this.db.prepare("SELECT expires_at FROM admin_recovery_receipts WHERE request_id=?").bind(requestId).first<{expires_at:number}>();
+        if(!generic)invalid();
+        return {ok:true,status:generic.expires_at<=Date.now()?"expired":"pending",expiresAt:generic.expires_at};
+      }
+      return {ok:true,status:receipt.expires_at<=Date.now()?"expired":"pending",expiresAt:receipt.expires_at};
+    }
+    if(row.expires_at<=Date.now())return {ok:true,status:"expired",expiresAt:initial?.expires_at??row.expires_at};
+    return {ok:true,status:row.status,expiresAt:initial?.expires_at??row.expires_at,
+      ...(row.status==="approved"?{approvalExpiresAt:row.expires_at}:{})};
   }
 
   async list(auth:AuthenticatedSession) {
     if(!isManager(auth))forbidden("admin_only","Просматривать заявки может только администратор.");
     await ensureIdentitySchema(this.db);
     const rows=await this.db.prepare(`SELECT r.request_id,r.device_name,r.verification_code,r.created_at,
-      r.expires_at,a.username,a.display_name,a.role FROM admin_recovery_requests r
+      r.expires_at,r.note,r.known_device,a.username,a.display_name,a.role FROM admin_recovery_requests r
       JOIN accounts a ON a.user_id=r.user_id
       WHERE r.status='pending' AND r.expires_at>? AND a.disabled_at IS NULL
       ORDER BY r.created_at ASC LIMIT 30`
@@ -95,7 +132,7 @@ export class AdminRecoveryService {
     return (rows.results??[]).filter(row=>row.role==="member").map(row=>({
       requestId:String(row.request_id),username:String(row.username),
       displayName:String(row.display_name),deviceName:String(row.device_name),
-      verificationCode:String(row.verification_code),createdAt:Number(row.created_at),expiresAt:Number(row.expires_at)
+      verificationCode:String(row.verification_code),note:String(row.note??""),knownDevice:Number(row.known_device)===1,createdAt:Number(row.created_at),expiresAt:Number(row.expires_at)
     }));
   }
 
@@ -112,6 +149,36 @@ export class AdminRecoveryService {
     ).bind(approve?"approved":"denied",now,auth.account.userId,approve?now+APPROVAL_TTL:now+TTL,requestId,now).run();
     if(result.meta?.changes!==1)invalid();
     return {ok:true};
+  }
+
+  async createLink(auth:AuthenticatedSession, username:string,verifiedIdentity:boolean, requestId?:string) {
+    if(!isManager(auth))forbidden("admin_only","Создавать ссылки может только администратор.");
+    if(!verifiedIdentity)
+      throw new ApiError(400,"verification_required","Перед подтверждением проверьте личность владельца по заранее известному вам каналу.");
+    await ensureIdentitySchema(this.db);
+    const row=await this.db.prepare("SELECT user_id FROM accounts WHERE username=? COLLATE NOCASE AND role='member' AND disabled_at IS NULL")
+      .bind(username).first<{user_id:string}>();
+    if(!row)invalid();
+    const now=Date.now(),id=crypto.randomUUID(),secret=token();
+    if(requestId) {
+      validateId(requestId);
+      const pending=await this.db.prepare("SELECT request_id FROM admin_recovery_requests WHERE request_id=? AND user_id=? AND status='pending' AND expires_at>?")
+        .bind(requestId,row.user_id,now).first();
+      if(!pending)invalid();
+    }
+    // Issuing a new administrator link revokes all older pending or approved
+    // paths for this account, so stale links cannot reset a freshly recovered account.
+    const statements=[
+      this.db.prepare("UPDATE admin_recovery_requests SET status='denied',reviewed_at=?,reviewed_by=? WHERE user_id=? AND status IN ('pending','approved') AND expires_at>?")
+        .bind(now,auth.account.userId,row.user_id,now)
+    ];
+    statements.push(this.db.prepare(`INSERT INTO admin_recovery_requests
+      (request_id,user_id,secret_hash,device_name,requester_hash,verification_code,status,created_at,expires_at,reviewed_at,reviewed_by,note,known_device)
+      VALUES (?,?,?,?,?,?,'approved',?,?,?,?,?,0)`)
+      .bind(id,row.user_id,await sha256Hex(secret),"Ссылка администратора","admin","",now,now+APPROVAL_TTL,now,auth.account.userId,""));
+    const results=await this.db.batch(statements);
+    if(results.at(-1)?.meta?.changes!==1)invalid();
+    return {ok:true,requestId:id,secret,expiresAt:now+APPROVAL_TTL};
   }
 
   async complete(requestId:string,secret:string,newPassword:string,deviceName:string) {
@@ -140,6 +207,9 @@ export class AdminRecoveryService {
       ).bind(now,row.user_id,requestId,nonce),
       // Revoke all existing passkeys on admin-assisted recovery: an unknown
       // stolen key must not immediately take the account back after reset.
+      this.db.prepare("DELETE FROM admin_recovery_devices WHERE user_id=?").bind(row.user_id),
+      this.db.prepare("UPDATE admin_recovery_requests SET status='denied', reviewed_at=? WHERE user_id=? AND request_id<>? AND status IN ('pending','approved')")
+        .bind(now,row.user_id,requestId),
       this.db.prepare(`DELETE FROM account_passkeys WHERE user_id=?
         AND EXISTS(SELECT 1 FROM admin_recovery_requests WHERE request_id=? AND consumed_nonce=?)`
       ).bind(row.user_id,requestId,nonce)

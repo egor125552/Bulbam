@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
   <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.780432b9b832.js">
+  <link rel="modulepreload" href="/boot.403cab43af05.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -125,12 +125,15 @@
           <label>Имя пользователя, чей доступ нужно восстановить
             <input name="username" autocomplete="username" minlength="3" maxlength="32" required>
           </label>
+          <label>Короткое сообщение администратору (чтобы он узнал вас)
+            <textarea name="note" maxlength="200" rows="2" data-user-content></textarea>
+          </label>
           <button type="submit">Отправить запрос администратору</button>
         </form>
         <p class="hint">Администратор должен сначала проверить вашу личность по заранее известному ему способу связи. Не передавайте ему свой пароль.</p>
         <div id="admin-recovery-progress" role="status" aria-live="polite" hidden>
           <p id="admin-recovery-state"></p>
-          <p>Код заявки: <strong id="admin-recovery-verification"></strong>. Сообщите его администратору, когда он проверит, что обращаетесь именно вы.</p>
+          <p>Администратор проверит личность самостоятельно. Код заявки не требуется.</p>
           <button type="button" id="admin-recovery-check">Проверить решение администратора</button>
           <form id="admin-recovery-complete" class="form-stack" hidden>
             <p>Заявка одобрена. Создайте новый пароль. Одобрение одноразовое и действует 15 минут.</p>
@@ -440,6 +443,19 @@
             <h3 id="admin-recovery-queue-title" tabindex="-1">Запросы восстановления</h3>
             <p>Одобряйте заявку только после независимой проверки владельца аккаунта. Запрос без подтверждения личности может быть попыткой захвата.</p>
             <button id="admin-recovery-refresh" type="button">Обновить заявки</button>
+            <form id="admin-recovery-link-form" class="form-stack">
+              <label>Имя пользователя для сброса пароля
+                <input name="username" autocomplete="off" required minlength="3" maxlength="32">
+              </label>
+              <label><input name="verifiedIdentity" type="checkbox" required> Я независимо проверил личность владельца по заранее известному мне способу связи.</label>
+              <button type="submit">Создать ссылку для сброса</button>
+            </form>
+            <p id="admin-recovery-link-status" role="status" aria-live="polite"></p>
+            <div id="admin-recovery-link-output" hidden>
+              <label for="admin-recovery-link-value">Одноразовая ссылка для сброса пароля</label>
+              <input id="admin-recovery-link-value" type="text" readonly>
+              <button id="admin-recovery-copy-link" type="button">Скопировать ссылку</button>
+            </div>
             <p id="admin-recovery-queue-status" role="status" aria-live="polite" tabindex="-1"></p>
             <ul id="admin-recovery-requests" aria-label="Ожидающие запросы восстановления"></ul>
           </section>
@@ -620,7 +636,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.780432b9b832.js");
+      await import("/boot.403cab43af05.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

@@ -7,6 +7,18 @@ import type { RegistrationResponseJSON, AuthenticationResponseJSON } from "@simp
 import { loginInput, registrationInput, normalizeUsername, validateDeviceName, validatePassword } from "../domain/validation";
 
 const SESSION_COOKIE = "bulbam_session";
+const DEVICE_COOKIE = "bulbam_recovery_device";
+function cookieValue(request:Request,name:string):string {
+  const part=(request.headers.get("cookie")??"").split(";").map(v=>v.trim()).find(v=>v.startsWith(name+"="));
+  return part?.slice(name.length+1)??"";
+}
+async function withDeviceCookie(response:Response,recovery:AdminRecoveryService|undefined|null,userId:string):Promise<Response> {
+  if(!recovery)return response;
+  const value=await recovery.trustDevice(userId);
+  const headers=new Headers(response.headers);
+  headers.append("set-cookie", `${DEVICE_COOKIE}=${value}; Path=/; Max-Age=15552000; HttpOnly; Secure; SameSite=Lax`);
+  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+}
 
 export async function handleIdentityHttp(
   request: Request,
@@ -20,7 +32,8 @@ export async function handleIdentityHttp(
     const body=await readJsonObject(request);
     return json(await recovery.request(normalizeUsername(String(body.username??"")),
       validateDeviceName(typeof body.deviceName==="string"?body.deviceName:undefined),
-      request.headers.get("cf-connecting-ip") ?? "unknown"));
+      request.headers.get("cf-connecting-ip") ?? "unknown",
+      body.note===undefined?"":body.note as string,cookieValue(request,DEVICE_COOKIE)));
   }
   if (recovery && url.pathname === "/api/v1/auth/admin-recovery/status") {
     if(request.method!=="POST")return methodNotAllowed(["POST"]);
@@ -33,8 +46,15 @@ export async function handleIdentityHttp(
     const result=await recovery.complete(String(body.requestId??""),String(body.secret??""),
       validatePassword(String(body.newPassword??"")),
       validateDeviceName(typeof body.deviceName==="string"?body.deviceName:undefined));
-    return withSessionCookie(json({ok:true,account:result.account,session:result.session,
-      recoveryCodes:result.recoveryCodes}),result.token,result.session.expiresAt);
+    return withDeviceCookie(withSessionCookie(json({ok:true,account:result.account,session:result.session,
+      recoveryCodes:result.recoveryCodes}),result.token,result.session.expiresAt),recovery,result.account.userId);
+  }
+  if (recovery && url.pathname === "/api/v1/admin/recovery-link") {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const auth=await service.authenticate(sessionToken(request));
+    const body=await readJsonObject(request);
+    return json(await recovery.createLink(auth,normalizeUsername(String(body.username??"")),
+      body.verifiedIdentity===true,typeof body.requestId==="string"?body.requestId:undefined));
   }
   if (recovery && url.pathname === "/api/v1/admin/recovery-requests") {
     if(request.method!=="GET")return methodNotAllowed(["GET"]);
@@ -86,8 +106,8 @@ export async function handleIdentityHttp(
     const result=await passkeys.authenticationFinish(url.origin,{
       challengeId:body.challengeId,response:body.response as AuthenticationResponseJSON,deviceName
     });
-    return withSessionCookie(json({ok:true,account:result.account,session:result.session}),
-      result.token,result.session.expiresAt);
+    return withDeviceCookie(withSessionCookie(json({ok:true,account:result.account,session:result.session}),
+      result.token,result.session.expiresAt),recovery,result.account.userId);
   }
   const passkeyDelete = passkeys && url.pathname.match(/^\/api\/v1\/passkeys\/([A-Za-z0-9_-]{8,1024})$/);
   if (passkeys && passkeyDelete) {
@@ -102,22 +122,22 @@ export async function handleIdentityHttp(
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const input = registrationInput(await readJsonObject(request));
     const result = await service.register(input);
-    return withSessionCookie(
+    return withDeviceCookie(withSessionCookie(
       json({ ok: true, account: result.account, session: result.session, recoveryCodes: result.recoveryCodes }, { status: 201 }),
       result.token,
       result.session.expiresAt
-    );
+    ),recovery,result.account.userId);
   }
 
   if (url.pathname === "/api/v1/auth/login") {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const input = loginInput(await readJsonObject(request));
     const result = await service.login(input);
-    return withSessionCookie(
+    return withDeviceCookie(withSessionCookie(
       json({ ok: true, account: result.account, session: result.session }),
       result.token,
       result.session.expiresAt
-    );
+    ),recovery,result.account.userId);
   }
 
   if (url.pathname === "/api/v1/auth/reset-with-recovery-code") {
@@ -133,10 +153,11 @@ export async function handleIdentityHttp(
     const result = await service.resetPasswordWithRecoveryCode({
       username, code: rawCode, newPassword, deviceName
     });
-    return withSessionCookie(
+    await recovery?.revokeTrustedDevices(result.account.userId);
+    return withDeviceCookie(withSessionCookie(
       json({ ok: true, account: result.account, session: result.session, recoveryCodes: result.recoveryCodes }),
       result.token, result.session.expiresAt
-    );
+    ),recovery,result.account.userId);
   }
 
   if (url.pathname === "/api/v1/auth/recovery-codes") {
@@ -152,7 +173,8 @@ export async function handleIdentityHttp(
     const body = await readJsonObject(request);
     const password = validatePassword(String(body.newPassword ?? ""));
     await service.changePasswordFromSession(authenticated, password);
-    return json({ ok: true, note: "Другие устройства и ключи доступа отключены. Создайте новые резервные коды и при необходимости новые ключи доступа." });
+    await recovery?.revokeTrustedDevices(authenticated.account.userId);
+    return withDeviceCookie(json({ ok: true, note: "Другие устройства и ключи доступа отключены. Создайте новые резервные коды и при необходимости новые ключи доступа." }),recovery,authenticated.account.userId);
   }
 
   if (url.pathname === "/api/v1/auth/profile") {
