@@ -1,3 +1,4 @@
+import { optionRecordingKeyAction } from "./voice-option-key-policy.js";
 import { renderVoiceRecorderVisual, renderVoiceDeliveryVisual } from "./voice-recorder-visual.js";
 import { rawVoiceConstraints, keepVoiceRaw } from "./voice-raw-capture.js";
 import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
@@ -10,7 +11,7 @@ import {
   getSelectedChat,
   refreshChatsAfterExternalMessage
 } from "./messenger.js";
-import { playVoiceCue, prepareVoiceCues } from "./voice-cues.js";
+import { playVoiceCue, prepareVoiceCues, setupVoiceCueRestoration } from "./voice-cues.js";
 import {
   appendVoiceChunk,
   createVoiceDraft,
@@ -89,6 +90,7 @@ export function setupVoiceRecorder() {
   window.addEventListener("online", () => void refreshRecoverableDraft());
   observeCallPanel();
 
+  setupVoiceCueRestoration();
   document.addEventListener("keydown", handleOptionKeyDown, true);
   document.addEventListener("keyup", handleOptionKeyUp, true);
   window.addEventListener("blur", () => {
@@ -785,7 +787,11 @@ function updateVisualRecording() {
 }
 
 function handleOptionKeyDown(event) {
-  if (event.key === "Escape" && current) {
+  const action=optionRecordingKeyAction(event.key,{
+    isRecording:Boolean(current),trigger:current?.trigger,
+    altKey:event.altKey,timerActive:Boolean(optionTimer)
+  });
+  if (action==="cancel") {
     event.preventDefault();
     void cancelRecording();
     return;
@@ -793,10 +799,11 @@ function handleOptionKeyDown(event) {
   if (!isMacLike()) return;
 
   if (event.key !== "Alt") {
-    if (event.altKey || optionTimer || current?.trigger === "option") {
-      optionBlocked = true;
+    if(action==="interrupt" || action==="block") {
+      optionBlocked=true;
       clearOptionTimer();
-      if (current?.trigger === "option") void cancelRecording();
+      if(action==="interrupt")
+        void interruptRecording("Во время удержания Option нажата другая клавиша.");
     }
     return;
   }

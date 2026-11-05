@@ -1,4 +1,4 @@
-import { originalText, translateText } from "./i18n.js";
+import { translateText } from "./i18n.js";
 
 export const elements = {
   workerStatus: document.querySelector("#worker-status"),
