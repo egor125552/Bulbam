@@ -108,3 +108,19 @@ test("late keepalive playback cannot restart after hangup",async()=>{
  await vi.waitFor(()=>expect(audio.pause).toHaveBeenCalledTimes(2));
  expect(audio.paused).toBe(true);
 });
+
+test("stale cached app shell without keepalive audio cannot break a call",async()=>{
+ const noAudio=createCallKeepaliveAudio(null,{});
+ expect(noAudio.activate("Caller")).toBe(false);
+ await expect(noAudio.resume()).resolves.toBeUndefined();
+ expect(()=>noAudio.deactivate()).not.toThrow();
+ const incompleteAudio=createCallKeepaliveAudio({play:async()=>{}},{});
+ expect(incompleteAudio.activate("Caller")).toBe(false);
+ expect(()=>incompleteAudio.deactivate()).not.toThrow();
+});
+test("stale cached app shell without pocket button remains usable",()=>{
+ const panel={classList:{add:vi.fn(),remove:vi.fn()}};
+ const pocket=createCallPocketMode(panel,null,vi.fn());
+ expect(()=>{pocket.enter();pocket.exit();pocket.reset();}).not.toThrow();
+ expect(pocket.enabled).toBe(false);
+});
