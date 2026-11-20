@@ -53,5 +53,8 @@ export function startApp() {
 
   // Login is the only critical API request at startup. Health checks remain
   // available on demand, but must not block account/chat initialization.
-  void loadCurrentAccount({ quiet: false });
+  // A one-time recovery link must open its password form instead of being
+  // overwritten by startup session checks or an existing account session.
+  if(!document.querySelector("#auth-view-recovery")?.dataset.recoveryLink)
+    void loadCurrentAccount({ quiet: false });
 }

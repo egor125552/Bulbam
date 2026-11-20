@@ -136,6 +136,24 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_admin_recovery_requester ON admin_recovery_requests(requester_hash,created_at)",
       "CREATE INDEX IF NOT EXISTS idx_admin_recovery_pending ON admin_recovery_requests(status,created_at)"
     ]
+  },
+  {
+    version: 6,
+    statements: [
+      "ALTER TABLE admin_recovery_requests ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE admin_recovery_requests ADD COLUMN known_device INTEGER NOT NULL DEFAULT 0",
+      `CREATE TABLE IF NOT EXISTS admin_recovery_devices (
+        token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES accounts(user_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_admin_recovery_devices_user ON admin_recovery_devices(user_id,expires_at)",
+      `CREATE TABLE IF NOT EXISTS admin_recovery_receipts (
+        request_id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL,
+        requester_hash TEXT NOT NULL, expires_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_admin_recovery_receipt_requester ON admin_recovery_receipts(requester_hash,expires_at)"
+    ]
   }
 ] as const;
 
