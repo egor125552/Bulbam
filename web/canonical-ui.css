@@ -595,3 +595,43 @@ html[data-message-view="table"] .retry-message { grid-column: 2 / -1; justify-se
   border-radius: 0;
 }
 #settings-dialog .settings-grid { grid-template-columns: 1fr; }
+
+/* Pocket mode is an intentional full-screen, single-control privacy layer.
+   It remains operable with VoiceOver; actual iPhone proximity lock is OS-owned. */
+.call-banner.is-pocket:not([hidden]) {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 10000 !important;
+  display: flex !important;
+  justify-content: center;
+  align-items: center;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-height: none !important;
+  min-height: 100dvh !important;
+  margin: 0 !important;
+  padding: env(safe-area-inset-top) 1rem env(safe-area-inset-bottom) !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: #000 !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+.call-banner.is-pocket > :not(#call-pocket) { display: none !important; }
+.call-banner.is-pocket > #call-pocket {
+  display: block !important;
+  min-height: 4rem;
+  padding: 1rem 1.25rem;
+  color: #fff;
+  border: 2px solid #fff;
+  border-radius: 1rem;
+  background: #181818;
+  font-size: 1.1rem;
+}
+
+.call-banner:not(.is-pocket) > #call-pocket {
+  min-height: 3rem;
+  padding: 0.7rem 1.25rem;
+  max-width: min(100%, 30rem);
+  text-align: center;
+}
