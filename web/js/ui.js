@@ -49,6 +49,8 @@ export const elements = {
   callResumeButton: document.querySelector("#call-resume"),
   callHandoffButton: document.querySelector("#call-handoff"),
   callMuteButton: document.querySelector("#call-mute"),
+  callQualityButton: document.querySelector("#call-quality-check"),
+  callQualityStatus: document.querySelector("#call-quality-status"),
   callEndButton: document.querySelector("#call-end"),
   callMinimizeButton: document.querySelector("#call-minimize"),
   callExpandButton: document.querySelector("#call-expand"),
