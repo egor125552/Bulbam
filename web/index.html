@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=ebe9780c9f8c">
   <link rel="stylesheet" href="/canonical-ui.css?v=88a4be9a6ad6" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.84097541ce2e.js">
+  <link rel="modulepreload" href="/boot.afdfa19850cc.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -298,6 +298,7 @@
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+              <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
               <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
             </div>
             <div class="call-screen-navigation">
@@ -310,6 +311,7 @@
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
               <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
@@ -628,7 +630,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.84097541ce2e.js");
+      await import("/boot.afdfa19850cc.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

@@ -23,6 +23,7 @@ import {
   tuneAudioSender
 } from "./audio-profiles.js";
 import { announce, elements, getCurrentSession } from "./ui.js";
+import { setupCallQualityReport } from "./call-quality-report.js";
 
 let account = null;
 let currentCall = null;
@@ -218,6 +219,11 @@ export function setupCalls() {
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
   elements.callExpandButton.addEventListener("click", expandCall);
   elements.callDismissButton.addEventListener("click", dismissFinishedCall);
+  setupCallQualityReport({
+    button: elements.callQualityButton,
+    status: elements.callQualityStatus,
+    getPeerConnection: () => peerConnection
+  });
 
   const observer = new MutationObserver(syncCallButton);
   observer.observe(elements.conversationPeer, { childList: true, characterData: true, subtree: true });
@@ -1557,6 +1563,7 @@ async function requestMicrophone() {
 
 function showIncoming(call) {
   startCallTimer();
+  setCallQualityVisible(false);
   elements.callPanel.hidden = false;
   void wakeLock?.activate();
   setCallPresentation("incoming");
@@ -1576,6 +1583,7 @@ function showIncoming(call) {
 
 function showOutgoing(call) {
   startCallTimer();
+  setCallQualityVisible(false);
   elements.callPanel.hidden = false;
   void wakeLock?.activate();
   setCallPresentation("outgoing");
@@ -1599,6 +1607,7 @@ function showConnectedControls(status) {
   startCallTimer();
   if (currentCall?.status === "accepted" && !audioConnectedOnce)
     initialConnectionWatchdog.arm(currentCall.callId);
+  setCallQualityVisible(true);
   elements.callPanel.hidden = false;
   void wakeLock?.activate();
   if(currentCall?.status==="accepted")keepaliveAudio?.activate(currentCall.peer.displayName);
@@ -1621,6 +1630,7 @@ function showConnectedControls(status) {
 
 function showRecoveredCall(status) {
   startCallTimer();
+  setCallQualityVisible(false);
   if (!currentCall) return;
   elements.callPanel.hidden = false;
   void wakeLock?.activate();
@@ -1656,6 +1666,7 @@ function finishCall(message) {
 }
 
 function renderFinished(message) {
+  setCallQualityVisible(false);
   elements.callPanel.hidden = false;
   setCallPresentation("finished");
   elements.callDiagnostics.hidden = false;
@@ -1673,6 +1684,7 @@ function renderFinished(message) {
 }
 
 function renderIdle() {
+  setCallQualityVisible(false);
   elements.callPanel.hidden = true;
   setCallPresentation("idle");
   elements.callPeer.textContent = "";
@@ -1765,6 +1777,16 @@ function setCallRouteAvailability(servers) {
 function updateCallDiagnostics(pc) {
   if (peerConnection !== pc || !currentCall) return;
   elements.callDiagnosticsText.textContent = describeCallDiagnostics(pc, null);
+}
+
+function setCallQualityVisible(visible) {
+  const button = elements.callQualityButton;
+  const status = elements.callQualityStatus;
+  if (!button || !status) return;
+  const wasHidden = button.hidden;
+  button.hidden = !visible;
+  status.hidden = !visible;
+  if (!visible || wasHidden) status.textContent = "";
 }
 
 function setCallStatus(text) {
