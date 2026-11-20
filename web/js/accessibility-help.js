@@ -49,9 +49,12 @@ function markDetailedHints() {
 
 function applyDetailedHelp() {
   markDetailedHints();
+  // The root <html> also has data-detailed-help, but it is a *state*
+  // indicator, never a hint. Hiding it would make the entire app disappear.
   document.documentElement.dataset.detailedHelp = String(enabled);
-  for (const hint of document.querySelectorAll("[data-detailed-help]")) {
-    hint.hidden = !enabled;
+  document.documentElement.hidden = false;
+  for (const hint of document.querySelectorAll('[data-detailed-help="true"]')) {
+    if (hint !== document.documentElement) hint.hidden = !enabled;
   }
   for (const element of document.querySelectorAll("[aria-describedby], [data-detailed-help-describedby]")) {
     const stored = element.getAttribute("data-detailed-help-describedby");

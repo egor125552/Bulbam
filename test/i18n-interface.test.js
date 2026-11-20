@@ -70,6 +70,13 @@ describe("Belarusian localization",()=>{
     expect(document.querySelector("#status").textContent).toBe("Звонок не активен.");
   });
 
+  test("known error prefixes translate fully before generic error patterns",()=>{
+    prepare('<!doctype html><html lang="ru"><body><p id="status"></p></body></html>');
+    setLanguage("be");
+    expect(translateText("Не удалось создать ключ доступа: Гэты адрас Бульбама не падтрымлівае ключы доступу."))
+      .toBe("Не ўдалося стварыць ключ доступу: Гэты адрас Бульбама не падтрымлівае ключы доступу.");
+  });
+
   test("dynamic call announcements retain names without translating them",()=>{
     prepare('<!doctype html><html lang="ru"><body><div id="live-status"></div></body></html>');
     setupI18n();
