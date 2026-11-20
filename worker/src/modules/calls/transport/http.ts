@@ -1,7 +1,7 @@
 import { json, methodNotAllowed, readJsonObject } from "../../../core/http";
 import type { CallService } from "../application/call-service";
 
-export type AuthenticateCallRequest = (request: Request) => Promise<{ userId: string }>;
+export type AuthenticateCallRequest = (request: Request) => Promise<{ userId: string; sessionId?: string }>;
 
 export async function handleCallHttp(
   request: Request,
@@ -9,6 +9,12 @@ export async function handleCallHttp(
   service: CallService,
   authenticate: AuthenticateCallRequest
 ): Promise<Response | null> {
+  if (url.pathname === "/api/v1/calls/active") {
+    if(request.method!=="GET")return methodNotAllowed(["GET"]);
+    const actor=await authenticate(request);
+    return json({ok:true,call:await service.active(actor)});
+  }
+
   if (url.pathname === "/api/v1/calls/ice") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const actor = await authenticate(request);
@@ -44,6 +50,15 @@ export async function handleCallHttp(
         ? await service.decline(actor, conversationId, callId)
         : await service.end(actor, conversationId, callId);
     return json({ ok: true, call });
+  }
+
+  const handoffMatch = url.pathname.match(
+    /^\/api\/v1\/chats\/([0-9a-f-]{36})\/calls\/([0-9a-f-]{36})\/handoff$/i
+  );
+  if (handoffMatch) {
+    if(request.method!=="POST")return methodNotAllowed(["POST"]);
+    const actor=await authenticate(request);
+    return json({ok:true,call:await service.handoff(actor,handoffMatch[1],handoffMatch[2])});
   }
 
   const signalsMatch = url.pathname.match(

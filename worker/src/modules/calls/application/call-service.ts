@@ -1,4 +1,4 @@
-import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
+import { ApiError, badRequest, conflict, forbidden, notFound } from "../../../core/errors";
 import type { DurableObjectNamespace, Env } from "../../../platform/cloudflare";
 import type { DirectConversation } from "../../messaging/domain/models";
 import type { MessagingRepository } from "../../messaging/ports/messaging-repository";
@@ -8,7 +8,7 @@ import { DurableObjectRealtime } from "../../realtime/public";
 import type { CallRoomSignal } from "../infrastructure/call-room";
 import { makeIceServers } from "../infrastructure/webrtc-config";
 
-export interface CallActor { userId: string; }
+export interface CallActor { userId: string; sessionId?: string; }
 
 const RINGING_SLOT_MS = 2 * 60 * 1000;
 
@@ -30,6 +30,10 @@ export class CallService {
     return makeIceServers(this.env, actor.userId);
   }
 
+  async active(actor:CallActor) {
+    return await this.realtime.getActiveCall(actor.userId);
+  }
+
   async start(actor: CallActor, rawConversationId: string) {
     const conversationId = validateUuid(rawConversationId, "conversationId");
     const conversation = await this.requireConversation(conversationId, actor.userId);
@@ -49,7 +53,9 @@ export class CallService {
       updatedAt: now,
       answeredAt: null,
       endedAt: null,
-      endedByUserId: null
+      endedByUserId: null,
+      callerSessionId: actor.sessionId ?? null,
+      calleeSessionId: null
     };
 
     let claimedUsers: string[] = [];
@@ -142,6 +148,7 @@ export class CallService {
       body: JSON.stringify({
         callId,
         actorUserId: actor.userId,
+        actorSessionId: actor.sessionId ?? null,
         kind,
         payload
       })
@@ -166,6 +173,18 @@ export class CallService {
     return Array.isArray(payload.signals) ? payload.signals : [];
   }
 
+  async handoff(actor:CallActor,rawConversationId:string,rawCallId:string) {
+    const conversationId=validateUuid(rawConversationId,"conversationId");
+    const callId=validateUuid(rawCallId,"callId");
+    if(!actor.sessionId)forbidden("handoff_requires_session","Для переноса нужен действующий вход.");
+    await this.requireConversation(conversationId,actor.userId);
+    const response=await this.roomRequest(conversationId,"/handoff",{
+      method:"POST",
+      body:JSON.stringify({callId,actorUserId:actor.userId,actorSessionId:actor.sessionId})
+    });
+    return response.call;
+  }
+
   private async transition(
     actor: CallActor,
     rawConversationId: string,
@@ -177,7 +196,7 @@ export class CallService {
     await this.requireConversation(conversationId, actor.userId);
     const payload = await this.roomRequest(conversationId, "/transition", {
       method: "POST",
-      body: JSON.stringify({ callId, actorUserId: actor.userId, action })
+      body: JSON.stringify({ callId, actorUserId: actor.userId, actorSessionId: actor.sessionId ?? null, action })
     });
     return payload.call;
   }

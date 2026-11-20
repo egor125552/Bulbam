@@ -47,6 +47,9 @@ class FakeIdentityRepository {
   async touchSession() {}
   async listSessions() { return []; }
   async revokeSession() { return true; }
+  async replaceRecoveryCodes(userId, codeHashes, now) {
+    this.recovery = { userId, codeHashes, now };
+  }
   async createInvite() { throw new Error("not used"); }
 }
 
@@ -67,6 +70,8 @@ describe("IdentityService", () => {
     expect(result.session.userId).toBe(result.account.userId);
     expect(result.session.sessionId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(result.token).toMatch(/^bs_[0-9a-f]{64}$/);
+    expect(result.recoveryCodes).toHaveLength(8);
+    expect(repository.recovery.codeHashes).toHaveLength(8);
     expect(repository.lastRegistration.passwordHash).not.toContain("very-long-test-password");
     expect(repository.lastRegistration.passwordHash).toMatch(/^PBKDF2-SHA256\$/);
     expect(repository.lastRegistration.inviteCodeHash).toMatch(/^[0-9a-f]{64}$/);

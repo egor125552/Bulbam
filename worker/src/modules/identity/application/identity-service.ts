@@ -1,13 +1,14 @@
 import {
   hashPassword,
   newInviteCode,
+  newRecoveryCode,
   newSessionToken,
   sha256Hex,
   verifyPassword
 } from "../../../core/crypto";
 import { ApiError, conflict, forbidden, unauthorized } from "../../../core/errors";
 import type { AuthenticatedSession, PublicAccount, Session } from "../domain/models";
-import { validateUserSearchQuery } from "../domain/validation";
+import { validateDisplayName, validateUserSearchQuery } from "../domain/validation";
 import type { IdentityRepository } from "../ports/identity-repository";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -19,7 +20,11 @@ const DUMMY_PASSWORD_HASH =
   "PBKDF2-SHA256$100000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
 
 export class IdentityService {
-  constructor(private readonly repository: IdentityRepository) {}
+  constructor(
+    private readonly repository: IdentityRepository,
+    private readonly onProfileChanged?: (userId:string,displayName:string)=>Promise<void>,
+    private readonly onSessionsRevoked?: (userId:string)=>Promise<void>
+  ) {}
 
   async register(input: {
     username: string;
@@ -54,7 +59,15 @@ export class IdentityService {
     }
 
     const issued = await this.issueSession(result.account.userId, input.deviceName, now);
-    return { account: result.account, ...issued };
+    let recoveryCodes: string[] = [];
+    try {
+      recoveryCodes = await this.issueRecoveryCodes(result.account.userId);
+    } catch (error) {
+      // The account and session are already created. Do not misreport a
+      // successful registration as a failure just because code setup failed.
+      console.error("[IdentityService] recovery code setup failed", error);
+    }
+    return { account: result.account, ...issued, recoveryCodes };
   }
 
   async login(input: { username: string; password: string; deviceName: string }) {
@@ -72,6 +85,73 @@ export class IdentityService {
     const issued = await this.issueSession(credentials.userId, input.deviceName, Date.now());
     const { passwordHash: _passwordHash, ...account } = credentials;
     return { account, ...issued };
+  }
+
+  async loginWithPasskey(account: import("../domain/models").Account, deviceName: string) {
+    const issued = await this.issueSession(account.userId, deviceName, Date.now());
+    return { account, ...issued };
+  }
+
+  async issueRecoveryCodes(userId: string): Promise<string[]> {
+    const codes = Array.from({ length: 8 }, () => newRecoveryCode());
+    const hashes = await Promise.all(codes.map(sha256Hex));
+    await this.repository.replaceRecoveryCodes(userId, hashes, Date.now());
+    return codes;
+  }
+
+  async resetPasswordWithRecoveryCode(input: {
+    username: string;
+    code: string;
+    newPassword: string;
+    deviceName: string;
+  }) {
+    const hash = await sha256Hex(input.code.toUpperCase());
+    const passwordHash = await hashPassword(input.newPassword);
+    const changed = await this.repository.resetPasswordWithRecoveryCode({
+      username: input.username, codeHash: hash, passwordHash, now: Date.now()
+    });
+    if (!changed) {
+      throw new ApiError(400, "invalid_recovery_code",
+        "Неверное имя пользователя или код восстановления. Проверьте данные и попробуйте снова.");
+    }
+    const accountCredentials = await this.repository.findAccountCredentialsByUsername(input.username);
+    if (!accountCredentials) throw new Error("Recovered account was not found.");
+    const { passwordHash: _hash, ...account } = accountCredentials;
+    await this.cleanupRevokedSessions(account.userId);
+    const issued = await this.issueSession(account.userId, input.deviceName, Date.now());
+    let recoveryCodes: string[] = [];
+    try {
+      recoveryCodes = await this.issueRecoveryCodes(account.userId);
+    } catch (error) {
+      // Password and new session already work; don't hide a successful recovery.
+      console.error("[IdentityService] post-recovery backup codes failed", error);
+    }
+    return { account, ...issued, recoveryCodes };
+  }
+
+  async updateDisplayName(authenticated: AuthenticatedSession, requestedName: string) {
+    const displayName=validateDisplayName(requestedName);
+    const changed=await this.repository.updateDisplayName(authenticated.account.userId,displayName);
+    if(!changed)throw new ApiError(404,"account_not_found","Аккаунт не найден.");
+    if(displayName!==authenticated.account.displayName) {
+      // A successful profile update must not be rolled back by a transient
+      // realtime delivery failure. Peers still get fresh names on next GET.
+      try{await this.onProfileChanged?.(authenticated.account.userId,displayName);}
+      catch(error){console.warn("[Identity] profile notification failed",error);}
+    }
+    return {...authenticated.account,displayName};
+  }
+
+  async changePasswordFromSession(
+    authenticated: AuthenticatedSession, newPassword: string
+  ): Promise<void> {
+    const passwordHash = await hashPassword(newPassword);
+    await this.repository.changePasswordFromSession({
+      userId: authenticated.account.userId,
+      sessionId: authenticated.session.sessionId,
+      passwordHash, now: Date.now()
+    });
+    await this.cleanupRevokedSessions(authenticated.account.userId);
   }
 
   async authenticate(token: string | null): Promise<AuthenticatedSession> {
@@ -100,6 +180,7 @@ export class IdentityService {
       authenticated.session.sessionId,
       Date.now()
     );
+    await this.cleanupRevokedSessions(authenticated.account.userId);
   }
 
   async listSessions(authenticated: AuthenticatedSession): Promise<Session[]> {
@@ -114,6 +195,19 @@ export class IdentityService {
     );
     if (!revoked) {
       throw new ApiError(404, "session_not_found", "Сессия не найдена.");
+    }
+    await this.cleanupRevokedSessions(authenticated.account.userId);
+  }
+
+  async cleanupRevokedSessions(userId:string):Promise<void> {
+    // Database-backed delivery always filters revoked sessions, even when
+    // physical cleanup has to be retried after a transient storage failure.
+    try { await this.onSessionsRevoked?.(userId); }
+    catch(error){
+      // The push recipient query independently excludes revoked and expired
+      // sessions, so a cleanup failure cannot leak data or invalidate a
+      // successful password reset or logout.
+      console.warn("[Identity] revoked-session cleanup deferred",error);
     }
   }
 

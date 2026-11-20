@@ -1,6 +1,7 @@
 const READY_TIMEOUT_MS = 3000;
 const objectUrls = new WeakMap();
 const materializing = new WeakMap();
+function voiceCacheName(userId){return `bulbam-voice-cache-v1-${userId}`;}
 
 export function setupVoiceWebKitTimelineFix() {
   if (!isAppleWebKitVoiceEnvironment()) return;
@@ -17,8 +18,7 @@ export function setupVoiceWebKitTimelineFix() {
 
     queueMicrotask(() => {
       const button = playButton(audio.dataset.voiceMessageId);
-      button?.addEventListener("focus", startEarly, { once: true });
-      button?.addEventListener("pointerdown", startEarly, { once: true, passive: true });
+      bindVoiceMaterializationTriggers(button,startEarly);
     });
 
     audio.addEventListener("play", (event) => {
@@ -62,6 +62,21 @@ export function setupVoiceWebKitTimelineFix() {
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
+export function bindVoiceMaterializationTriggers(button,start){
+  if(!button)return;
+  // VoiceOver moves focus through controls without activating them.
+  button.addEventListener("pointerdown",start,{once:true,passive:true});
+  button.addEventListener("click",start,{once:true});
+}
+
+export async function cachedVoiceResponse(userId,source) {
+  if(!userId || !window.caches)return null;
+  try {
+    const cache=await caches.open(voiceCacheName(userId));
+    return await cache.match(source)??null;
+  } catch {return null;}
+}
+
 export function isAppleWebKitVoiceEnvironment(
   userAgent = navigator.userAgent ?? "",
   vendor = navigator.vendor ?? ""
@@ -97,10 +112,11 @@ async function materialize(audio) {
   const restoreSeconds = currentUiPositionSeconds(audio.dataset.voiceMessageId);
 
   try {
-    const response = await fetch(source, {
+    const {getCurrentAccount}=await import("./ui.js");
+    let response=await cachedVoiceResponse(getCurrentAccount()?.userId,source);
+    response ??= await fetch(source, {
       credentials: "same-origin",
-      headers: { accept: "audio/*" },
-      cache: "no-store"
+      headers: { accept: "audio/*" }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 

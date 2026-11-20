@@ -28,6 +28,14 @@ export class DurableObjectRealtime {
     }
   }
 
+  async getActiveCall(userId:string):Promise<Record<string,unknown>|null> {
+    if(!this.namespace)return null;
+    const response=await this.namespace.getByName(userId).fetch(new Request("https://realtime.internal/active-call"));
+    if(!response.ok)return null;
+    const payload=await response.json() as {active?:Record<string,unknown>|null};
+    return payload.active??null;
+  }
+
   async claimActiveCall(
     userId: string,
     call: Record<string, unknown>,

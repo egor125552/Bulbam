@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 const INTEGRATION_TESTS = [
   "test/calls-smoke.test.js",
   "test/messaging-smoke.test.js",
+  "test/group-chats-smoke.test.js",
   "test/registration-smoke.test.js",
   "test/voice-messages-smoke.test.js",
   "test/voice-publication-lifecycle.test.js",

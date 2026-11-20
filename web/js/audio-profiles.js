@@ -1,6 +1,8 @@
 import { announce, elements } from "./ui.js";
 import { preferMonoCallCapture } from "./call-audio-channels.js";
+import { applyCallConstraintsBestEffort } from "./call-constraint-fallback.js";
 import { configureAdaptiveBitrate } from "./call-bitrate-controller.js";
+import { logDiagnostic, diagnosticErrorName, logTraceEvent } from "./diagnostics-log.js";
 import {
   AUDIO_PROFILES,
   buildAudioConstraints,
@@ -10,6 +12,7 @@ import {
 } from "./audio-profile-core.js";
 
 const STORAGE_KEY = "bulbam.callAudioProfile";
+const PROFILE_IDS=["normal","clean","studio","music"];
 let selectedProfileId = readStoredProfile();
 
 export function setupAudioProfiles() {
@@ -19,12 +22,20 @@ export function setupAudioProfiles() {
   renderProfileDescription();
   renderIdleStatus();
 
+  document.querySelector("#call-audio-cycle")?.addEventListener("click", () => {
+    const current = PROFILE_IDS.indexOf(selectedProfileId);
+    elements.audioProfileSelect.value = PROFILE_IDS[(current + 1) % PROFILE_IDS.length];
+    elements.audioProfileSelect.dispatchEvent(new Event("change", { bubbles:true }));
+  });
+  updateQuickCallMode();
   elements.audioProfileSelect.addEventListener("change", () => {
     selectedProfileId = normalizeAudioProfile(elements.audioProfileSelect.value);
     localStorage.setItem(STORAGE_KEY, selectedProfileId);
+    updateQuickCallMode();
     renderProfileDescription();
     renderIdleStatus();
     const profile = getAudioProfile(selectedProfileId);
+    logDiagnostic("Микрофон", "выбран режим", profile.id);
     window.dispatchEvent(new CustomEvent("bulbam:audio-profile-changed", {
       detail: { profileId: selectedProfileId }
     }));
@@ -36,55 +47,68 @@ export function setupAudioProfiles() {
   });
 }
 
+function updateQuickCallMode() {
+  const button=document.querySelector("#call-audio-cycle");
+  if (!button) return;
+  const profile=getSelectedAudioProfile();
+  button.textContent=`Микрофон: ${profile.label}`;
+  button.setAttribute("aria-label",`Режим микрофона: ${profile.label}. Нажмите, чтобы переключить.`);
+}
+
 export function getSelectedAudioProfile() {
   return getAudioProfile(selectedProfileId);
 }
 
-export async function requestCallMicrophone() {
+export async function requestCallMicrophone(profileId = selectedProfileId) {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("этот браузер не предоставляет доступ к микрофону");
   }
 
   const supported = navigator.mediaDevices.getSupportedConstraints?.() ?? null;
-  const constraints = buildAudioConstraints(selectedProfileId, supported);
-  const stream = await navigator.mediaDevices.getUserMedia({
+  const constraints = buildAudioConstraints(profileId, supported);
+  logDiagnostic('Микрофон','запрос новой дорожки',profileId);
+  const started=Date.now();
+  let stream;
+  try {stream=await navigator.mediaDevices.getUserMedia({
     audio: constraints,
     video: false
   });
+    logTraceEvent('Микрофон','микрофон получен','',{durationMs:Date.now()-started});
+  }catch(error){logDiagnostic('Микрофон','захват микрофона ошибка',diagnosticErrorName(error));throw error;}
   const track = stream.getAudioTracks()[0];
   if (!track) {
     stopStream(stream);
     throw new Error("браузер не вернул аудиодорожку микрофона");
   }
 
-  await preferMonoCallCapture(track, selectedProfileId, constraints);
-  applyContentHint(track);
-  updateAudioProfileStatus(track);
+  await preferMonoCallCapture(track, profileId, constraints);
+  applyContentHint(track, profileId);
+  updateAudioProfileStatus(track, profileId);
   return stream;
 }
 
-export async function applySelectedAudioProfileToTrack(track) {
+export async function applySelectedAudioProfileToTrack(track, profileId = selectedProfileId) {
   if (!track) return null;
   const supported = navigator.mediaDevices?.getSupportedConstraints?.() ?? null;
-  const constraints = buildAudioConstraints(selectedProfileId, supported);
+  const constraints = buildAudioConstraints(profileId, supported);
 
-  if (typeof track.applyConstraints === "function") {
-    await track.applyConstraints(constraints);
-  }
-  await preferMonoCallCapture(track, selectedProfileId, constraints);
-  applyContentHint(track);
-  return updateAudioProfileStatus(track);
+  logDiagnostic('Микрофон','проверка ограничений дорожки',profileId);
+  const application = await applyCallConstraintsBestEffort(track,constraints,(stage,detail='')=>logDiagnostic('Микрофон',stage,detail));
+  if (!application.reduced) await preferMonoCallCapture(track, profileId, constraints);
+  logTraceEvent('Микрофон','ограничения применены','',{active:application.applied,step:application.reduced?1:0});
+  applyContentHint(track, profileId);
+  return updateAudioProfileStatus(track, profileId);
 }
 
-export function tuneAudioSender(sender) {
-  return configureAdaptiveBitrate(sender, getSelectedAudioProfile());
+export function tuneAudioSender(sender, profileId = selectedProfileId) {
+  return configureAdaptiveBitrate(sender, getAudioProfile(profileId));
 }
 
-export function updateAudioProfileStatus(track) {
+export function updateAudioProfileStatus(track, profileId = selectedProfileId) {
   if (!track || !elements.audioProfileStatus) return null;
-  const profile = getSelectedAudioProfile();
+  const profile = getAudioProfile(profileId);
   const settings = typeof track.getSettings === "function" ? track.getSettings() : {};
-  const summary = summarizeTrackSettings(selectedProfileId, settings);
+  const summary = summarizeTrackSettings(profileId, settings);
   const device = track.label ? ` Микрофон: ${track.label}.` : "";
 
   let verdict = "";
@@ -122,8 +146,8 @@ async function testMicrophoneProfile() {
   }
 }
 
-function applyContentHint(track) {
-  const hint = getSelectedAudioProfile().contentHint;
+function applyContentHint(track, profileId = selectedProfileId) {
+  const hint = getAudioProfile(profileId).contentHint;
   if (!("contentHint" in track)) return;
   try {
     track.contentHint = hint;

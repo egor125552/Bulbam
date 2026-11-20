@@ -1,8 +1,9 @@
-export const MESSAGE_VIEWS = ["bubbles", "compact", "table"];
+export const MESSAGE_VIEWS = ["bubbles", "compact"];
 export const THEMES = ["system", "dark", "light"];
 export const FONT_SCALES = ["small", "medium", "large"];
 
 export function normalizeMessageView(value) {
+  if (value === "table") return "compact";
   return MESSAGE_VIEWS.includes(value) ? value : "bubbles";
 }
 

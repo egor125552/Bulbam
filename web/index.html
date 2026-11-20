@@ -8,8 +8,9 @@
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
+  <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
+  <link rel="stylesheet" href="/canonical-ui.css?v=88a4be9a6ad6" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.0e3fe58dacd1.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -25,15 +26,34 @@
   </header>
 
   <main id="main" tabindex="-1">
+    <section id="startup-failure" class="card auth-card" aria-labelledby="startup-failure-title" hidden>
+      <h2 id="startup-failure-title">Не удалось загрузить Бульбам</h2>
+      <p id="startup-failure-message" role="alert" aria-live="assertive">Ошибка запуска. Аккаунт и сообщения не удалены.</p>
+      <button id="startup-retry" type="button">Повторить загрузку</button>
+    </section>
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
-      <h2 id="account-start-title" class="visually-hidden">Вход и регистрация</h2>
-
+      <h2 id="account-start-title" class="visually-hidden">Вход в Бульбам</h2>
       <div class="card auth-card">
-        <h3>Войти</h3>
+        <label for="auth-language">Язык интерфейса</label>
+        <select id="auth-language">
+          <option value="ru">Русский</option>
+          <option value="be">Беларуская</option>
+        </select>
+      </div>
+
+      <div id="auth-connection-problem" class="card auth-card" hidden>
+        <h3>Не получилось проверить вход</h3>
+        <p role="status">Бульбам не смог связаться с сервером. Это не означает, что ваш аккаунт удалён или что вы вышли из него.</p>
+        <button id="auth-retry" type="button">Проверить вход ещё раз</button>
+      </div>
+
+      <div id="auth-view-login" class="card auth-card">
+        <p id="auth-session-note" class="hint" role="status" hidden>Вход на этом устройстве завершён или срок сеанса истёк. Ваш аккаунт не удалён. Можно войти снова или восстановить пароль.</p>
+        <h3 id="auth-login-heading" tabindex="-1">Вход в Бульбам</h3>
         <form id="login-form" class="form-stack">
           <label>
-            Username
-            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
+            Имя пользователя
+            <input name="username" autocomplete="username webauthn" required minlength="3" maxlength="32">
           </label>
           <label>
             Пароль
@@ -41,20 +61,26 @@
           </label>
           <button type="submit">Войти</button>
         </form>
+        <button id="login-passkey" type="button">Войти с помощью ключа доступа</button>
+        <p class="hint">Если на устройстве есть ключ доступа, Safari может предложить его прямо в поле имени пользователя.</p>
+        <div class="auth-links">
+          <button id="auth-forgot-button" type="button">Забыли пароль?</button>
+          <button id="auth-register-button" type="button">Зарегистрироваться</button>
+        </div>
       </div>
 
-      <div class="card auth-card">
-        <h3>Создать аккаунт</h3>
+      <div id="auth-view-register" class="card auth-card" hidden>
+        <h3 id="auth-register-heading" tabindex="-1">Регистрация в Бульбаме</h3>
         <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
         <form id="register-form" class="form-stack">
           <label>
-            Username
-            <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="egor">
+            Имя пользователя
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="пользователь1" aria-describedby="register-username-help register-username-error">
           </label>
-          <label>
-            Отображаемое имя
-            <input name="displayName" autocomplete="name" required maxlength="64" placeholder="Егор">
-          </label>
+          <p id="register-username-help" class="hint">Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1.</p>
+          <p id="register-username-error" role="alert" aria-live="assertive" hidden></p>
+          <p class="hint">Символ @ можно поставить только перед именем пользователя, но при регистрации он не нужен. Внутри логина @ ставить нельзя.</p>
+          <p class="hint">Отображаемое имя можно выбрать после регистрации или пропустить. Позже его можно изменить в настройках.</p>
           <label>
             Пароль
             <input name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
@@ -63,10 +89,111 @@
             Код приглашения
             <input name="inviteCode" autocomplete="off" required maxlength="160">
           </label>
-          <button type="submit">Создать аккаунт</button>
+          <button type="submit">Зарегистрироваться и войти</button>
         </form>
+        <button id="auth-login-from-register" type="button">Уже есть аккаунт? Войти</button>
+      </div>
+
+      <div id="auth-view-recovery" class="card auth-card" hidden>
+        <h3 id="auth-recovery-heading" tabindex="-1">Восстановление аккаунта</h3>
+        <p>Выберите подходящий вариант. Для защиты аккаунта одного имени пользователя недостаточно.</p>
+        <h4>Способ 1. Резервный код</h4>
+        <form id="recovery-form" class="form-stack">
+          <label>Имя пользователя
+            <input name="username" autocomplete="username" required minlength="3" maxlength="32">
+          </label>
+          <p id="recovery-code-help" class="hint">Для восстановления нужен только один резервный код. Если вы вставите сразу список, Бульбам выберет первый.</p>
+          <label>Резервный код восстановления
+            <input name="code" autocomplete="one-time-code" required spellcheck="false" autocapitalize="characters" aria-describedby="recovery-code-help recovery-code-paste-status" placeholder="BRC-XXXXXX-XXXXXX-XXXXXX-XXXXXX">
+          </label>
+          <p id="recovery-code-paste-status" role="status" aria-live="polite" aria-atomic="true"></p>
+          <label>Новый пароль
+            <input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+          </label>
+          <label>Повторите новый пароль
+            <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+          </label>
+          <button type="submit">Восстановить и войти</button>
+        </form>
+        <h4>Способ 2. Ключ доступа</h4>
+        <p>Если вы уже создавали ключ доступа, вернитесь ко входу и выберите «Войти с помощью ключа доступа». Пароль и резервный код не нужны.</p>
+        <h4>Способ 3. Другое устройство</h4>
+        <p>Если вы всё ещё вошли в Бульбам на другом устройстве, откройте там «Настройки», затем «Безопасность аккаунта», и смените пароль.</p>
+        <h4>Способ 4. Помощь администратора</h4>
+        <p>Если нет ни резервного кода, ни действующего сеанса, потребуется подтверждение личности администратором сервиса. Имя пользователя само по себе не даёт права на сброс пароля. Вход по почте пока недоступен: в Бульбаме нет подтверждённых адресов почты.</p>
+        <form id="admin-recovery-form" class="form-stack">
+          <label>Имя пользователя, чей доступ нужно восстановить
+            <input name="username" autocomplete="username" minlength="3" maxlength="32" required>
+          </label>
+          <button type="submit">Отправить запрос администратору</button>
+        </form>
+        <p class="hint">Администратор должен сначала проверить вашу личность по заранее известному ему способу связи. Не передавайте ему свой пароль.</p>
+        <div id="admin-recovery-progress" role="status" aria-live="polite" hidden>
+          <p id="admin-recovery-state"></p>
+          <p>Код заявки: <strong id="admin-recovery-verification"></strong>. Сообщите его администратору, когда он проверит, что обращаетесь именно вы.</p>
+          <button type="button" id="admin-recovery-check">Проверить решение администратора</button>
+          <form id="admin-recovery-complete" class="form-stack" hidden>
+            <p>Заявка одобрена. Создайте новый пароль. Одобрение одноразовое и действует 15 минут.</p>
+            <label>Новый пароль
+              <input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+            </label>
+            <label>Повторите новый пароль
+              <input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+            </label>
+            <button type="submit">Установить пароль и войти</button>
+          </form>
+        </div>
+        <button id="auth-login-from-recovery" type="button">Вернуться ко входу</button>
       </div>
     </section>
+
+    <dialog id="recovery-codes-dialog" aria-labelledby="recovery-codes-title">
+      <h2 id="recovery-codes-title" tabindex="-1">Сохраните резервные коды</h2>
+      <p>Это одноразовые ключи от вашего аккаунта. Сохраните их в безопасном месте. После закрытия они больше не будут показаны.</p>
+      <p id="recovery-codes-one-code-help" class="hint">Для восстановления доступа вам понадобится только один код из этого списка. Не нужно вставлять все коды сразу.</p>
+      <label for="recovery-codes-text">Ваши восемь кодов</label>
+      <textarea id="recovery-codes-text" rows="10" readonly spellcheck="false"></textarea>
+      <button id="copy-recovery-codes" type="button">Скопировать коды</button>
+      <button id="close-recovery-codes" type="button">Я сохранил коды</button>
+    </dialog>
+
+    <dialog id="profile-first-setup-dialog" aria-labelledby="profile-first-setup-title">
+      <h2 id="profile-first-setup-title" tabindex="-1">Как вас называть?</h2>
+      <p>Можно указать отображаемое имя или пропустить. Пока другие пользователи видят ваше имя пользователя. Изменить имя можно в настройках.</p>
+      <form id="profile-first-setup-form" class="form-stack">
+        <label for="profile-first-display-name">Отображаемое имя (необязательно)</label>
+        <input id="profile-first-display-name" name="displayName" autocomplete="nickname" maxlength="64" placeholder="Отображаемое имя">
+        <p id="profile-first-setup-status" role="status" aria-live="polite"></p>
+        <button type="submit">Сохранить отображаемое имя</button>
+      </form>
+      <button id="profile-first-setup-skip" type="button">Пропустить</button>
+    </dialog>
+
+    <dialog id="bulbam-welcome-dialog" aria-labelledby="bulbam-welcome-title">
+      <h2 id="bulbam-welcome-title" tabindex="-1">Добро пожаловать в Бульбам!</h2>
+      <p id="bulbam-welcome-name">Рады видеть вас здесь.</p>
+      <p>Бульбам создан в Беларуси. Здесь можно переписываться, отправлять голосовые сообщения и звонить.</p>
+      <ol>
+        <li>Нажмите «Новый чат», чтобы найти собеседника.</li>
+        <li>Для безопасного входа откройте «Настройки → Ключи доступа».</li>
+        <li>При звонке «Бульбам Пераход» позволяет продолжить разговор на другом устройстве, где вы уже вошли.</li>
+        <li>Язык приложения можно изменить в настройках. VoiceOver и экранные дикторы поддерживаются.</li>
+      </ol>
+      <label for="welcome-language">Язык интерфейса</label>
+      <select id="welcome-language">
+        <option value="ru">Русский</option>
+        <option value="be">Беларуская</option>
+      </select>
+      <p>Совет: сохраните резервные коды восстановления в безопасном месте.</p>
+      <button id="bulbam-welcome-close" type="button">Начать общение</button>
+    </dialog>
+
+    <dialog id="admin-recovery-help" aria-labelledby="admin-recovery-help-title">
+      <h2 id="admin-recovery-help-title" tabindex="-1">Доступ к аккаунту восстановлен</h2>
+      <p>Вы вошли с новым паролем. В дальнейшем сменить его можно в «Настройки → Безопасность аккаунта». Сохраните новые резервные коды и добавьте ключ доступа, чтобы не терять вход.</p>
+      <label><input type="checkbox" id="admin-recovery-help-skip"> Больше не показывать это объяснение</label>
+      <button type="button" id="admin-recovery-help-close">Понятно</button>
+    </dialog>
 
     <section id="signed-in" class="signed-in" aria-label="Мессенджер" hidden>
       <div class="messenger-shell">
@@ -79,17 +206,27 @@
             </div>
           </div>
 
+          <div class="chat-filter-wrap">
+            <label class="visually-hidden" for="chat-filter">Поиск по чатам</label>
+            <div class="chat-filter-controls">
+              <input id="chat-filter" class="chat-filter" type="search" autocomplete="off" placeholder="Поиск по чатам">
+              <button id="chat-filter-clear" class="chat-filter-clear" type="button" aria-label="Очистить поиск" hidden>Очистить</button>
+            </div>
+            <p id="chat-filter-empty" class="hint" role="status" hidden>Ничего не найдено. Попробуйте другое имя или создайте новый чат.</p>
+          </div>
+
           <section id="user-search-panel" class="search-panel" aria-labelledby="search-users-title" hidden>
             <div class="section-heading">
               <h3 id="search-users-title">Новый чат</h3>
             </div>
+            <button id="create-group-open" type="button" class="button-with-icon" data-icon="users">Создать группу</button>
             <label class="visually-hidden" for="user-search-input">Найти человека</label>
             <input id="user-search-input" type="search" autocomplete="off" placeholder="Имя или @username" aria-describedby="user-search-hint">
             <p id="user-search-hint" class="hint">Введите минимум 2 символа.</p>
             <ul id="user-search-results" class="user-results" aria-label="Результаты поиска"></ul>
           </section>
 
-          <nav class="chat-navigation" aria-label="Личные диалоги">
+          <nav class="chat-navigation" aria-label="Список чатов">
             <div id="chat-list" class="chat-list"></div>
           </nav>
         </aside>
@@ -104,33 +241,20 @@
                 <p id="conversation-peer" class="conversation-peer">Откройте диалог или найдите человека.</p>
               </div>
             </div>
+            <button id="group-info-open" type="button" class="button-with-icon" data-icon="users" hidden>Участники</button>
             <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
-          <section id="call-panel" class="call-banner" aria-labelledby="call-title" hidden>
-            <div class="call-copy">
-              <h2 id="call-title" tabindex="-1">Звонок</h2>
-              <p id="call-peer"></p>
-              <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
-              <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
-              </div>
-            <div class="call-actions">
-              <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
-              <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
-              <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
-              <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
-              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
-              <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
-            </div>
-            <audio id="call-remote-audio" autoplay></audio>
-          </section>
+
 
           <div id="conversation-empty" class="conversation-empty">
             <div class="empty-mark" aria-hidden="true">Б</div>
-            <p>Выберите чат, чтобы начать общение.</p>
+            <p>Выберите переписку или начните новую.</p>
+            <button id="chat-start-empty" type="button" class="button-with-icon" data-icon="compose">Новый чат</button>
           </div>
 
-          <ol id="message-list" class="message-list" aria-label="Сообщения"></ol>
+          <ol id="message-list" class="message-list" aria-label="Сообщения" aria-live="off"></ol>
+          <button id="jump-to-latest" class="jump-to-latest" type="button" hidden>К последним сообщениям</button>
 
           <form id="message-form" class="composer" hidden>
             <div id="voice-draft-panel" class="voice-draft-panel" hidden>
@@ -144,19 +268,103 @@
               </div>
             </div>
 
+            <p id="voice-delivery-visual" class="voice-delivery-visual" aria-hidden="true" hidden>Голосовое отправляется…</p>
+            <div id="voice-recording-panel" class="voice-recording-panel" aria-hidden="true" hidden>
+              <div class="voice-recording-panel-header">
+                <span class="voice-recording-led" aria-hidden="true"></span>
+                <strong id="voice-recording-visual-label">Идёт запись голосового</strong>
+                <span id="voice-recording-visual-timer" class="voice-recording-clock">0:00</span>
+              </div>
+              <p id="voice-recording-visual-hint">Голосовое ещё не отправлено. Говорите в микрофон.</p>
+            </div>
             <div class="composer-input-wrap">
               <label class="visually-hidden" for="message-input">Сообщение</label>
-              <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Сообщение" enterkeyhint="send"></textarea>
+              <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Написать сообщение" enterkeyhint="send" aria-describedby="message-send-hint"></textarea>
               <span id="voice-recording-status" class="voice-recording-status" aria-live="off" hidden>Запись 0:00</span>
             </div>
             <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
-            <p id="voice-record-hint" class="visually-hidden">Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
+            <button id="voice-pause-button" class="button-with-icon" data-icon="pause" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-cancel-button" class="button-with-icon danger-button" data-icon="trash" type="button" aria-label="Отменить запись голосового" hidden>Отменить</button>
+            <button id="voice-quality-cycle" type="button" class="button-with-icon" aria-label="Переключить качество голосовых сообщений">Качество голосового</button>
+            <p id="message-send-hint" class="visually-hidden" data-detailed-help>Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
+            <p id="voice-record-hint" class="visually-hidden" data-detailed-help>Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
           </form>
         </section>
       </div>
 
-      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+          <section id="call-panel" class="call-banner" role="dialog" aria-labelledby="call-title" hidden>
+            <div class="call-copy">
+              <h2 id="call-title" tabindex="-1">Звонок</h2>
+              <p id="call-peer"></p>
+              <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+              <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
+              <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
+            </div>
+            <div class="call-screen-navigation">
+              <button id="call-minimize" type="button" hidden>Свернуть звонок</button>
+              <button id="call-expand" type="button" hidden>Открыть звонок</button>
+            </div>
+            <div class="call-actions">
+              <button id="call-answer" class="button-with-icon" data-icon="phone" type="button" hidden>Ответить</button>
+              <button id="call-decline" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Отклонить</button>
+              <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
+              <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
+              <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
+              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
+              <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
+              <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
+              <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
+            </div>
+            <button id="call-pocket" type="button" hidden>Режим в кармане</button>
+            <audio id="call-keepalive-audio" src="/audio/call-keepalive.wav" preload="auto" loop playsinline aria-hidden="true"></audio>
+            <audio id="call-remote-audio" autoplay playsinline></audio>
+          </section>
+
+
+      <dialog id="group-editor" aria-labelledby="group-editor-title" class="group-dialog">
+        <form id="group-editor-form" class="form-stack">
+          <h2 id="group-editor-title" tabindex="-1">Создать группу</h2>
+          <div id="group-create-fields" class="form-stack">
+            <label for="group-title-input">Название группы</label>
+            <input id="group-title-input" maxlength="80" autocomplete="off" placeholder="Например, Наши">
+            <label for="group-icon-input">Значок группы</label>
+            <select id="group-icon-input">
+              <option value="👥">Участники</option><option value="🏠">Дом</option>
+              <option value="⭐">Звезда</option><option value="🌿">Лист</option>
+              <option value="💬">Сообщения</option>
+            </select>
+            <label for="group-history-input">Что увидят участники, добавленные позже?</label>
+            <select id="group-history-input">
+              <option value="since_join">Только новые сообщения</option>
+              <option value="all">Всю предыдущую переписку</option>
+            </select>
+          </div>
+          <h3 id="group-pick-title">Выберите участников</h3>
+          <p class="hint">Сначала люди из ваших личных чатов. Можно найти другого пользователя.</p>
+          <p id="group-selected-count" role="status">Выбрано: 0</p>
+          <ul id="group-picked-users" class="group-picked-users" aria-label="Участники для добавления"></ul>
+          <label for="group-user-search">Найти человека</label>
+          <input id="group-user-search" type="search" autocomplete="off" placeholder="Имя или @username">
+          <ul id="group-user-results" class="user-results" aria-label="Выбор участников"></ul>
+          <p id="group-editor-status" role="status" aria-live="polite"></p>
+          <div class="group-dialog-actions">
+            <button id="group-cancel" type="button">Отмена</button>
+            <button id="group-submit" type="submit">Создать группу</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="group-members-dialog" aria-labelledby="group-members-title" class="group-dialog">
+        <h2 id="group-members-title">Участники группы</h2>
+        <p id="group-members-presence" class="hint"></p>
+        <ul id="group-members-list" class="user-results"></ul>
+        <div class="group-dialog-actions">
+          <button id="group-members-delete" type="button" hidden>Удалить группу</button>
+          <button id="group-members-close" type="button">Закрыть</button>
+          <button id="group-members-add" type="button" hidden>Добавить участников</button>
+        </div>
+      </dialog>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <div class="settings-header">
           <div>
             <p class="eyebrow">Бульбам</p>
@@ -165,9 +373,23 @@
           <button id="settings-close" class="icon-button" data-icon="close" type="button" aria-label="Закрыть настройки">Закрыть</button>
         </div>
 
+        <nav class="settings-section-navigation" aria-label="Быстрый переход к настройкам">
+          <a href="#appearance-title">Интерфейс</a>
+          <a href="#accessibility-title">Специальные возможности</a>
+          <a href="#voice-settings-title">Голосовые</a>
+          <a href="#call-audio-title">Звонки</a>
+          <a href="#account-security-title">Безопасность</a>
+          <a href="#sessions-title">Устройства</a>
+          <a id="invite-settings-link" href="#invite-title" hidden>Приглашения</a>
+        </nav>
         <div class="settings-grid">
           <section class="card" aria-labelledby="appearance-title">
             <h3 id="appearance-title">Интерфейс</h3>
+            <label for="settings-language">Язык интерфейса</label>
+            <select id="settings-language" aria-label="Язык интерфейса">
+              <option value="ru">Русский</option>
+              <option value="be">Беларуская</option>
+            </select>
             <label for="message-view">Вид сообщений</label>
             <select id="message-view">
               <option value="bubbles">Пузырьки</option>
@@ -180,9 +402,61 @@
             <h3 id="account-title">Аккаунт</h3>
             <dl class="details-list compact-details">
               <div><dt>Имя</dt><dd id="account-display-name"></dd></div>
-              <div><dt>Username</dt><dd id="account-username"></dd></div>
+              <div><dt>Имя пользователя</dt><dd id="account-username"></dd></div>
+              <div><dt>Статус активности</dt><dd>Настраивается ниже</dd></div>
             </dl>
+            <form id="profile-settings-form" class="form-stack">
+              <label for="profile-settings-display-name">Отображаемое имя</label>
+              <input id="profile-settings-display-name" name="displayName" autocomplete="nickname" required maxlength="64">
+              <button type="submit">Сохранить имя</button>
+              <p id="profile-settings-status" role="status" aria-live="polite"></p>
+            </form>
             <button id="logout" class="button-with-icon" data-icon="logout" type="button">Выйти</button>
+          </section>
+
+          <section class="card" aria-labelledby="presence-settings-title">
+            <h3 id="presence-settings-title">Кто видит, когда вы в сети</h3>
+            <label class="switch-row">
+              <input id="presence-share" type="checkbox" checked>
+              Показывать собеседникам статус «В сети» и последнюю активность
+            </label>
+            <p class="hint">Ваш статус видят только люди, с которыми у вас уже есть чат. Можно выключить в любой момент. Когда приложение закрыто, статус изменится автоматически.</p>
+            <p id="presence-settings-status" role="status" aria-live="polite"></p>
+          </section>
+
+          <section class="card" aria-labelledby="account-security-title">
+            <h3 id="account-security-title">Безопасность аккаунта</h3>
+            <p>Восстановление пароля возможно с резервным кодом или с устройства, на котором вы уже вошли.</p>
+            <form id="change-password-form" class="form-stack">
+              <label>Новый пароль
+                <input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+              </label>
+              <label>Повторите пароль
+                <input name="confirmPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+              </label>
+              <button type="submit">Сменить пароль</button>
+            </form>
+            <p class="hint">После смены пароля другие устройства выйдут из аккаунта. Старые резервные коды перестанут работать.</p>
+            <button id="new-recovery-codes" type="button">Создать новые резервные коды</button>
+            <p class="hint">Новый набор заменит предыдущие коды.</p>
+          </section>
+
+          <section id="admin-recovery-queue" class="card" aria-labelledby="admin-recovery-queue-title" hidden>
+            <h3 id="admin-recovery-queue-title" tabindex="-1">Запросы восстановления</h3>
+            <p>Одобряйте заявку только после независимой проверки владельца аккаунта. Запрос без подтверждения личности может быть попыткой захвата.</p>
+            <button id="admin-recovery-refresh" type="button">Обновить заявки</button>
+            <p id="admin-recovery-queue-status" role="status" aria-live="polite" tabindex="-1"></p>
+            <ul id="admin-recovery-requests" aria-label="Ожидающие запросы восстановления"></ul>
+          </section>
+
+          <section class="card" aria-labelledby="passkeys-settings-title">
+            <h3 id="passkeys-settings-title">Ключи доступа</h3>
+            <p>Создайте ключ доступа для входа через Face ID, Touch ID или системное подтверждение. Он привязывается только к вашему аккаунту.</p>
+            <button id="create-passkey" type="button">Создать ключ доступа</button>
+            <p id="passkey-status" role="status" aria-live="polite"></p>
+            <h4>Ваши ключи доступа</h4>
+            <ul id="passkey-list" aria-label="Зарегистрированные ключи доступа"></ul>
+            <button id="refresh-passkeys" type="button">Обновить список ключей</button>
           </section>
 
           <section class="card" aria-labelledby="notifications-title">
@@ -192,16 +466,27 @@
             <button id="push-disable" class="button-with-icon" data-icon="bell-off" type="button" hidden>Отключить уведомления</button>
           </section>
 
+          <section class="card" aria-labelledby="accessibility-title">
+            <h3 id="accessibility-title">Специальные возможности</h3>
+            <label class="switch-row">
+              <input id="voice-detailed-help" type="checkbox" checked>
+              Подробные подсказки для начинающих
+            </label>
+            <p class="hint">Если выключить, Бульбам скроет дополнительные пояснения и будет озвучивать действия короче. Важные статусы и ошибки останутся.</p>
+          </section>
+
           <section class="card" aria-labelledby="voice-settings-title">
             <h3 id="voice-settings-title">Голосовые сообщения</h3>
-            <label for="voice-bitrate">Качество записи</label>
+            <label for="voice-bitrate">Качество голосовых сообщений</label>
             <select id="voice-bitrate">
-              <option value="24000">24 кбит/с — экономно</option>
-              <option value="32000">32 кбит/с — обычное</option>
-              <option value="48000">48 кбит/с — хорошее</option>
-              <option value="64000">64 кбит/с — высокое</option>
-              <option value="96000">96 кбит/с — максимальное</option>
+              <option value="24000">Очень маленький файл</option>
+              <option value="32000">Экономия интернета</option>
+              <option value="48000">Обычное качество</option>
+              <option value="64000">Хорошее качество</option>
+              <option value="96000">Высокое качество</option>
+              <option value="192000">Самое высокое качество</option>
             </select>
+            <p class="hint">Все голосовые записываются с выключенными эхоподавлением, шумоподавлением и автогромкостью, насколько это разрешает система. Частота 48 кГц, стерео при поддержке микрофона. Качество кодирования влияет на следующие записи, а не меняет уже записанное.</p>
             <label class="switch-row">
               <input id="voice-share-listening" type="checkbox" checked>
               Показывать собеседникам прогресс прослушивания
@@ -218,8 +503,10 @@
               <option value="studio">Студийный</option>
               <option value="music">Музыка</option>
             </select>
+            <button id="call-discover" type="button">Найти активный звонок на других устройствах</button>
             <p id="audio-profile-description" class="hint"></p>
             <p id="audio-profile-status">Выберите режим и проверьте микрофон.</p>
+            <p class="hint">Разрешение на микрофон задаёт браузер. Если доступ запрещён, измените его в настройках сайта или Safari. Бульбам не может нажать системное «Разрешить» вместо пользователя.</p>
             <button id="audio-profile-test" class="button-with-icon" data-icon="mic" type="button">Проверить микрофон</button>
           </section>
 
@@ -227,7 +514,7 @@
             <h3 id="sessions-title">Устройства</h3>
             <p class="hint">Здесь можно завершить вход на любом устройстве.</p>
             <div id="sessions"></div>
-            <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить устройства</button>
+            <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить список устройств</button>
           </section>
 
           <section id="invite-card" class="card" aria-labelledby="invite-title" hidden>
@@ -257,7 +544,31 @@
               <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
+            <label for="turn-route-preference">Маршрут для следующего звонка</label>
+            <select id="turn-route-preference" aria-describedby="turn-route-help turn-route-availability">
+              <option value="auto">Автоматически (STUN или TURN)</option>
+              <option value="relay">Только TURN (временно)</option>
+            </select>
+            <p id="turn-route-help" class="hint">Временная настройка только для этой вкладки. На текущий звонок не влияет. Если сервер не выдаёт TURN, автоматический режим сохранится.</p>
+            <p id="turn-route-availability" role="status" aria-live="polite">TURN ещё не проверен.</p>
             <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
+            <section aria-labelledby="diagnostics-journal-title" class="diagnostics-journal">
+              <h3 id="diagnostics-journal-title">Полный журнал диагностики</h3>
+              <p class="hint">Подробная хронология всего Бульбама: действия и фокус интерфейса, жизненный цикл вкладки, запросы и ответы, WebSocket, сообщения, группы, голосовые, звонки, микрофон, ресурсы, производительность и ошибки. Каждый доступный браузеру этап получает время и номер. Хранится только в памяти этой вкладки; личные сообщения, пароли, токены и звук не сохраняются. Внутренние журналы Cloudflare и операционной системы браузеру недоступны.</p>
+              <p id="diagnostics-count" class="hint" aria-live="off">Счётчик событий</p>
+              <label for="diagnostics-log">События в порядке времени</label>
+              <textarea id="diagnostics-log" readonly rows="13" spellcheck="false" aria-live="off" aria-label="Полный журнал событий Бульбама"></textarea>
+              <div class="call-log-actions" data-diagnostics-private="true">
+                <button id="diagnostics-copy" type="button">Скопировать журнал</button>
+                <button id="diagnostics-download" type="button">Скачать журнал TXT</button>
+                <button id="diagnostics-clear" type="button">Очистить журнал</button>
+              </div>
+              <p id="diagnostics-log-status" role="status" aria-live="polite"></p>
+              <details id="call-diagnostics" hidden>
+                <summary>Текущие параметры соединения звонка</summary>
+                <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
+              </details>
+            </section>
           </section>
         </details>
       </dialog>
@@ -266,13 +577,59 @@
     <p id="live-status" class="visually-hidden" role="status" aria-live="polite">Загружаю состояние Бульбама.</p>
   </main>
 
+  <script>
+    // A classic script guards startup even when a module cannot be downloaded or parsed.
+    // On slow or broken networks the page must never stay on its initial loading text.
+    (() => {
+      let initialized = false;
+      const panel = document.querySelector("#startup-failure");
+      const message = document.querySelector("#startup-failure-message");
+      const live = document.querySelector("#live-status");
+      // A 2G-class link can take well over 15 seconds to transfer the app.
+      // Show progress instead of claiming that a slow download failed.
+      const slowNotice = setTimeout(() => {
+        if (!initialized) live.textContent = "Медленный интернет. Продолжаю загружать Бульбам…";
+      }, 9000);
+      const watchdog = setTimeout(() => fail(new Error("startup_timeout")), 90000);
+      function fail(error) {
+        if (initialized) return;
+        console.error("[Bulbam] Startup was interrupted", error);
+        const detail = error?.message && error.message !== "startup_timeout"
+          ? `Ошибка: ${String(error.message).slice(0, 160)}. ` : "";
+        const explanation = "Бульбам не смог завершить загрузку. " + detail +
+          "Аккаунт и чаты не удалены. Нажмите «Повторить загрузку».";
+        message.textContent = explanation;
+        live.textContent = explanation;
+        panel.hidden = false;
+        if (document.querySelector("#signed-in")?.hidden) {
+          document.querySelector("#signed-out").hidden = false;
+        }
+      }
+      window.bulbamBootReady = () => {
+        initialized = true;
+        clearTimeout(watchdog);
+        clearTimeout(slowNotice);
+        panel.hidden = true;
+      };
+      window.bulbamBootFailed = (error) => {
+        clearTimeout(watchdog);
+        clearTimeout(slowNotice);
+        fail(error);
+      };
+      document.querySelector("#startup-retry")?.addEventListener("click", () => {
+        const url = new URL(location.href);
+        url.searchParams.set("reload", String(Date.now()));
+        location.replace(url.href);
+      });
+    })();
+  </script>
   <script type="module">
-    import { setupInterface } from "/js/ui.js";
-    import { setupCanonicalInterface } from "/js/canonical-interface.js";
-    setupInterface();
-    setupCanonicalInterface();
-    document.querySelector("#logout")?.addEventListener("click", () => document.querySelector("#settings-dialog")?.close?.());
-    await import("/app.js");
+    try {
+      await import("/boot.0e3fe58dacd1.js");
+      window.bulbamBootReady();
+    } catch (error) {
+      window.bulbamBootFailed(error);
+    }
   </script>
 </body>
 </html>

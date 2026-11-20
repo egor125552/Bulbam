@@ -19,6 +19,7 @@ export interface IdentityRepository {
 
   findAccountCredentialsByUsername(username: string): Promise<AccountCredentials | null>;
   findPublicAccountById(userId: string): Promise<PublicAccount | null>;
+  updateDisplayName(userId: string, displayName: string): Promise<boolean>;
   searchPublicAccounts(query: string, currentUserId: string, limit: number): Promise<PublicAccount[]>;
 
   registerAccountWithInvite(input: {
@@ -43,6 +44,21 @@ export interface IdentityRepository {
   touchSession(sessionId: string, now: number): Promise<void>;
   listSessions(userId: string, now: number): Promise<Session[]>;
   revokeSession(userId: string, sessionId: string, now: number): Promise<boolean>;
+
+  // Codes are cryptographically random; store only SHA-256 hashes.
+  replaceRecoveryCodes(userId: string, codeHashes: string[], now: number): Promise<void>;
+  resetPasswordWithRecoveryCode(input: {
+    username: string;
+    codeHash: string;
+    passwordHash: string;
+    now: number;
+  }): Promise<boolean>;
+  changePasswordFromSession(input: {
+    userId: string;
+    sessionId: string;
+    passwordHash: string;
+    now: number;
+  }): Promise<void>;
 
   createInvite(input: {
     inviteId: string;

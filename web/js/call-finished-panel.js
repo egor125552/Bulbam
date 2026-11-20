@@ -5,6 +5,9 @@ export function callPanelHasActiveControls(buttons) {
 export function releaseFinishedCallPanel(panel, buttons) {
   if (!panel || panel.hidden || callPanelHasActiveControls(buttons)) return false;
   panel.hidden = true;
+  panel.removeAttribute?.("aria-modal");
+  const shell=typeof document!=="undefined"?document.querySelector(".messenger-shell"):null;
+  if(shell)shell.inert=false;
   return true;
 }
 

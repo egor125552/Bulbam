@@ -142,9 +142,33 @@ describe("one-to-one audio call signaling", () => {
     await expectStatus(differentRoomBusy, 409);
     expect(await activeCallFor(gamma.account.userId)).toBeNull();
 
+    const env=await testEnv();
+    const realtimeResponse=await env.REALTIME.getByName(beta.account.userId).fetch(
+      "https://realtime.internal/socket",{headers:{upgrade:"websocket"}}
+    );
+    expect(realtimeResponse.status).toBe(101);
+    const notificationSocket=realtimeResponse.webSocket;
+    notificationSocket.accept();
+    const answeredNotification=new Promise((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new Error("Answer realtime event missing")),5000);
+      notificationSocket.addEventListener("message",event=>{
+        try{
+          const payload=JSON.parse(event.data);
+          if(payload.type==="call.answered"){
+            clearTimeout(timeout);resolve(payload);
+          }
+        }catch{}
+      });
+    });
+    const betaSession=await api("/api/v1/auth/me",beta.cookie);
+    const betaSessionId=(await json(betaSession)).session.sessionId;
     const answered = await api(`${callRoot}/answer`, beta.cookie, { method: "POST" });
     await expectStatus(answered, 200);
     expect((await json(answered)).call.status).toBe("accepted");
+    expect(await answeredNotification).toMatchObject({
+      type:"call.answered",actorUserId:beta.account.userId,actorSessionId:betaSessionId
+    });
+    notificationSocket.close(1000,"done");
     expect(await activeCallFor(alpha.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
     expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
 
@@ -242,5 +266,58 @@ describe("one-to-one audio call signaling", () => {
     });
     expect(await activeCallFor(gamma.account.userId)).toMatchObject({ callId: gammaCall.callId });
     expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: gammaCall.callId });
+  });
+  test("Пераход transfers an accepted call across sessions but never to an unrelated account", async () => {
+    const inviteA="BULBAM-HANDOFF-ALPHA-2026";
+    const inviteB="BULBAM-HANDOFF-BETA-2026";
+    const inviteC="BULBAM-HANDOFF-GAMMA-2026";
+    await seedInvite(inviteA,"handoff-alpha-invite");
+    await seedInvite(inviteB,"handoff-beta-invite");
+    await seedInvite(inviteC,"handoff-gamma-invite");
+    const a=await register({username:"handoff_alpha",displayName:"Альфа",inviteCode:inviteA});
+    const b=await register({username:"handoff_beta",displayName:"Бета",inviteCode:inviteB});
+    const c=await register({username:"handoff_gamma",displayName:"Гамма",inviteCode:inviteC});
+    const chat=await openChat(a,b);
+    const root=`/api/v1/chats/${chat.conversationId}/calls`;
+    const started=await api(root,a.cookie,{method:"POST"});
+    await expectStatus(started,201);
+    const {call}=await json(started);
+    const path=`${root}/${call.callId}`;
+    const answered=await api(path+"/answer",b.cookie,{method:"POST"});
+    await expectStatus(answered,200);
+    const discovered=await api("/api/v1/calls/active",a.cookie);
+    await expectStatus(discovered,200);
+    expect((await json(discovered)).call.callId).toBe(call.callId);
+    expect((await api("/api/v1/calls/active",c.cookie)).status).toBe(200);
+    expect((await json(await api("/api/v1/calls/active",c.cookie))).call).toBeNull();
+    const stillOnA=await json(await api(path,a.cookie));
+    expect(stillOnA.call.sessionOwnerId).toBeTruthy();
+    const second=await api("/api/v1/auth/login",null,{
+      method:"POST",
+      body:JSON.stringify({username:"handoff_alpha",password:PASSWORD,deviceName:"Android"})
+    });
+    await expectStatus(second,200);
+    const secondCookie=sessionCookie(second);
+    const before=await json(await api(path,secondCookie));
+    expect(before.call.sessionOwnerId).toBe(stillOnA.call.sessionOwnerId);
+    expect((await api(path+"/handoff",c.cookie,{method:"POST"})).status).toBe(404);
+    const transfer=await api(path+"/handoff",secondCookie,{method:"POST"});
+    await expectStatus(transfer,200);
+    const switched=await json(transfer);
+    expect(switched.call.status).toBe("accepted");
+    expect(switched.call.sessionOwnerId).not.toBe(stillOnA.call.sessionOwnerId);
+    const offer={kind:"offer",payload:{type:"offer",sdp:"v=0\r\nnew-device-offer"}};
+    expect((await api(path+"/signals",a.cookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(403);
+    // Media handoff restricts offers, but a user must be able to hang up
+    // from every signed-in device. This releases both users immediately.
+    await expectStatus(await api(path+"/end",a.cookie,{method:"POST"}),200);
+    expect(await activeCallFor(a.account.userId)).toBeNull();
+    expect(await activeCallFor(b.account.userId)).toBeNull();
+    expect((await api(path+"/signals",secondCookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(409);
+    expect((await api(path,b.cookie)).status).toBe(200);
+    expect((await api(path+"/handoff",secondCookie,{method:"POST"})).status).toBe(409);
+    // Idempotent remote hang-up: it is still ended for both parties.
+    await expectStatus(await api(path+"/end",b.cookie,{method:"POST"}),200);
+    expect((await api(path+"/handoff",a.cookie,{method:"POST"})).status).toBe(409);
   });
 });

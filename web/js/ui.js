@@ -1,3 +1,5 @@
+import { translateText } from "./i18n.js";
+
 export const elements = {
   workerStatus: document.querySelector("#worker-status"),
   storageStatus: document.querySelector("#storage-status"),
@@ -18,6 +20,7 @@ export const elements = {
   sessionsRoot: document.querySelector("#sessions"),
   refreshSessionsButton: document.querySelector("#refresh-sessions"),
   inviteCard: document.querySelector("#invite-card"),
+  inviteSettingsLink: document.querySelector("#invite-settings-link"),
   inviteForm: document.querySelector("#invite-form"),
   newInvite: document.querySelector("#new-invite"),
   newInviteCode: document.querySelector("#new-invite-code"),
@@ -38,13 +41,20 @@ export const elements = {
   callTitle: document.querySelector("#call-title"),
   callPeer: document.querySelector("#call-peer"),
   callStatus: document.querySelector("#call-status"),
+  callDuration: document.querySelector("#call-duration"),
+  callDiagnostics: document.querySelector("#call-diagnostics"),
+  callDiagnosticsText: document.querySelector("#call-diagnostics-text"),
   callAnswerButton: document.querySelector("#call-answer"),
   callDeclineButton: document.querySelector("#call-decline"),
   callResumeButton: document.querySelector("#call-resume"),
+  callHandoffButton: document.querySelector("#call-handoff"),
   callMuteButton: document.querySelector("#call-mute"),
   callQualityButton: document.querySelector("#call-quality-check"),
   callQualityStatus: document.querySelector("#call-quality-status"),
   callEndButton: document.querySelector("#call-end"),
+  callMinimizeButton: document.querySelector("#call-minimize"),
+  callExpandButton: document.querySelector("#call-expand"),
+  callDismissButton: document.querySelector("#call-dismiss"),
   callRemoteAudio: document.querySelector("#call-remote-audio")
 };
 
@@ -56,7 +66,6 @@ const MESSAGE_VIEW_KEY = "bulbam.ui.messageView";
 let currentAccount = null;
 let currentSession = null;
 let bufferingAnnouncementTimer = null;
-let interfaceObserver = null;
 
 export function setupInterface() {
   const settingsButton = document.querySelector("#settings-button");
@@ -64,18 +73,6 @@ export function setupInterface() {
   const settingsClose = document.querySelector("#settings-close");
   const messageView = document.querySelector("#message-view");
   const backButton = document.querySelector("#conversation-back");
-
-  const storedView = readMessageView();
-  document.documentElement.dataset.messageView = storedView;
-  if (messageView) {
-    messageView.value = storedView;
-    messageView.addEventListener("change", () => {
-      const value = messageView.value === "compact" ? "compact" : "bubbles";
-      document.documentElement.dataset.messageView = value;
-      try { localStorage.setItem(MESSAGE_VIEW_KEY, value); } catch {}
-      announce(value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
-    });
-  }
 
   settingsButton?.addEventListener("click", () => {
     settingsDialog?.showModal?.();
@@ -94,37 +91,7 @@ export function setupInterface() {
     document.body.classList.toggle("conversation-open", Boolean(event.detail?.chat));
   });
 
-  const syncComposer = () => document.body.classList.toggle("composer-has-text", Boolean(elements.messageInput?.value.trim()));
-  elements.messageInput?.addEventListener("input", syncComposer);
-  elements.messageForm?.addEventListener("submit", () => queueMicrotask(syncComposer));
-  syncComposer();
 
-  const decorate = () => {
-    const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
-    if (elements.callMuteButton) elements.callMuteButton.dataset.icon = muted ? "mic-off" : "mic";
-    for (const button of document.querySelectorAll(".voice-actions button")) {
-      const text = button.textContent.trim();
-      if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
-        button.classList.add("icon-button");
-        button.dataset.icon = text === "Пауза" ? "pause" : "play";
-      } else if (text === "Назад на 15 секунд") {
-        button.classList.add("icon-button");
-        button.dataset.icon = "rewind";
-        button.setAttribute("aria-label", text);
-      } else if (text === "Вперёд на 15 секунд") {
-        button.classList.add("icon-button");
-        button.dataset.icon = "forward";
-        button.setAttribute("aria-label", text);
-      } else if (/скорость$/i.test(text)) {
-        button.classList.add("button-with-icon");
-        button.dataset.icon = "speed";
-      }
-    }
-  };
-  decorate();
-  interfaceObserver?.disconnect();
-  interfaceObserver = new MutationObserver(decorate);
-  interfaceObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
 }
 
 export function announce(message) {
@@ -132,7 +99,7 @@ export function announce(message) {
     clearTimeout(bufferingAnnouncementTimer);
     bufferingAnnouncementTimer = setTimeout(() => {
       bufferingAnnouncementTimer = null;
-      elements.liveStatus.textContent = message;
+      elements.liveStatus.textContent = translateText(message);
     }, BUFFERING_ANNOUNCE_DELAY_MS);
     return;
   }
@@ -148,7 +115,7 @@ export function announce(message) {
 
   clearTimeout(bufferingAnnouncementTimer);
   bufferingAnnouncementTimer = null;
-  elements.liveStatus.textContent = message;
+  elements.liveStatus.textContent = translateText(message);
 }
 
 export function getCurrentAccount() {
@@ -165,9 +132,17 @@ export function showSignedOut() {
   elements.signedOut.hidden = false;
   elements.signedIn.hidden = true;
   elements.inviteCard.hidden = true;
+  if (elements.inviteSettingsLink) elements.inviteSettingsLink.hidden = true;
   elements.sessionsRoot.replaceChildren();
   document.body.classList.remove("conversation-open");
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account: null } }));
+}
+
+export function updateAccountProfile(account){
+  if(!currentAccount || currentAccount.userId!==account?.userId)return;
+  currentAccount={...currentAccount,displayName:account.displayName};
+  document.querySelector("#account-display-name").textContent=account.displayName;
+  window.dispatchEvent(new CustomEvent("bulbam:profile-updated",{detail:{account:currentAccount}}));
 }
 
 export function showSignedIn(account, session) {
@@ -179,7 +154,9 @@ export function showSignedIn(account, session) {
   document.querySelector("#account-username").textContent = `@${account.username}`;
   document.querySelector("#account-id").textContent = account.userId;
   document.querySelector("#account-role").textContent = account.role;
-  elements.inviteCard.hidden = !["owner", "admin"].includes(account.role);
+  const canInvite = ["owner", "admin"].includes(account.role);
+  elements.inviteCard.hidden = !canInvite;
+  if (elements.inviteSettingsLink) elements.inviteSettingsLink.hidden = !canInvite;
   window.dispatchEvent(new CustomEvent("bulbam:account-changed", { detail: { account } }));
 }
 

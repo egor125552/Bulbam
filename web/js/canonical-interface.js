@@ -1,4 +1,7 @@
+import { applyMessageScreenReaderSemantics } from "./message-screenreader-policy.js";
+import { matchesChatFilter } from "./chat-filter-policy.js";
 import { announce, elements } from "./ui.js";
+import { originalText } from "./i18n.js";
 import { normalizeFontScale, normalizeMessageView, normalizeTheme } from "./interface-preferences.js";
 
 const KEYS = {
@@ -24,7 +27,7 @@ export function setupCanonicalInterface() {
     const value = normalizeMessageView(viewSelect.value);
     applyView(value, viewSelect);
     save(KEYS.view, value);
-    announce(value === "table" ? "Включён табличный вид сообщений." : value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
+    announce(value === "compact" ? "Включён компактный список сообщений." : "Включён вид сообщений пузырьками.");
   });
 
   appearance.theme?.addEventListener("change", () => {
@@ -41,6 +44,11 @@ export function setupCanonicalInterface() {
 
   window.addEventListener("bulbam:account-changed", (event) => {
     document.body.classList.toggle("signed-in-mode", Boolean(event.detail?.account));
+    if (!event.detail?.account) {
+      filterValue = "";
+      const search = document.querySelector("#chat-filter");
+      if (search) search.value = "";
+    }
     scheduleDecorate();
   });
   elements.messageInput?.addEventListener("input", syncComposer);
@@ -76,14 +84,14 @@ function syncComposer() {
   const recording = button?.getAttribute("aria-pressed") === "true";
   document.body.classList.toggle("voice-recording", recording);
   setIcon(button, recording ? "stop" : "mic");
-  const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
+  const muted = originalText(elements.callMuteButton?.textContent.trim()??"").startsWith("Включить");
   setIcon(elements.callMuteButton, muted ? "mic-off" : "mic");
 }
 
 function decorateVoiceButtons() {
   for (const button of document.querySelectorAll(".voice-actions button")) {
-    const text = button.textContent.trim();
-    if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
+    const text = originalText(button.textContent.trim());
+    if (originalText(button.getAttribute("aria-label")??"").includes("Воспроизвести или поставить")) {
       button.classList.add("icon-button");
       setIcon(button, text === "Пауза" ? "pause" : "play");
     } else if (text === "Назад на 15 секунд") {
@@ -92,7 +100,7 @@ function decorateVoiceButtons() {
     } else if (text === "Вперёд на 15 секунд") {
       button.classList.add("icon-button");
       setIcon(button, "forward");
-    } else if (/скорость$/i.test(text)) {
+    } else if ((/скорость$/i.test(text) || /хуткасць/i.test(text))) {
       button.classList.add("button-with-icon");
       setIcon(button, "speed");
     }
@@ -105,63 +113,87 @@ function decorateChats() {
     const avatar = document.createElement("span");
     avatar.className = "chat-avatar";
     avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = firstLetter(button.querySelector("strong")?.textContent || "Б");
+    avatar.textContent = button.dataset.groupIcon || firstLetter(button.querySelector("strong")?.textContent || "Б");
     button.prepend(avatar);
   }
 }
 
 function decorateConversationAvatar() {
   const avatar = document.querySelector(".conversation-avatar");
-  const next = firstLetter(elements.conversationTitle?.textContent || "Б");
+  const next = elements.conversationTitle?.dataset.avatarIcon || firstLetter(elements.conversationTitle?.textContent || "Б");
   if (avatar && avatar.textContent !== next) avatar.textContent = next;
 }
 
 function decorateMessages() {
-  for (const item of document.querySelectorAll(".message")) {
-    if (item.getAttribute("role") !== "group") item.setAttribute("role", "group");
-    const author = item.querySelector(".message-author")?.textContent?.trim() || "Сообщение";
-    const meta = item.querySelector(".message-meta")?.textContent?.trim() || "";
-    const body = item.querySelector(".voice-message") ? "голосовое сообщение" : item.querySelector(":scope > p")?.textContent?.trim() || "сообщение";
-    const label = `${author}: ${body}. ${meta}`.trim();
-    if (item.getAttribute("aria-label") !== label) item.setAttribute("aria-label", label);
-  }
+  applyMessageScreenReaderSemantics(document);
 }
 
 function prepareSidebar() {
-  const sidebar = document.querySelector(".chat-sidebar");
-  const heading = document.querySelector(".sidebar-heading");
-  const nav = document.querySelector(".chat-navigation");
-  if (!sidebar || !heading || !nav) return;
-  if (!sidebar.querySelector(".sidebar-brand")) {
-    const brand = document.createElement("div");
-    brand.className = "sidebar-brand";
-    brand.innerHTML = '<span class="sidebar-brand-mark" aria-hidden="true">Б</span><strong>Бульбам</strong>';
-    sidebar.insertBefore(brand, heading);
-  }
-  if (!sidebar.querySelector("#chat-filter")) {
-    const wrap = document.createElement("div");
-    wrap.className = "chat-filter-wrap";
-    wrap.innerHTML = '<label class="visually-hidden" for="chat-filter">Поиск по открытым чатам</label><input id="chat-filter" class="chat-filter" type="search" autocomplete="off" placeholder="Поиск по чатам">';
-    const input = wrap.querySelector("input");
-    input.addEventListener("input", () => { filterValue = input.value.trim().toLocaleLowerCase("ru"); filterChats(); });
-    sidebar.insertBefore(wrap, nav);
-  }
+  const input = document.querySelector("#chat-filter");
+  const clear = document.querySelector("#chat-filter-clear");
+  const start = document.querySelector("#chat-start-empty");
+  if (!input || !clear) return;
+
+  input.addEventListener("input", () => {
+    filterValue = input.value.trim().toLocaleLowerCase("ru");
+    filterChats();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    clearSearch();
+  });
+  clear.addEventListener("click", clearSearch);
+  start?.addEventListener("click", () => elements.newChatButton?.click());
+
+  // A convenience shortcut, but standard VoiceOver arrow navigation remains untouched.
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "k") return;
+    if (document.querySelector("#settings-dialog")?.open) return;
+    if (document.querySelector("#signed-in")?.hidden) return;
+    if (document.body.classList.contains("conversation-open") && matchMedia("(max-width: 48rem)").matches) {
+      document.querySelector("#conversation-back")?.click();
+    }
+    event.preventDefault();
+    input.focus();
+    input.select();
+  });
+}
+
+function clearSearch() {
+  const input = document.querySelector("#chat-filter");
+  if (!input) return;
+  input.value = "";
+  filterValue = "";
+  filterChats();
+  input.focus();
 }
 
 function filterChats() {
-  for (const button of document.querySelectorAll(".chat-item")) {
-    const next = Boolean(filterValue) && !button.textContent.toLocaleLowerCase("ru").includes(filterValue);
-    if (button.hidden !== next) button.hidden = next;
+  const buttons = document.querySelectorAll(".chat-item");
+  let visible = 0;
+  for (const button of buttons) {
+    const searchText = [
+      button.querySelector("strong")?.textContent,
+      button.querySelector(".chat-username")?.textContent,
+      button.dataset.searchPreview ?? button.querySelector(".chat-preview")?.textContent
+    ].filter(Boolean).join(" ").toLocaleLowerCase("ru");
+    const hidden = !matchesChatFilter(searchText,filterValue);
+    if (button.hidden !== hidden) button.hidden = hidden;
+    if (!hidden) visible += 1;
   }
+  const clear = document.querySelector("#chat-filter-clear");
+  const empty = document.querySelector("#chat-filter-empty");
+  if (clear) clear.hidden = !filterValue;
+  if (empty) empty.hidden = !filterValue || !buttons.length || visible > 0;
 }
+
 
 function prepareViewSelect() {
   const old = document.querySelector("#message-view");
   if (!old) return null;
-  const select = old.cloneNode(true);
-  if (!select.querySelector('option[value="table"]')) select.append(new Option("Таблица", "table"));
-  old.replaceWith(select);
-  return select;
+  old.querySelector('option[value="table"]')?.remove();
+  return old;
 }
 
 function prepareAppearance(viewSelect) {
@@ -170,7 +202,7 @@ function prepareAppearance(viewSelect) {
   const hint = card.querySelector(".hint");
   if (hint) {
     hint.id ||= "message-view-hint";
-    hint.textContent = "Пузырьки — обычный чат. Компактный список — одна строка на сообщение. Таблица — визуальные колонки; для VoiceOver сообщения остаются списком.";
+    hint.textContent = "Выберите, как удобнее читать переписку. Оба варианта подходят для VoiceOver.";
     viewSelect?.setAttribute("aria-describedby", hint.id);
   }
   let controls = card.querySelector(".appearance-controls");
