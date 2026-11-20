@@ -49,6 +49,14 @@ export class PresenceService {
       .bind(actor.sessionId, actor.userId, now, visible ? now+ONLINE_LEASE_MS : 0).run();
   }
 
+  async removeRevokedForUser(userId:string):Promise<void> {
+    await this.initialize();
+    await this.db.prepare(`DELETE FROM account_presence_sessions WHERE user_id=? AND NOT EXISTS (
+      SELECT 1 FROM sessions s WHERE s.session_id=account_presence_sessions.session_id
+      AND s.user_id=account_presence_sessions.user_id AND s.revoked_at IS NULL AND s.expires_at>?
+    )`).bind(userId,Date.now()).run();
+  }
+
   async peers(userId: string) {
     await this.initialize();
     await ensureMessagingSchema(this.db);
@@ -63,9 +71,12 @@ export class PresenceService {
         JOIN group_members gm2 ON gm1.conversation_id=gm2.conversation_id
         WHERE gm1.user_id=? AND gm2.user_id<>?
       ), activity AS (
-        SELECT user_id, MAX(last_active_at) AS last_seen_at,
-          MAX(CASE WHEN visible_until>? THEN 1 ELSE 0 END) AS online
-        FROM account_presence_sessions GROUP BY user_id
+        SELECT ps.user_id, MAX(ps.last_active_at) AS last_seen_at,
+          MAX(CASE WHEN ps.visible_until>? THEN 1 ELSE 0 END) AS online
+        FROM account_presence_sessions ps
+        JOIN sessions s ON s.session_id=ps.session_id AND s.user_id=ps.user_id
+          AND s.revoked_at IS NULL AND s.expires_at>?
+        GROUP BY ps.user_id
       )
       SELECT peers.peer_id AS user_id, activity.last_seen_at AS last_seen_at,
         COALESCE(activity.online,0) AS online, COALESCE(settings.share_presence,1) AS share_presence
@@ -82,7 +93,7 @@ export class PresenceService {
           (c.participant_b_id=? AND c.participant_a_id=peers.peer_id)
         )) OR (c.kind='group' AND a.user_id IS NOT NULL AND b.user_id IS NOT NULL)
       ),0) DESC, peers.peer_id LIMIT 500
-    `).bind(userId,userId,userId,userId,userId,now,userId,userId,userId).all<{
+    `).bind(userId,userId,userId,userId,userId,now,now,userId,userId,userId).all<{
       user_id:string;last_seen_at:number|null;online:number;share_presence:number
     }>();
     return (result.results??[]).map(row=>({

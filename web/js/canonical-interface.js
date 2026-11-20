@@ -1,3 +1,4 @@
+import { applyMessageScreenReaderSemantics } from "./message-screenreader-policy.js";
 import { matchesChatFilter } from "./chat-filter-policy.js";
 import { announce, elements } from "./ui.js";
 import { originalText } from "./i18n.js";
@@ -124,14 +125,7 @@ function decorateConversationAvatar() {
 }
 
 function decorateMessages() {
-  for (const item of document.querySelectorAll(".message")) {
-    if (item.getAttribute("role") !== "group") item.setAttribute("role", "group");
-    const author = item.querySelector(".message-author")?.textContent?.trim() || "Сообщение";
-    const meta = item.querySelector(".message-meta")?.textContent?.trim() || "";
-    const body = item.querySelector(".voice-message") ? "голосовое сообщение" : item.querySelector(":scope > p")?.textContent?.trim() || "сообщение";
-    const label = `${author}: ${body}. ${meta}`.trim();
-    if (item.getAttribute("aria-label") !== label) item.setAttribute("aria-label", label);
-  }
+  applyMessageScreenReaderSemantics(document);
 }
 
 function prepareSidebar() {

@@ -145,6 +145,7 @@ export class AdminRecoveryService {
       ).bind(row.user_id,requestId,nonce)
     ]);
     if(results[0]?.meta?.changes!==1||results[1]?.meta?.changes!==1)invalid();
+    await this.identity.cleanupRevokedSessions(row.user_id);
     const account=await this.db.prepare(`SELECT user_id,username,display_name,role,created_at
       FROM accounts WHERE user_id=? AND disabled_at IS NULL`).bind(row.user_id).first<Row>();
     if(!account)invalid();

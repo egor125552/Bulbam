@@ -16,6 +16,15 @@ export function setupPushNotifications() {
     void refreshPushState();
   });
 
+  if(document.visibilityState==="visible")void clearBadge();
+  if("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message",event=>{
+      if(event.data?.type==="bulbam.notification-open" && typeof event.data.url==="string"){
+        window.dispatchEvent(new CustomEvent("bulbam:notification-open",{detail:{url:event.data.url}}));
+      }
+    });
+  }
+
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void clearBadge();
     if (pushActive) void sendForegroundState(document.visibilityState === "visible");
@@ -46,6 +55,7 @@ export async function detachPushSubscription() {
 }
 
 async function refreshPushState() {
+  if(document.visibilityState==="visible")void clearBadge();
   logDiagnostic('Сеть','проверка состояния push');
   const account = getCurrentAccount();
   if (!account) {

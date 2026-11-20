@@ -125,12 +125,15 @@ async function openOrFocus(targetUrl) {
 
   for (const client of windowClients) {
     if (!client.url.startsWith(self.location.origin)) continue;
+    // Navigating an existing PWA client reloads it and destroys live calls,
+    // recordings and local drafts. Let the running app route internally.
     try {
-      if ("navigate" in client) await client.navigate(targetUrl);
+      if ("focus" in client) await client.focus();
+      client.postMessage({type:"bulbam.notification-open",url:new URL(targetUrl).pathname+new URL(targetUrl).search});
+      return client;
     } catch {
-      // If navigation is unavailable, focusing the existing Bulbam window is still safe.
+      // A dead client can be ignored; another window or a fresh one may work.
     }
-    if ("focus" in client) return client.focus();
   }
 
   return self.clients.openWindow(targetUrl);
@@ -138,7 +141,7 @@ async function openOrFocus(targetUrl) {
 
 // Public application shell only. Never cache authenticated /api endpoints,
 // voice messages, WebSocket traffic, or user data.
-const SHELL_CACHE = "bulbam-shell-460ee8d938ce";
+const SHELL_CACHE = "bulbam-shell-c3b04a6192ac";
 const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
 
 self.addEventListener("fetch", (event) => {

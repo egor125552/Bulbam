@@ -112,16 +112,20 @@ export async function startPasskeyAutofill() {
   if (!supported() || getCurrentAccount()) return;
   if (typeof PublicKeyCredential.isConditionalMediationAvailable !== "function") return;
   try {
-    if (!await PublicKeyCredential.isConditionalMediationAvailable()) return;
-    const begin = await api("/api/v1/passkeys/authentication/options", {method:"POST"});
-    if (getCurrentAccount()) return;
-    conditionalController = new AbortController();
+    // Install cancellation before the first await, including the options request.
+    const controller=new AbortController();
+    conditionalController=controller;
+    if (!await PublicKeyCredential.isConditionalMediationAvailable() || controller.signal.aborted)return;
+    const begin = await api("/api/v1/passkeys/authentication/options", {
+      method:"POST",signal:controller.signal
+    });
+    if (getCurrentAccount() || controller.signal.aborted)return;
     const credential = await navigator.credentials.get({
       mediation: "conditional",
       publicKey: authenticationPublicKey(begin.options),
-      signal: conditionalController.signal
+      signal: controller.signal
     });
-    if (credential && !getCurrentAccount()) await verifyAndSignIn(begin,credential);
+    if (!controller.signal.aborted && credential && !getCurrentAccount()) await verifyAndSignIn(begin,credential);
   } catch(error) {
     if (error.name !== "AbortError" && error.name !== "NotAllowedError") {
       // Conditional autofill is optional; never interrupt password entry.

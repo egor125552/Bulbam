@@ -213,6 +213,14 @@ export function setupAdminRecovery(){
   document.addEventListener("visibilitychange",()=>{
     if(document.visibilityState==="visible" && pending)void checkStatus(true);
   });
+  window.addEventListener("bulbam:notification-open",event=>{
+    const url=new URL(event.detail?.url??"/",location.origin);
+    if(url.origin!==location.origin || url.searchParams.get("reviewRecovery")!=="1")return;
+    if(!["owner","admin"].includes(getCurrentAccount()?.role))return;
+    openSettingsScreen("security");
+    document.querySelector("#admin-recovery-queue-title")?.focus();
+    void refreshQueue();
+  });
   window.addEventListener("bulbam:admin-recovery-request",()=>{
     if(["owner","admin"].includes(getCurrentAccount()?.role)){
       announce("Поступила новая заявка на восстановление аккаунта.");
