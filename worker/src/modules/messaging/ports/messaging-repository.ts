@@ -1,6 +1,9 @@
 import type {
   DeliveryReceiptUpdate,
   DirectConversation,
+  Conversation,
+  GroupConversation,
+  GroupMember,
   StoredMessage,
   VoiceListenUpdate
 } from "../domain/models";
@@ -15,7 +18,17 @@ export interface MessagingRepository {
   getOrCreateDirectConversation(userId: string, peerUserId: string, now: number): Promise<DirectConversation>;
   findConversationForUser(conversationId: string, userId: string): Promise<DirectConversation | null>;
   listConversationsForUser(userId: string, limit: number): Promise<DirectConversation[]>;
-  listMessages(conversationId: string, limit: number, viewerUserId: string): Promise<StoredMessage[]>;
+  listAllConversationsForUser(userId: string, limit: number): Promise<Conversation[]>;
+  findAnyConversationForUser(conversationId: string, userId: string): Promise<Conversation | null>;
+  createGroup(title: string, avatarIcon: string, ownerUserId: string, members: string[], historyMode: "all" | "since_join", now: number): Promise<GroupConversation>;
+  addGroupMembers(conversationId: string, userIds: string[], now: number): Promise<void>;
+  removeGroupMember(conversationId:string,userId:string):Promise<void>;
+  transferGroupOwner(conversationId:string,oldOwner:string,newOwner:string):Promise<void>;
+  deleteGroup(conversationId:string):Promise<void>;
+  listGroupMembers(conversationId: string): Promise<GroupMember[]>;
+  listMessageReaders(conversationId: string, messageIds: string[]): Promise<Map<string, Array<{userId:string;readAt:number}>>>;
+  listConversationRecipients(conversation: Conversation): Promise<string[]>;
+  listMessages(conversationId: string, limit: number, viewerUserId: string, before?: {createdAt:number;messageId:string}): Promise<StoredMessage[]>;
   insertMessage(input: StoredMessage): Promise<InsertMessageResult>;
   markMessagesDelivered(
     conversationId: string,

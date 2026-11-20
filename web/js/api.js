@@ -1,8 +1,15 @@
+import { logDiagnostic, describeApiOperation, logApiStart, logApiResult, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
 import { language, translateText } from "./i18n.js";
 const responseObservers = new Set();
 
 export async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const operation = describeApiOperation(path, String(options.method ?? "GET").toUpperCase());
+  const started = Date.now();
+  logApiStart(operation);
+  logTraceEvent('Сеть','API ожидание ответа','',{active:true});
+  let response;
+  try {
+    response = await fetch(path, {
     cache: "no-store",
     credentials: "same-origin",
     ...options,
@@ -12,22 +19,32 @@ export async function api(path, options = {}) {
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.headers || {})
     }
-  });
+    });
+  } catch (error) {
+    logDiagnostic("Сервер", "сбой сети", operation);
+    logTraceEvent('Ошибки','API ошибка транспорта',diagnosticErrorName(error),{durationMs:Date.now()-started});
+    throw error;
+  }
+  logApiResult(operation, response.status, Date.now()-started);
+  logTraceEvent('Сеть','API заголовки получены','',{status:response.status,durationMs:Date.now()-started});
 
   let payload = null;
   try {
     payload = await response.json();
   } catch {
     payload = null;
+    logDiagnostic('Ошибки','API ответ без JSON',operation);
   }
 
   if (!response.ok) {
+    logTraceEvent('Ошибки','API ответ с ошибкой','',{status:response.status});
     const error = new Error(translateText(payload?.error?.message || `Ошибка HTTP ${response.status}`));
     error.code = payload?.error?.code || "request_failed";
     error.status = response.status;
     throw error;
   }
 
+  logDiagnostic('Сервер','API данные обработаны',operation);
   notifyResponseObservers({
     path,
     method: String(options.method || "GET").toUpperCase(),

@@ -34,7 +34,7 @@ function voiceBindingMissing(): Response {
   return json({ ok: false, error: { code: "voice_binding_missing", message: "VoiceUploadRoom Durable Object не подключён к Worker." } }, { status: 503 });
 }
 function turnConfigured(env: Env): boolean {
-  return Boolean(
+  return Boolean(env.WEBRTC_RELAY_ISSUER_URL && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) || Boolean(
     (env.WEBRTC_CLOUDFLARE_TURN_KEY_ID || env.TURN_KEY_ID) &&
     (env.WEBRTC_CLOUDFLARE_TURN_API_TOKEN || env.TURN_KEY_API_TOKEN)
   ) || Boolean(env.WEBRTC_TURN_SECRET && env.WEBRTC_TURN_URLS) || Boolean(
@@ -52,6 +52,10 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
 async function handleRequestInternal(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
   try {
+    if (url.pathname === "/api/relay/public-key") {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
+      return json({ ok: Boolean(env.VAPID_PUBLIC_KEY), publicKey: env.VAPID_PUBLIC_KEY ?? null }, { status: env.VAPID_PUBLIC_KEY ? 200 : 503 });
+    }
     if (url.pathname === "/api/health") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
       return json({
@@ -78,11 +82,25 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
     if (storageRequired && !env.DB) return storageBindingMissing();
 
     const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
-    const identity = identityRepository ? new IdentityService(identityRepository) : null;
-    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
+    const identity = identityRepository ? new IdentityService(identityRepository,async (userId,displayName)=>{
+      if(!messagingRepository)return;
+      const chats=await messagingRepository.listAllConversationsForUser(userId,500);
+      const recipients=new Set<string>([userId]);
+      for(const chat of chats)
+        for(const peer of await messagingRepository.listConversationRecipients(chat))
+          recipients.add(peer);
+      await realtime.publishToUsers([...recipients],{type:"chat.profile-updated",userId,displayName});
+    },async userId=>{
+      // Notifications and presence own their own tables; sessions are the authority.
+      await Promise.all([
+        pushRepository?.removeRevokedForUser(userId),
+        env.DB ? new PresenceService(env.DB).removeRevokedForUser(userId) : undefined
+      ]);
+    }) : null;
+    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
     const adminRecovery = env.DB && identity ? new AdminRecoveryService(
       env.DB,identity,realtime,push??undefined,ctx ? (promise)=>ctx.waitUntil(promise) : undefined

@@ -8,8 +8,9 @@
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/canonical-ui.css" data-bulbam-canonical-ui>
+  <link rel="stylesheet" href="/styles.css?v=ebe9780c9f8c">
+  <link rel="stylesheet" href="/canonical-ui.css?v=88a4be9a6ad6" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.05e1ecb7484a.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -101,9 +102,11 @@
           <label>Имя пользователя
             <input name="username" autocomplete="username" required minlength="3" maxlength="32">
           </label>
+          <p id="recovery-code-help" class="hint">Для восстановления нужен только один резервный код. Если вы вставите сразу список, Бульбам выберет первый.</p>
           <label>Резервный код восстановления
-            <input name="code" autocomplete="one-time-code" required placeholder="BRC-XXXXXX-XXXXXX-XXXXXX-XXXXXX">
+            <input name="code" autocomplete="one-time-code" required spellcheck="false" autocapitalize="characters" aria-describedby="recovery-code-help recovery-code-paste-status" placeholder="BRC-XXXXXX-XXXXXX-XXXXXX-XXXXXX">
           </label>
+          <p id="recovery-code-paste-status" role="status" aria-live="polite" aria-atomic="true"></p>
           <label>Новый пароль
             <input name="newPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
           </label>
@@ -147,6 +150,7 @@
     <dialog id="recovery-codes-dialog" aria-labelledby="recovery-codes-title">
       <h2 id="recovery-codes-title" tabindex="-1">Сохраните резервные коды</h2>
       <p>Это одноразовые ключи от вашего аккаунта. Сохраните их в безопасном месте. После закрытия они больше не будут показаны.</p>
+      <p id="recovery-codes-one-code-help" class="hint">Для восстановления доступа вам понадобится только один код из этого списка. Не нужно вставлять все коды сразу.</p>
       <label for="recovery-codes-text">Ваши восемь кодов</label>
       <textarea id="recovery-codes-text" rows="10" readonly spellcheck="false"></textarea>
       <button id="copy-recovery-codes" type="button">Скопировать коды</button>
@@ -215,13 +219,14 @@
             <div class="section-heading">
               <h3 id="search-users-title">Новый чат</h3>
             </div>
+            <button id="create-group-open" type="button" class="button-with-icon" data-icon="users">Создать группу</button>
             <label class="visually-hidden" for="user-search-input">Найти человека</label>
             <input id="user-search-input" type="search" autocomplete="off" placeholder="Имя или @username" aria-describedby="user-search-hint">
             <p id="user-search-hint" class="hint">Введите минимум 2 символа.</p>
             <ul id="user-search-results" class="user-results" aria-label="Результаты поиска"></ul>
           </section>
 
-          <nav class="chat-navigation" aria-label="Личные диалоги">
+          <nav class="chat-navigation" aria-label="Список чатов">
             <div id="chat-list" class="chat-list"></div>
           </nav>
         </aside>
@@ -236,6 +241,7 @@
                 <p id="conversation-peer" class="conversation-peer">Откройте диалог или найдите человека.</p>
               </div>
             </div>
+            <button id="group-info-open" type="button" class="button-with-icon" data-icon="users" hidden>Участники</button>
             <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
@@ -262,6 +268,15 @@
               </div>
             </div>
 
+            <p id="voice-delivery-visual" class="voice-delivery-visual" aria-hidden="true" hidden>Голосовое отправляется…</p>
+            <div id="voice-recording-panel" class="voice-recording-panel" aria-hidden="true" hidden>
+              <div class="voice-recording-panel-header">
+                <span class="voice-recording-led" aria-hidden="true"></span>
+                <strong id="voice-recording-visual-label">Идёт запись голосового</strong>
+                <span id="voice-recording-visual-timer" class="voice-recording-clock">0:00</span>
+              </div>
+              <p id="voice-recording-visual-hint">Голосовое ещё не отправлено. Говорите в микрофон.</p>
+            </div>
             <div class="composer-input-wrap">
               <label class="visually-hidden" for="message-input">Сообщение</label>
               <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Написать сообщение" enterkeyhint="send" aria-describedby="message-send-hint"></textarea>
@@ -269,7 +284,8 @@
             </div>
             <button id="voice-record-button" class="icon-button composer-action voice-action" data-icon="mic" type="button" aria-pressed="false" aria-describedby="voice-record-hint" aria-label="Записать голосовое">Записать голосовое</button>
             <button id="send-message" class="icon-button composer-action send-action" data-icon="send" type="submit" aria-label="Отправить сообщение">Отправить</button>
-            <button id="voice-pause-button" class="button-with-icon" type="button" aria-pressed="false" aria-label="Пауза записи. Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-pause-button" class="button-with-icon" data-icon="pause" type="button" aria-pressed="false" aria-label="Приостановить запись голосового" hidden>Пауза записи</button>
+            <button id="voice-cancel-button" class="button-with-icon danger-button" data-icon="trash" type="button" aria-label="Отменить запись голосового" hidden>Отменить</button>
             <button id="voice-quality-cycle" type="button" class="button-with-icon" aria-label="Переключить качество голосовых сообщений">Качество голосового</button>
             <p id="message-send-hint" class="visually-hidden" data-detailed-help>Enter отправляет сообщение, Shift и Enter переводят на новую строку.</p>
             <p id="voice-record-hint" class="visually-hidden" data-detailed-help>Нажмите для начала записи. Во время записи нажмите ещё раз, чтобы остановить и отправить. Escape отменяет запись. На Mac можно удерживать Option.</p>
@@ -277,11 +293,13 @@
         </section>
       </div>
 
-          <section id="call-panel" class="call-banner" aria-labelledby="call-title" hidden>
+          <section id="call-panel" class="call-banner" role="dialog" aria-labelledby="call-title" hidden>
             <div class="call-copy">
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
+              <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
+              <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
             </div>
             <div class="call-screen-navigation">
               <button id="call-minimize" type="button" hidden>Свернуть звонок</button>
@@ -293,14 +311,60 @@
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
-              <button id="call-audio-cycle" class="button-with-icon" type="button" hidden>Режим микрофона</button>
+              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
+              <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
+            <button id="call-pocket" type="button" hidden>Режим в кармане</button>
+            <audio id="call-keepalive-audio" src="/audio/call-keepalive.wav" preload="auto" loop playsinline aria-hidden="true"></audio>
             <audio id="call-remote-audio" autoplay playsinline></audio>
           </section>
 
-      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+
+      <dialog id="group-editor" aria-labelledby="group-editor-title" class="group-dialog">
+        <form id="group-editor-form" class="form-stack">
+          <h2 id="group-editor-title" tabindex="-1">Создать группу</h2>
+          <div id="group-create-fields" class="form-stack">
+            <label for="group-title-input">Название группы</label>
+            <input id="group-title-input" maxlength="80" autocomplete="off" placeholder="Например, Наши">
+            <label for="group-icon-input">Значок группы</label>
+            <select id="group-icon-input">
+              <option value="👥">Участники</option><option value="🏠">Дом</option>
+              <option value="⭐">Звезда</option><option value="🌿">Лист</option>
+              <option value="💬">Сообщения</option>
+            </select>
+            <label for="group-history-input">Что увидят участники, добавленные позже?</label>
+            <select id="group-history-input">
+              <option value="since_join">Только новые сообщения</option>
+              <option value="all">Всю предыдущую переписку</option>
+            </select>
+          </div>
+          <h3 id="group-pick-title">Выберите участников</h3>
+          <p class="hint">Сначала люди из ваших личных чатов. Можно найти другого пользователя.</p>
+          <p id="group-selected-count" role="status">Выбрано: 0</p>
+          <ul id="group-picked-users" class="group-picked-users" aria-label="Участники для добавления"></ul>
+          <label for="group-user-search">Найти человека</label>
+          <input id="group-user-search" type="search" autocomplete="off" placeholder="Имя или @username">
+          <ul id="group-user-results" class="user-results" aria-label="Выбор участников"></ul>
+          <p id="group-editor-status" role="status" aria-live="polite"></p>
+          <div class="group-dialog-actions">
+            <button id="group-cancel" type="button">Отмена</button>
+            <button id="group-submit" type="submit">Создать группу</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="group-members-dialog" aria-labelledby="group-members-title" class="group-dialog">
+        <h2 id="group-members-title">Участники группы</h2>
+        <p id="group-members-presence" class="hint"></p>
+        <ul id="group-members-list" class="user-results"></ul>
+        <div class="group-dialog-actions">
+          <button id="group-members-delete" type="button" hidden>Удалить группу</button>
+          <button id="group-members-close" type="button">Закрыть</button>
+          <button id="group-members-add" type="button" hidden>Добавить участников</button>
+        </div>
+      </dialog>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <div class="settings-header">
           <div>
             <p class="eyebrow">Бульбам</p>
@@ -381,7 +445,7 @@
             <h3 id="admin-recovery-queue-title" tabindex="-1">Запросы восстановления</h3>
             <p>Одобряйте заявку только после независимой проверки владельца аккаунта. Запрос без подтверждения личности может быть попыткой захвата.</p>
             <button id="admin-recovery-refresh" type="button">Обновить заявки</button>
-            <p id="admin-recovery-queue-status" role="status" aria-live="polite"></p>
+            <p id="admin-recovery-queue-status" role="status" aria-live="polite" tabindex="-1"></p>
             <ul id="admin-recovery-requests" aria-label="Ожидающие запросы восстановления"></ul>
           </section>
 
@@ -406,9 +470,14 @@
             <h3 id="accessibility-title">Специальные возможности</h3>
             <label class="switch-row">
               <input id="voice-detailed-help" type="checkbox" checked>
-              Подробные подсказки для начинающих
+              Подробные подсказки во всём Бульбаме
             </label>
             <p class="hint">Если выключить, Бульбам скроет дополнительные пояснения и будет озвучивать действия короче. Важные статусы и ошибки останутся.</p>
+            <label class="switch-row">
+              <input id="settings-simple-controls" type="checkbox">
+              Простые кнопки без раскрывающихся списков
+            </label>
+            <p class="hint" data-detailed-help>Вместо раскрывающихся списков будут обычные кнопки для выбора вариантов. Их можно активировать двойным касанием VoiceOver.</p>
           </section>
 
           <section class="card" aria-labelledby="voice-settings-title">
@@ -419,8 +488,10 @@
               <option value="32000">Экономия интернета</option>
               <option value="48000">Обычное качество</option>
               <option value="64000">Хорошее качество</option>
-              <option value="96000">Максимальное качество</option>
+              <option value="96000">Высокое качество</option>
+              <option value="192000">Самое высокое качество</option>
             </select>
+            <p class="hint">Все голосовые записываются с выключенными эхоподавлением, шумоподавлением и автогромкостью, насколько это разрешает система. Частота 48 кГц, стерео при поддержке микрофона. Качество кодирования влияет на следующие записи, а не меняет уже записанное.</p>
             <label class="switch-row">
               <input id="voice-share-listening" type="checkbox" checked>
               Показывать собеседникам прогресс прослушивания
@@ -478,18 +549,31 @@
               <div><dt>Внутренний ID</dt><dd id="account-id"></dd></div>
               <div><dt>Роль</dt><dd id="account-role"></dd></div>
             </dl>
-            <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
-            <h4 id="ice-diagnostics-title">Сетевой маршрут звонка</h4>
-            <p>Фактически выбранное WebRTC-соединение: <strong id="call-ice-route">Звонка нет, маршрут не выбран</strong></p>
-            <p>TURN в настройках звонков: <strong id="call-turn-availability">Не проверено</strong></p>
-            <label for="call-ice-mode">Маршрут для следующего звонка</label>
-            <select id="call-ice-mode" aria-describedby="call-ice-mode-hint">
-              <option value="all">Автоматически (прямое соединение или TURN)</option>
-              <option value="relay">Только TURN, временно</option>
+            <label for="turn-route-preference">Маршрут для следующего звонка</label>
+            <select id="turn-route-preference" aria-describedby="turn-route-help turn-route-availability">
+              <option value="auto">Автоматически (STUN или TURN)</option>
+              <option value="relay">Только TURN (временно)</option>
             </select>
-            <p id="call-ice-mode-hint" class="hint">Выбор действует только в текущей вкладке. Включайте «Только TURN» после проверки доступности TURN. Текущий звонок не прерывается.</p>
-            <p id="call-ice-mode-status" role="status" aria-live="polite"></p>
-            <button id="refresh-call-route" type="button">Проверить маршрут и TURN</button>
+            <p id="turn-route-help" class="hint">Временная настройка только для этой вкладки. На текущий звонок не влияет. Если сервер не выдаёт TURN, автоматический режим сохранится.</p>
+            <p id="turn-route-availability" role="status" aria-live="polite">TURN ещё не проверен.</p>
+            <button id="check-server" class="button-with-icon" data-icon="refresh" type="button">Проверить сервис</button>
+            <section aria-labelledby="diagnostics-journal-title" class="diagnostics-journal">
+              <h3 id="diagnostics-journal-title">Полный журнал диагностики</h3>
+              <p class="hint">Подробная хронология всего Бульбама: действия и фокус интерфейса, жизненный цикл вкладки, запросы и ответы, WebSocket, сообщения, группы, голосовые, звонки, микрофон, ресурсы, производительность и ошибки. Каждый доступный браузеру этап получает время и номер. Хранится только в памяти этой вкладки; личные сообщения, пароли, токены и звук не сохраняются. Внутренние журналы Cloudflare и операционной системы браузеру недоступны.</p>
+              <p id="diagnostics-count" class="hint" aria-live="off">Счётчик событий</p>
+              <label for="diagnostics-log">События в порядке времени</label>
+              <textarea id="diagnostics-log" readonly rows="13" spellcheck="false" aria-live="off" aria-label="Полный журнал событий Бульбама"></textarea>
+              <div class="call-log-actions" data-diagnostics-private="true">
+                <button id="diagnostics-copy" type="button">Скопировать журнал</button>
+                <button id="diagnostics-download" type="button">Скачать журнал TXT</button>
+                <button id="diagnostics-clear" type="button">Очистить журнал</button>
+              </div>
+              <p id="diagnostics-log-status" role="status" aria-live="polite"></p>
+              <details id="call-diagnostics" hidden>
+                <summary>Текущие параметры соединения звонка</summary>
+                <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
+              </details>
+            </section>
           </section>
         </details>
       </dialog>
@@ -506,7 +590,12 @@
       const panel = document.querySelector("#startup-failure");
       const message = document.querySelector("#startup-failure-message");
       const live = document.querySelector("#live-status");
-      const watchdog = setTimeout(() => fail(new Error("startup_timeout")), 15000);
+      // A 2G-class link can take well over 15 seconds to transfer the app.
+      // Show progress instead of claiming that a slow download failed.
+      const slowNotice = setTimeout(() => {
+        if (!initialized) live.textContent = "Медленный интернет. Продолжаю загружать Бульбам…";
+      }, 9000);
+      const watchdog = setTimeout(() => fail(new Error("startup_timeout")), 90000);
       function fail(error) {
         if (initialized) return;
         console.error("[Bulbam] Startup was interrupted", error);
@@ -524,10 +613,12 @@
       window.bulbamBootReady = () => {
         initialized = true;
         clearTimeout(watchdog);
+        clearTimeout(slowNotice);
         panel.hidden = true;
       };
       window.bulbamBootFailed = (error) => {
         clearTimeout(watchdog);
+        clearTimeout(slowNotice);
         fail(error);
       };
       document.querySelector("#startup-retry")?.addEventListener("click", () => {
@@ -539,14 +630,7 @@
   </script>
   <script type="module">
     try {
-      const [{ setupInterface }, { setupCanonicalInterface }] = await Promise.all([
-        import("/js/ui.js"), import("/js/canonical-interface.js")
-      ]);
-      setupInterface();
-      setupCanonicalInterface();
-      document.querySelector("#logout")?.addEventListener("click", () =>
-        document.querySelector("#settings-dialog")?.close?.());
-      await import("/app.js?v=20261023-ice-route-diag-1");
+      await import("/boot.05e1ecb7484a.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

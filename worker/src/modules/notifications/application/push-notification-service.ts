@@ -9,6 +9,7 @@ import type {
 export interface MessageNotificationInput {
   recipientUserId: string;
   senderDisplayName: string;
+  groupTitle?: string;
   conversationId: string;
   messageId: string;
   text: string;
@@ -47,7 +48,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     };
   }
 
-  async subscribe(userId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
+  async subscribe(userId: string, sessionId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
     if (!this.configured()) {
       badRequest(
         "push_not_configured",
@@ -58,6 +59,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     await this.repository.upsert({
       ...subscription,
       userId,
+      sessionId,
       userAgent
     });
   }
@@ -77,8 +79,8 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   async notifyNewMessage(input: MessageNotificationInput): Promise<void> {
     await this.notifyWhenBackground(input.recipientUserId, {
       kind: "message",
-      title: input.senderDisplayName,
-      body: notificationPreview(input.text),
+      title: input.groupTitle??input.senderDisplayName,
+      body: input.groupTitle?`${input.senderDisplayName}: ${notificationPreview(input.text)}`:notificationPreview(input.text),
       tag: `chat-${input.conversationId}`,
       icon: "/icon.svg",
       data: {
@@ -105,7 +107,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
         callId: input.callId,
         conversationId: input.conversationId
       }
-    }, 120);
+    }, 15);
   }
 
   async notifyAdminRecoveryRequest(recipientUserId:string):Promise<void> {
@@ -148,6 +150,8 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
 
   private async send(subscription: PushSubscriptionRecord, payload: string, ttl: number): Promise<void> {
     try {
+      // A session may be revoked while the fanout is being prepared.
+      if(!(await this.repository.isCurrentSession(subscription)))return;
       await webpush.sendNotification(
         {
           endpoint: subscription.endpoint,
@@ -175,7 +179,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   }
 }
 
-function validateSubscription(raw: Record<string, unknown>): Omit<PushSubscriptionRecord, "userId"> {
+function validateSubscription(raw: Record<string, unknown>): Omit<PushSubscriptionRecord, "userId" | "sessionId"> {
   const endpoint = validateEndpoint(raw.endpoint);
   const expirationTime = raw.expirationTime === null || raw.expirationTime === undefined
     ? null

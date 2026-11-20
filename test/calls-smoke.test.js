@@ -142,9 +142,33 @@ describe("one-to-one audio call signaling", () => {
     await expectStatus(differentRoomBusy, 409);
     expect(await activeCallFor(gamma.account.userId)).toBeNull();
 
+    const env=await testEnv();
+    const realtimeResponse=await env.REALTIME.getByName(beta.account.userId).fetch(
+      "https://realtime.internal/socket",{headers:{upgrade:"websocket"}}
+    );
+    expect(realtimeResponse.status).toBe(101);
+    const notificationSocket=realtimeResponse.webSocket;
+    notificationSocket.accept();
+    const answeredNotification=new Promise((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new Error("Answer realtime event missing")),5000);
+      notificationSocket.addEventListener("message",event=>{
+        try{
+          const payload=JSON.parse(event.data);
+          if(payload.type==="call.answered"){
+            clearTimeout(timeout);resolve(payload);
+          }
+        }catch{}
+      });
+    });
+    const betaSession=await api("/api/v1/auth/me",beta.cookie);
+    const betaSessionId=(await json(betaSession)).session.sessionId;
     const answered = await api(`${callRoot}/answer`, beta.cookie, { method: "POST" });
     await expectStatus(answered, 200);
     expect((await json(answered)).call.status).toBe("accepted");
+    expect(await answeredNotification).toMatchObject({
+      type:"call.answered",actorUserId:beta.account.userId,actorSessionId:betaSessionId
+    });
+    notificationSocket.close(1000,"done");
     expect(await activeCallFor(alpha.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
     expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
 
@@ -284,10 +308,15 @@ describe("one-to-one audio call signaling", () => {
     expect(switched.call.sessionOwnerId).not.toBe(stillOnA.call.sessionOwnerId);
     const offer={kind:"offer",payload:{type:"offer",sdp:"v=0\r\nnew-device-offer"}};
     expect((await api(path+"/signals",a.cookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(403);
-    expect((await api(path+"/end",a.cookie,{method:"POST"})).status).toBe(403);
-    expect((await api(path+"/signals",secondCookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(201);
+    // Media handoff restricts offers, but a user must be able to hang up
+    // from every signed-in device. This releases both users immediately.
+    await expectStatus(await api(path+"/end",a.cookie,{method:"POST"}),200);
+    expect(await activeCallFor(a.account.userId)).toBeNull();
+    expect(await activeCallFor(b.account.userId)).toBeNull();
+    expect((await api(path+"/signals",secondCookie,{method:"POST",body:JSON.stringify(offer)})).status).toBe(409);
     expect((await api(path,b.cookie)).status).toBe(200);
-    expect((await api(path+"/handoff",secondCookie,{method:"POST"})).status).toBe(200);
+    expect((await api(path+"/handoff",secondCookie,{method:"POST"})).status).toBe(409);
+    // Idempotent remote hang-up: it is still ended for both parties.
     await expectStatus(await api(path+"/end",b.cookie,{method:"POST"}),200);
     expect((await api(path+"/handoff",a.cookie,{method:"POST"})).status).toBe(409);
   });

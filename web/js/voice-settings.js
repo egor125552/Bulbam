@@ -3,7 +3,7 @@ import { announce } from "./ui.js";
 
 const BITRATE_KEY = "bulbam.voice.bitrate";
 const SHARE_KEY_PREFIX = "bulbam.voice.shareListening.";
-const BITRATES = [24000, 32000, 48000, 64000, 96000];
+const BITRATES = [24000, 32000, 48000, 64000, 96000, 192000];
 const ALLOWED_BITRATES = new Set(BITRATES);
 
 let bitrateBps = readBitrate();

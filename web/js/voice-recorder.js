@@ -1,3 +1,7 @@
+import { optionRecordingKeyAction } from "./voice-option-key-policy.js";
+import { renderVoiceRecorderVisual, renderVoiceDeliveryVisual } from "./voice-recorder-visual.js";
+import { rawVoiceConstraints, keepVoiceRaw } from "./voice-raw-capture.js";
+import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
 import { explainMicrophoneError } from "./microphone-permissions.js";
 import { isDetailedHelpEnabled } from "./accessibility-help.js";
 import { api } from "./api.js";
@@ -7,7 +11,7 @@ import {
   getSelectedChat,
   refreshChatsAfterExternalMessage
 } from "./messenger.js";
-import { playVoiceCue, prepareVoiceCues } from "./voice-cues.js";
+import { playVoiceCue, prepareVoiceCues, setupVoiceCueRestoration } from "./voice-cues.js";
 import {
   appendVoiceChunk,
   createVoiceDraft,
@@ -18,7 +22,7 @@ import {
   updateVoiceDraft
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
-import { VoiceUploadSocket } from "./voice-upload-socket.js";
+import { VoiceUploadSocket,canReuseVoiceUploadTransport } from "./voice-upload-socket.js";
 import { createRecordingClock } from "./voice-recording-clock.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
@@ -29,6 +33,10 @@ const MIME_CANDIDATES = /android/i.test(navigator.userAgent)
 
 let recordButton = null;
 let pauseButton = null;
+let cancelButton = null;
+let visualControls = null;
+let deliveryVisual = null;
+let deliveryHideTimer = null;
 let detailedHelp = true;
 let draftPanel = null;
 let draftStatus = null;
@@ -46,6 +54,17 @@ let optionHeld = false;
 export function setupVoiceRecorder() {
   recordButton = document.querySelector("#voice-record-button");
   pauseButton = document.querySelector("#voice-pause-button");
+  cancelButton = document.querySelector("#voice-cancel-button");
+  deliveryVisual = document.querySelector("#voice-delivery-visual");
+  visualControls = {
+    body: document.body,
+    panel: document.querySelector("#voice-recording-panel"),
+    label: document.querySelector("#voice-recording-visual-label"),
+    timer: document.querySelector("#voice-recording-visual-timer"),
+    hint: document.querySelector("#voice-recording-visual-hint"),
+    cancelButton,
+    recordButton
+  };
   detailedHelp = isDetailedHelpEnabled();
   window.addEventListener("bulbam:detailed-help-changed", (event) => {
     detailedHelp = event.detail?.enabled !== false;
@@ -62,6 +81,7 @@ export function setupVoiceRecorder() {
     void toggleButtonRecording();
   });
   pauseButton?.addEventListener("click", () => togglePauseRecording());
+  cancelButton?.addEventListener("click", () => void cancelRecording());
   draftSendButton?.addEventListener("click", () => void sendRecoverableDraft());
   draftDeleteButton?.addEventListener("click", () => void deleteRecoverableDraft());
 
@@ -70,6 +90,7 @@ export function setupVoiceRecorder() {
   window.addEventListener("online", () => void refreshRecoverableDraft());
   observeCallPanel();
 
+  setupVoiceCueRestoration();
   document.addEventListener("keydown", handleOptionKeyDown, true);
   document.addEventListener("keyup", handleOptionKeyUp, true);
   window.addEventListener("blur", () => {
@@ -124,6 +145,8 @@ async function startRecording(trigger) {
   if (!account || !chat || current || starting) return;
 
   starting = true;
+  showVoiceDelivery("");
+  logDiagnostic("Голосовые", "запрос на запись");
   setStartingUi(true);
   const expectedAccountId = account.userId;
   const expectedConversationId = chat.conversationId;
@@ -150,16 +173,14 @@ async function startRecording(trigger) {
     }
 
     const bitrateBps = getVoiceBitrate();
+    logDiagnostic("Голосовые", "выбраны параметры", `${bitrateBps} бит в секунду`);
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: { ideal: 1 },
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        }
+        audio: rawVoiceConstraints(navigator.mediaDevices.getSupportedConstraints?.() ?? null)
       });
-      await enforceRawCapture(stream);
+      const raw = await keepVoiceRaw(stream.getAudioTracks()[0]);
+      logDiagnostic("Микрофон", "проверка исходного звука", raw.summary);
+      logDiagnostic("Микрофон", raw.confirmed ? "обработка выключена" : "обработка не подтверждена");
     } catch (error) {
       announce(`Не удалось включить микрофон: ${explainMicrophoneError(error)}`);
       await playVoiceCue("error");
@@ -195,6 +216,7 @@ async function startRecording(trigger) {
 
     try {
       await createVoiceDraft(draft);
+      logDiagnostic("Голосовые", "черновик сохранён локально");
     } catch (error) {
       stream.getTracks().forEach((track) => track.stop());
       stream = null;
@@ -256,6 +278,7 @@ async function startRecording(trigger) {
     current = state;
     try {
       recorder.start(1000);
+      logDiagnostic("Голосовые", "кодировщик запущен");
     } catch (error) {
       if (current === state) current = null;
       stream.getTracks().forEach((track) => track.stop());
@@ -311,6 +334,7 @@ async function persistChunk(state, blob) {
   state.draft.lastChunkAt = Date.now();
   try {
     await appendVoiceChunk(state.draft.id, sequence, blob);
+    logDiagnostic("Голосовые", "фрагмент сохранён", `${blob.size} байт`);
     await updateVoiceDraft(state.draft.id, {
       sequence: state.draft.sequence,
       totalBytes: state.draft.totalBytes,
@@ -373,15 +397,19 @@ function syncPauseUi() {
     ? "Продолжить запись голосового"
     : "Пауза записи. Приостановить запись голосового");
   pauseButton.setAttribute("aria-pressed", String(paused));
+  pauseButton.dataset.icon = paused ? "play" : "pause";
   if (recordingStatus && paused) recordingStatus.textContent = "Запись на паузе";
+  updateVisualRecording();
 }
 
 async function stopAndSend() {
   const state = current;
   if (!state || state.finishing) return;
   state.stopMode = "send";
+  logDiagnostic("Голосовые", "запись остановлена");
   state.finishing = true;
   setRecordingUi(false);
+  showVoiceDelivery("Подготавливаю отправку голосового…");
   announce("Запись остановлена. Подготавливаю отправку голосового.");
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
@@ -390,8 +418,10 @@ async function cancelRecording() {
   const state = current;
   if (!state || state.finishing) return;
   state.stopMode = "cancel";
+  logDiagnostic("Голосовые", "запись отменяется");
   state.finishing = true;
   setRecordingUi(false);
+  showVoiceDelivery("Отменяю запись…");
   announce("Останавливаю и отменяю запись голосового.");
   if (state.recorder.state !== "inactive") state.recorder.stop();
 }
@@ -400,6 +430,7 @@ async function interruptRecording(reason) {
   const state = current;
   if (!state || state.finishing) return;
   state.stopMode = "interrupted";
+  logDiagnostic("Голосовые", "запись прервана");
   state.draft.interruptionReason = reason;
   state.finishing = true;
   setRecordingUi(false);
@@ -416,6 +447,7 @@ async function finishStoppedRecorder(state) {
   if (state.uploadPromise) await state.uploadPromise.catch(() => undefined);
   const durationMs = Math.max(1, state.clock.elapsed());
   const mode = state.stopMode ?? "interrupted";
+  logDiagnostic("Голосовые", "кодировщик остановлен", `режим ${mode}`);
   if (current === state) current = null;
 
   if (mode === "cancel") {
@@ -423,6 +455,7 @@ async function finishStoppedRecorder(state) {
     await abortRemoteUpload(state.draft);
     await deleteVoiceDraft(state.draft.id).catch(() => undefined);
     await playVoiceCue("cancel");
+    showVoiceDelivery("Запись отменена.", "success", true);
     announce("Запись голосового отменена.");
   } else if (mode === "interrupted") {
     state.transport?.close();
@@ -443,6 +476,7 @@ async function finishStoppedRecorder(state) {
   }
 
   await refreshRecoverableDraft();
+  window.dispatchEvent(new CustomEvent("bulbam:voice-recording-finished"));
 }
 
 async function sendDraftById(id, existingTransport = null) {
@@ -450,12 +484,17 @@ async function sendDraftById(id, existingTransport = null) {
   if (!draft) return;
   let transport = existingTransport;
   try {
+    showVoiceDelivery("Отправляю голосовое сообщение…");
     const totalBytes = Number(draft.totalBytes ?? 0);
     if (!totalBytes) throw new Error("запись пустая");
 
-    const upload = await ensureDraftUpload(draft);
+    logDiagnostic("Голосовые", "подготовка серверной загрузки");
+    const liveUpload=canReuseVoiceUploadTransport(transport,draft.upload);
+    const upload = liveUpload ? draft.upload : await ensureDraftUpload(draft);
+    logDiagnostic("Голосовые", "сервер подтвердил загрузку");
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     const partCount = Math.ceil(totalBytes / partSize);
+    logTraceEvent('Голосовые','план передачи записи','',{bytes:totalBytes,chunks:partCount});
     const parts = [...(upload.parts ?? [])];
 
     if (upload.state !== "ready") {
@@ -480,7 +519,9 @@ async function sendDraftById(id, existingTransport = null) {
           draft.mimeType
         );
         if (!body.size) throw new Error(`не удалось прочитать часть ${partNumber} записи`);
+        logTraceEvent('Голосовые','фрагмент отправляется','',{step:partNumber,bytes:body.size});
         const ack = await transport.sendPart(partNumber, body);
+        logDiagnostic("Голосовые", "сервер подтвердил фрагмент", `${partNumber} часть`);
         parts.push({ partNumber, sizeBytes: ack.sizeBytes });
         parts.sort((left, right) => left.partNumber - right.partNumber);
         upload.parts = parts;
@@ -501,14 +542,18 @@ async function sendDraftById(id, existingTransport = null) {
         })
       }
     );
+    logDiagnostic('Голосовые','передача завершена');
     await deleteVoiceDraft(id);
     recoverableDraft = null;
     hideDraftPanel();
     acceptExternalMessage(result.message);
     await refreshChatsAfterExternalMessage();
+    showVoiceDelivery("Голосовое сообщение отправлено.", "success", true);
     announce("Голосовое сообщение отправлено.");
   } catch (error) {
+    logDiagnostic('Ошибки','голосовое не отправлено',diagnosticErrorName(error));
     await updateVoiceDraft(id, { state: "failed", lastError: error.message }).catch(() => undefined);
+    showVoiceDelivery("Не удалось отправить. Запись сохранена, можно повторить.", "error");
     announce(`Голосовое не отправлено: ${error.message}. Запись сохранена, можно повторить.`);
     await playVoiceCue("error");
   } finally {
@@ -706,6 +751,11 @@ function setStartingUi(active) {
 function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date.now()) {
   if (!recordButton) return;
   syncPauseUi();
+  renderVoiceRecorderVisual(visualControls, {
+    recording,
+    paused: current?.clock?.paused ?? false,
+    elapsedMs: current?.clock?.elapsed() ?? Date.now() - startedAt
+  });
   recordButton.textContent = recording ? "Отправить голосовое" : "Записать голосовое";
   recordButton.setAttribute("aria-pressed", String(recording));
   recordButton.setAttribute("aria-label", recording
@@ -722,13 +772,39 @@ function setRecordingUi(recording, startedAt = current?.draft?.startedAt ?? Date
     recordingStatus.textContent = current?.clock?.paused
       ? "Запись на паузе"
       : `Запись ${formatClock(current?.clock?.elapsed() ?? Date.now() - startedAt)}`;
+    updateVisualRecording();
   };
   update();
   recordingTimer = setInterval(update, 1000);
 }
 
+function showVoiceDelivery(message, state = "progress", temporary = false) {
+  clearTimeout(deliveryHideTimer);
+  deliveryHideTimer = null;
+  renderVoiceDeliveryVisual(deliveryVisual, message, state);
+  if (temporary) {
+    deliveryHideTimer = setTimeout(() => {
+      renderVoiceDeliveryVisual(deliveryVisual, "");
+      deliveryHideTimer = null;
+    }, 5000);
+  }
+}
+
+function updateVisualRecording() {
+  if (!visualControls || !current || current.finishing) return;
+  renderVoiceRecorderVisual(visualControls, {
+    recording: true,
+    paused: current.clock.paused,
+    elapsedMs: current.clock.elapsed()
+  });
+}
+
 function handleOptionKeyDown(event) {
-  if (event.key === "Escape" && current) {
+  const action=optionRecordingKeyAction(event.key,{
+    isRecording:Boolean(current),trigger:current?.trigger,
+    altKey:event.altKey,timerActive:Boolean(optionTimer)
+  });
+  if (action==="cancel") {
     event.preventDefault();
     void cancelRecording();
     return;
@@ -736,10 +812,11 @@ function handleOptionKeyDown(event) {
   if (!isMacLike()) return;
 
   if (event.key !== "Alt") {
-    if (event.altKey || optionTimer || current?.trigger === "option") {
-      optionBlocked = true;
+    if(action==="interrupt" || action==="block") {
+      optionBlocked=true;
       clearOptionTimer();
-      if (current?.trigger === "option") void cancelRecording();
+      if(action==="interrupt")
+        void interruptRecording("Во время удержания Option нажата другая клавиша.");
     }
     return;
   }
@@ -772,20 +849,6 @@ function clearOptionTimer() {
 
 function chooseVoiceMimeType() {
   return MIME_CANDIDATES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? null;
-}
-
-async function enforceRawCapture(stream) {
-  const track = stream.getAudioTracks()[0];
-  if (!track) throw new Error("микрофон не дал аудиодорожку");
-  // Просим браузер отключить обработку дважды: и в getUserMedia, и на самой
-  // дорожке. Если ОС/браузер всё равно оставляет её включённой, запись разрешена:
-  // Bulbam не добавляет собственный DSP, но web-приложение не может обещать raw hardware capture.
-  await track.applyConstraints({
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false
-  }).catch(() => undefined);
 }
 
 function isEditable(target) {
