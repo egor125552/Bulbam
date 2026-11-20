@@ -5,7 +5,23 @@ const supported=new Set(["ru","be"]);
 const originalStrings=new WeakMap();
 const originalAttributes=new WeakMap();
 const inverse=new Map(Object.entries(be).map(([from,to])=>[to,from]));
-const prefixTranslations=Object.entries(be).filter(([key])=>key.endsWith(":"));
+const prefixTranslations=Object.entries(be).filter(([key])=>key.trimEnd().endsWith(":"))
+  .sort((a,b)=>b[0].length-a[0].length);
+// Recognize ONLY explicit, audited interface templates. Captured values (names,
+// message counts, errors) are preserved, never machine-translated or modified.
+const templateTranslations=Object.entries(be)
+  .filter(([source])=>/\{\{\d+\}\}/.test(source))
+  .map(([source,target])=>{
+    const pieces=source.split(/\{\{\d+\}\}/);
+    const indices=[...source.matchAll(/\{\{(\d+)\}\}/g)].map(match=>Number(match[1]));
+    const staticLength=pieces.reduce((sum,piece)=>sum+piece.length,0);
+    const escaped=pieces.map(piece=>piece.replace(/[.*+?^$\{\}()|[\]\\]/g,"\\$&"));
+    return {source,target,staticLength,indices,
+      regex:new RegExp("^"+escaped.join("([\\s\\S]*?)")+"$")};
+  })
+  .filter(item=>item.staticLength>=4)
+  .sort((a,b)=>b.staticLength-a.staticLength);
+
 const blocked="#message-list, #chat-list, #user-search-results, #account-display-name, #account-username, #account-id, #account-role, #conversation-title, #conversation-peer, textarea, code, pre";
 let current="ru",observer=null;
 
@@ -37,6 +53,23 @@ export function translateText(value) {
   if(!trimmed)return value;
   let translated=be[trimmed];
   if(!translated){
+    for(const template of templateTranslations) {
+      const match=trimmed.match(template.regex);
+      if(!match)continue;
+      const variables={};
+      template.indices.forEach((index,position)=>{variables[index]=match[position+1];});
+      translated=template.target.replace(/\{\{(\d+)\}\}/g,(_,index)=>{
+        const value=variables[Number(index)]??"";
+        // Only pre-approved *whole* interface strings may be localized recursively.
+        // Dynamic names and chat previews must remain exactly as their owners typed them.
+        const nameSlot = /^(?:Входящий звонок от|Звоним |Вы ответили |Вы вошли как |Аккаунт |Новое сообщение от|Новых сообщений от|Открываю чат с|Аудиозвонок с|Звук звонка с|Активный звонок с|Пользователь @|.*?, @\{\{1\}\}\. Открыть чат)/.test(template.source);
+        if(nameSlot && (Number(index)===0 || template.source.startsWith("{{0}}, @")))return value;
+        return be[value]??value;
+      });
+      break;
+    }
+  }
+  if(!translated){
     for(const [regex,render] of patterns) {
       const match=trimmed.match(regex);
       if(match){translated=render(match);break;}
@@ -46,8 +79,8 @@ export function translateText(value) {
     // Dynamic errors include a runtime-supplied detail after a fixed prefix.
     // Translate only the interface prefix, never modify the detail itself.
     for(const [prefix,translation] of prefixTranslations){
-      if(trimmed.startsWith(prefix+" ")){
-        translated=translation+" "+trimmed.slice(prefix.length+1);
+      if(trimmed.startsWith(prefix.trimEnd()+" ")){
+        translated=translation.trimEnd()+" "+trimmed.slice(prefix.trimEnd().length+1);
         break;
       }
     }
@@ -61,10 +94,12 @@ function shouldSkip(node) {
   if(!node || node.nodeType===Node.COMMENT_NODE)return true;
   const parent=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
   if(!parent || parent.closest("script, style, noscript"))return true;
-  if(parent.closest("[contenteditable=true]"))return true;
-  if(parent.closest(blocked)) {
-    // Only interface controls inside user-generated message areas may be translated.
-    if(!parent.closest("button, option, label, summary"))return true;
+  // Voice message chrome is application UI, even when nested under user content.
+  const voiceControl=parent.closest(".voice-message, .voice-actions, .voice-progress, .voice-time, .voice-listen-status");
+  if(parent.closest("[contenteditable=true], [data-user-content]") && !voiceControl)return true;
+  if(parent.closest(blocked) && !voiceControl) {
+    // Keep authored messages and names intact, but translate their controls.
+    if(!parent.closest("button, option, label, summary, select"))return true;
   }
   return false;
 }
@@ -72,13 +107,13 @@ function updateText(node){
   if(node.nodeType!==Node.TEXT_NODE || shouldSkip(node))return;
   const value=node.nodeValue??"";
   let memo=originalStrings.get(node);
-  if(!memo || value!==memo.displayed) memo={original:value,displayed:value};
+  if(!memo || value!==memo.displayed) memo={original:originalText(value),displayed:value};
   const desired=current==="be"?translateText(memo.original):memo.original;
   memo.displayed=desired;
   originalStrings.set(node,memo);
   if(value!==desired)node.nodeValue=desired;
 }
-const attrs=["aria-label","placeholder","title","alt"];
+const attrs=["aria-label","aria-valuetext","placeholder","title","alt"];
 function updateAttributes(el){
   if(el.nodeType!==Node.ELEMENT_NODE||shouldSkip(el))return;
   let map=originalAttributes.get(el);
@@ -87,7 +122,7 @@ function updateAttributes(el){
     if(!el.hasAttribute(attr))continue;
     const value=el.getAttribute(attr);
     let memo=map.get(attr);
-    if(!memo || value!==memo.displayed)memo={original:value,displayed:value};
+    if(!memo || value!==memo.displayed)memo={original:originalText(value),displayed:value};
     const desired=current==="be"?translateText(memo.original):memo.original;
     memo.displayed=desired;
     map.set(attr,memo);
@@ -96,7 +131,9 @@ function updateAttributes(el){
 }
 function translateSubtree(root) {
   if(root.nodeType===Node.TEXT_NODE){updateText(root);return;}
-  if(root.nodeType!==Node.ELEMENT_NODE||shouldSkip(root))return;
+  if(root.nodeType!==Node.ELEMENT_NODE)return;
+  // A blocked container can still have accessible interface controls inside.
+  // Apply the skip rule to each descendant, not to the whole subtree.
   updateAttributes(root);
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);
   let node;
@@ -110,16 +147,25 @@ export function setLanguage(next){
   current=next;
   try{localStorage.setItem(KEY,next);}catch{}
   document.documentElement.lang=next;
-  for(const select of [document.querySelector("#settings-language"),document.querySelector("#welcome-language")]){
+  const manifest=document.querySelector('link[rel="manifest"]');
+  if(manifest)manifest.href=next==="be"?"/manifest-be.webmanifest":"/manifest.webmanifest";
+  void syncServiceWorkerLocale(next);
+  for(const select of [document.querySelector("#settings-language"),document.querySelector("#welcome-language"),document.querySelector("#auth-language")]){
     if(select)select.value=next;
   }
   translateSubtree(document.body);
   window.dispatchEvent(new CustomEvent("bulbam:language-changed",{detail:{language:next}}));
 }
+function syncServiceWorkerLocale(locale){
+  if(!("serviceWorker" in navigator))return Promise.resolve();
+  return navigator.serviceWorker.ready.then(registration=>{
+    registration.active?.postMessage({type:"bulbam.locale",locale});
+  }).catch(()=>{});
+}
 export function setupI18n(){
   let saved="ru";
   try{saved=localStorage.getItem(KEY)??"ru";}catch{}
-  for(const id of ["settings-language","welcome-language"]){
+  for(const id of ["settings-language","welcome-language","auth-language"]){
     document.querySelector("#"+id)?.addEventListener("change",event=>setLanguage(event.target.value));
   }
   setLanguage(saved);

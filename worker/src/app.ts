@@ -1,4 +1,5 @@
 import { handleError, json, methodNotAllowed } from "./core/http";
+import { localizeApiResponse } from "./i18n";
 import { CallService } from "./modules/calls/application/call-service";
 import { handleCallHttp } from "./modules/calls/transport/http";
 import { IdentityService } from "./modules/identity/application/identity-service";
@@ -17,6 +18,7 @@ import { PushNotificationService } from "./modules/notifications/application/pus
 import { D1PushRepository } from "./modules/notifications/infrastructure/d1-push-repository";
 import { handlePushHttp } from "./modules/notifications/transport/http";
 import { DurableObjectRealtime } from "./modules/realtime/public";
+import { PresenceService, handlePresenceHttp } from "./modules/presence/presence-service";
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
@@ -32,7 +34,7 @@ function voiceBindingMissing(): Response {
   return json({ ok: false, error: { code: "voice_binding_missing", message: "VoiceUploadRoom Durable Object не подключён к Worker." } }, { status: 503 });
 }
 function turnConfigured(env: Env): boolean {
-  return Boolean(
+  return Boolean(env.WEBRTC_RELAY_ISSUER_URL && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) || Boolean(
     (env.WEBRTC_CLOUDFLARE_TURN_KEY_ID || env.TURN_KEY_ID) &&
     (env.WEBRTC_CLOUDFLARE_TURN_API_TOKEN || env.TURN_KEY_API_TOKEN)
   ) || Boolean(env.WEBRTC_TURN_SECRET && env.WEBRTC_TURN_URLS) || Boolean(
@@ -43,8 +45,17 @@ function turnConfigured(env: Env): boolean {
 }
 
 export async function handleRequest(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
+  const response=await handleRequestInternal(request,env,ctx);
+  return localizeApiResponse(request,response);
+}
+
+async function handleRequestInternal(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
   try {
+    if (url.pathname === "/api/relay/public-key") {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
+      return json({ ok: Boolean(env.VAPID_PUBLIC_KEY), publicKey: env.VAPID_PUBLIC_KEY ?? null }, { status: env.VAPID_PUBLIC_KEY ? 200 : 503 });
+    }
     if (url.pathname === "/api/health") {
       if (request.method !== "GET") return methodNotAllowed(["GET"]);
       return json({
@@ -71,11 +82,25 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
     if (storageRequired && !env.DB) return storageBindingMissing();
 
     const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
-    const identity = identityRepository ? new IdentityService(identityRepository) : null;
-    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
+    const identity = identityRepository ? new IdentityService(identityRepository,async (userId,displayName)=>{
+      if(!messagingRepository)return;
+      const chats=await messagingRepository.listAllConversationsForUser(userId,500);
+      const recipients=new Set<string>([userId]);
+      for(const chat of chats)
+        for(const peer of await messagingRepository.listConversationRecipients(chat))
+          recipients.add(peer);
+      await realtime.publishToUsers([...recipients],{type:"chat.profile-updated",userId,displayName});
+    },async userId=>{
+      // Notifications and presence own their own tables; sessions are the authority.
+      await Promise.all([
+        pushRepository?.removeRevokedForUser(userId),
+        env.DB ? new PresenceService(env.DB).removeRevokedForUser(userId) : undefined
+      ]);
+    }) : null;
+    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
     const adminRecovery = env.DB && identity ? new AdminRecoveryService(
       env.DB,identity,realtime,push??undefined,ctx ? (promise)=>ctx.waitUntil(promise) : undefined
@@ -157,6 +182,10 @@ export async function handleRequest(request: Request, env: Env, ctx?: ExecutionC
     if (identity && push && authenticate) {
       const pushResponse = await handlePushHttp(request, url, push, authenticate);
       if (pushResponse) return pushResponse;
+    }
+    if (env.DB && authenticate) {
+      const presenceResponse=await handlePresenceHttp(request,url,new PresenceService(env.DB),authenticate);
+      if(presenceResponse)return presenceResponse;
     }
     if (identity && calls && authenticate) {
       const callResponse = await handleCallHttp(request, url, calls, authenticate);

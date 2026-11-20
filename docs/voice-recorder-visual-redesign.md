@@ -1,0 +1,9 @@
+# Visual voice-message recording states
+
+This change is intentionally limited to sighted-browser presentation. Existing `#voice-record-button`, `#voice-pause-button`, `#voice-recording-status` IDs, accessible names, state changes, announcements, Mac Option and Escape shortcuts, native MediaRecorder, draft recovery, and send/upload logic remain in place.
+
+Before recording: the composer now visibly labels the microphone action **Записать голосовое** instead of hiding its text with `.icon-button { font-size: 0 }`. No hidden gesture is needed. During recording: the composer displays a red pulsing indicator, explicit heading **Идёт запись голосового**, a running timer (based on the already existing pause-aware recording clock), an explanation that nothing has been sent yet, a full-width primary **Отправить голосовое** button, and clearly labeled **Пауза записи** and **Отменить** actions. A paused recording changes its title to **Запись на паузе**, freezes the timer and stops the pulsing animation. Reduced-motion users see a solid recording light instead. The cancellation button invokes the existing cancel routine and does not send any audio.
+
+After stopping: a separate visual notice communicates preparation/upload, success, cancellation or recoverable failure, without injecting duplicate VoiceOver announcements. Text in these new purely visual notices is explicitly `aria-hidden="true"`; the existing speech and status UI still owns accessible feedback. The new cancellation button is an ordinary labeled accessible button, which adds a convenient optional action but does not replace any old control.
+
+Existing localization coverage and service-worker content-based cache revision apply to the new HTML, CSS and JavaScript. The UI fits mobile using a two-column action layout; no new network dependency is introduced.

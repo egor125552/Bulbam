@@ -1,4 +1,7 @@
+import { applyMessageScreenReaderSemantics } from "./message-screenreader-policy.js";
+import { matchesChatFilter } from "./chat-filter-policy.js";
 import { announce, elements } from "./ui.js";
+import { originalText } from "./i18n.js";
 import { normalizeFontScale, normalizeMessageView, normalizeTheme } from "./interface-preferences.js";
 
 const KEYS = {
@@ -81,14 +84,14 @@ function syncComposer() {
   const recording = button?.getAttribute("aria-pressed") === "true";
   document.body.classList.toggle("voice-recording", recording);
   setIcon(button, recording ? "stop" : "mic");
-  const muted = elements.callMuteButton?.textContent.trim().startsWith("Включить");
+  const muted = originalText(elements.callMuteButton?.textContent.trim()??"").startsWith("Включить");
   setIcon(elements.callMuteButton, muted ? "mic-off" : "mic");
 }
 
 function decorateVoiceButtons() {
   for (const button of document.querySelectorAll(".voice-actions button")) {
-    const text = button.textContent.trim();
-    if (button.getAttribute("aria-label")?.includes("Воспроизвести или поставить")) {
+    const text = originalText(button.textContent.trim());
+    if (originalText(button.getAttribute("aria-label")??"").includes("Воспроизвести или поставить")) {
       button.classList.add("icon-button");
       setIcon(button, text === "Пауза" ? "pause" : "play");
     } else if (text === "Назад на 15 секунд") {
@@ -97,7 +100,7 @@ function decorateVoiceButtons() {
     } else if (text === "Вперёд на 15 секунд") {
       button.classList.add("icon-button");
       setIcon(button, "forward");
-    } else if (/скорость$/i.test(text)) {
+    } else if ((/скорость$/i.test(text) || /хуткасць/i.test(text))) {
       button.classList.add("button-with-icon");
       setIcon(button, "speed");
     }
@@ -110,26 +113,19 @@ function decorateChats() {
     const avatar = document.createElement("span");
     avatar.className = "chat-avatar";
     avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = firstLetter(button.querySelector("strong")?.textContent || "Б");
+    avatar.textContent = button.dataset.groupIcon || firstLetter(button.querySelector("strong")?.textContent || "Б");
     button.prepend(avatar);
   }
 }
 
 function decorateConversationAvatar() {
   const avatar = document.querySelector(".conversation-avatar");
-  const next = firstLetter(elements.conversationTitle?.textContent || "Б");
+  const next = elements.conversationTitle?.dataset.avatarIcon || firstLetter(elements.conversationTitle?.textContent || "Б");
   if (avatar && avatar.textContent !== next) avatar.textContent = next;
 }
 
 function decorateMessages() {
-  for (const item of document.querySelectorAll(".message")) {
-    if (item.getAttribute("role") !== "group") item.setAttribute("role", "group");
-    const author = item.querySelector(".message-author")?.textContent?.trim() || "Сообщение";
-    const meta = item.querySelector(".message-meta")?.textContent?.trim() || "";
-    const body = item.querySelector(".voice-message") ? "голосовое сообщение" : item.querySelector(":scope > p")?.textContent?.trim() || "сообщение";
-    const label = `${author}: ${body}. ${meta}`.trim();
-    if (item.getAttribute("aria-label") !== label) item.setAttribute("aria-label", label);
-  }
+  applyMessageScreenReaderSemantics(document);
 }
 
 function prepareSidebar() {
@@ -177,7 +173,12 @@ function filterChats() {
   const buttons = document.querySelectorAll(".chat-item");
   let visible = 0;
   for (const button of buttons) {
-    const hidden = Boolean(filterValue) && !button.textContent.toLocaleLowerCase("ru").includes(filterValue);
+    const searchText = [
+      button.querySelector("strong")?.textContent,
+      button.querySelector(".chat-username")?.textContent,
+      button.dataset.searchPreview ?? button.querySelector(".chat-preview")?.textContent
+    ].filter(Boolean).join(" ").toLocaleLowerCase("ru");
+    const hidden = !matchesChatFilter(searchText,filterValue);
     if (button.hidden !== hidden) button.hidden = hidden;
     if (!hidden) visible += 1;
   }
@@ -187,13 +188,12 @@ function filterChats() {
   if (empty) empty.hidden = !filterValue || !buttons.length || visible > 0;
 }
 
+
 function prepareViewSelect() {
   const old = document.querySelector("#message-view");
   if (!old) return null;
-  const select = old.cloneNode(true);
-  select.querySelector('option[value="table"]')?.remove();
-  old.replaceWith(select);
-  return select;
+  old.querySelector('option[value="table"]')?.remove();
+  return old;
 }
 
 function prepareAppearance(viewSelect) {

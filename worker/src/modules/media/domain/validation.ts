@@ -2,7 +2,7 @@ import { badRequest } from "../../../core/errors";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_MESSAGE_ID = /^[a-zA-Z0-9_-]{8,100}$/;
-const ALLOWED_BITRATES = new Set([24000, 32000, 48000, 64000, 96000]);
+const ALLOWED_BITRATES = new Set([24000, 32000, 48000, 64000, 96000, 192000]);
 const ALLOWED_MIME_TYPES = new Set([
   "audio/mp4",
   "audio/webm;codecs=opus",

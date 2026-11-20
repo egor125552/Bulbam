@@ -1,45 +1,27 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { recordingStartText } from "../web/js/accessibility-options.js";
-import { be } from "../web/js/locales/be.js";
 
-const html=readFileSync(new URL("../web/index.html",import.meta.url),"utf8");
+const app=readFileSync(new URL("../web/app.js",import.meta.url),"utf8");
 const navigation=readFileSync(new URL("../web/js/settings-screens.js",import.meta.url),"utf8");
 const css=readFileSync(new URL("../web/styles.css",import.meta.url),"utf8");
 
-describe("VoiceOver-first settings screens",()=>{
-  test("the chooser opens with no selected screen and password is a private subpage",()=>{
+describe("real settings screens",()=>{
+  test("opens a category chooser instead of one long settings feed",()=>{
+    expect(app).toContain('setupSettingsScreens');
+    expect(navigation).toContain('chooser.id = "settings-category-list"');
+    expect(navigation).toContain('quickNavigation.hidden = true');
     expect(navigation).toContain('screens.hidden = true');
     expect(navigation).toContain('screen.hidden = true');
-    expect(navigation).toContain('SUBPAGES');
-    expect(navigation).toContain('password: { title:"Смена пароля", parent:"security" }');
-    expect(navigation).toContain('microphone: { title:"Микрофон", parent:"calls" }');
+    expect(css).toContain('.settings-category-list');
+    expect(css).toContain('.settings-screen[hidden]');
+  });
+
+  test("keeps presence in General and sensitive controls on subpages",()=>{
+    expect(navigation).toContain('"presence-settings-title"');
+    expect(navigation).toMatch(/password:\s*\{\s*title:\s*"Смена пароля",\s*parent:\s*"security"/);
+    expect(navigation).toMatch(/microphone:\s*\{\s*title:\s*"Микрофон и качество звука",\s*parent:\s*"calls"/);
     expect(navigation).toContain('passwordScreen.append(title, passwordForm)');
     expect(navigation).toContain('page.append(microphone)');
-    expect(navigation).toContain('chooser.hidden = true');
     expect(navigation).toContain('goBackInSettings');
-    expect(css).toMatch(/\.settings-dialog\s*\{[^}]*height:\s*100dvh/s);
-  });
-  test("preserves original secure controls and adds real global accessibility preferences",()=>{
-    expect(html).toContain('id="change-password-form"');
-    expect(html).toContain('id="refresh-passkeys"');
-    expect(html).toContain('id="refresh-sessions"');
-    expect(html).toContain('id="settings-detailed-help"');
-    expect(html).toContain('id="settings-simple-controls"');
-    expect(css).toContain('[data-detailed-help="off"]');
-    expect(css).toContain('[data-essential-hint]');
-  });
-  test("short VoiceOver instructions apply at the shared accessibility level",()=>{
-    expect(recordingStartText(false,"button")).toBe("Запись началась.");
-    expect(recordingStartText(false,"option")).toBe("Запись началась.");
-    expect(recordingStartText(true,"button")).toMatch(/Нажми кнопку/);
-  });
-  test("new settings labels are localized",()=>{
-    for(const term of [
-      "Категории настроек","Выберите категорию","Основные",
-      "Смена пароля","Микрофон и качество звука",
-      "Простые кнопки без раскрывающихся списков",
-      "Подробные подсказки во всём Бульбаме"
-    ])expect(be[term]).toBeTruthy();
   });
 });

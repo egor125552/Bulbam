@@ -19,6 +19,7 @@ export interface IdentityRepository {
 
   findAccountCredentialsByUsername(username: string): Promise<AccountCredentials | null>;
   findPublicAccountById(userId: string): Promise<PublicAccount | null>;
+  updateDisplayName(userId: string, displayName: string): Promise<boolean>;
   searchPublicAccounts(query: string, currentUserId: string, limit: number): Promise<PublicAccount[]>;
 
   registerAccountWithInvite(input: {

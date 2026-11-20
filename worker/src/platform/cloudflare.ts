@@ -74,6 +74,7 @@ export interface Env {
   WEBRTC_EXTRA_STUN_URLS?: string;
   WEBRTC_TURN_URLS?: string;
   WEBRTC_TURN_SECRET?: string;
+  WEBRTC_RELAY_ISSUER_URL?: string;
   WEBRTC_TURN_TTL_SECONDS?: string;
   WEBRTC_STATIC_TURN_URLS?: string;
   WEBRTC_STATIC_TURN_USERNAME?: string;

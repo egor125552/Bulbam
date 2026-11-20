@@ -1,0 +1,11 @@
+# Fast startup and call setup on congested networks
+
+The client is bundled from `web/boot.js` using esbuild. `npm run build:web` emits one content-hashed `web/boot.<sha256>.js`, updates the HTML's modulepreload and import, and revs the service worker's offline-shell cache whenever bundled JS or styles change. The repository checks bundle consistency during `npm run verify`. Do not edit the generated bundle manually; keep the readable `web/app.js` and `web/js/` sources.
+
+Boot configures the interface and handlers immediately and requests only `/api/v1/auth/me` as its initial required network fetch. Previously `/api/health` and `/api/ready` were awaited before `/api/v1/auth/me`, and the boot-ready callback was held until authentication and session fetches completed. The Health button still checks both endpoints on demand. A slow-connection status appears after 9 seconds; the startup error watchdog tolerates up to 90 seconds rather than treating a slow download as a failure at 15 seconds.
+
+A service worker caches only same-origin public shell files, never `/api/*`, media, messages or realtime responses. Hashed bundles use cache-first and styles use stale-while-revalidate. HTML navigation is always network-first with an offline shell fallback. Version bumps clean older caches; a first visit is still dependent on network throughput and the initial service-worker install may only become active on subsequent navigations.
+
+During an outgoing call, TURN credentials are requested concurrently with microphone acquisition, using the existing single-flight fetch and ICE generation guards. On answer, the server acceptance and peer construction run concurrently; a peer setup failure after server acceptance triggers a new recovery attempt. Call-state polls are single-flight so their 2.5-second schedule cannot accumulate stale requests on high-RTT connections. WebSocket signaling and candidate trickling remain unchanged.
+
+Metrics from the repository prior to deployment: 50 JS modules in `web/js` totaling approximately 95 KB with independent gzip (excluding other entry modules), versus one ~90 KB gzipped bundle. The improvement is primarily the collapse of the request waterfall, not a promise of fixed call setup times. End-to-end results on a remote iPhone with cellular packet loss still require device testing.

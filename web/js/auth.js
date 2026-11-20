@@ -1,11 +1,35 @@
+import { translateText } from "./i18n.js";
 import { api, deviceName } from "./api.js";
 import { detachPushSubscription } from "./push.js";
 import { loadSessions } from "./sessions.js";
 import { setupPasskeys, startPasskeyAutofill, cancelPasskeyAutofill } from "./passkeys.js";
-import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut } from "./ui.js";
+import { announce, elements, getCurrentAccount, showSignedIn, showSignedOut, updateAccountProfile } from "./ui.js";
+import { firstRecoveryCode, setupRecoveryCodeSmartPaste } from "./recovery-code-paste.js";
 
 const AUTH_VIEWS = ["login", "register", "recovery"];
 const ACCOUNT_HINT_KEY = "bulbam.account.lastUsername";
+const USERNAME_GUIDANCE = "Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1.";
+const USERNAME_PATTERN=/^[a-z0-9_\p{Script=Cyrillic}]{3,32}$/u;
+function canonicalUsername(raw){
+  return String(raw??"").normalize("NFKC").trim().replace(/^@/,"").toLowerCase();
+}
+
+function validateRegistrationUsername() {
+  const input=elements.registerForm.querySelector('[name="username"]');
+  const error=document.querySelector("#register-username-error");
+  const username=canonicalUsername(input?.value);
+  if(USERNAME_PATTERN.test(username)){
+    input?.removeAttribute("aria-invalid");
+    if(error){error.hidden=true;error.textContent="";}
+    return username;
+  }
+  if(input)input.setAttribute("aria-invalid","true");
+  if(error){error.textContent=translateText(USERNAME_GUIDANCE);error.hidden=false;}
+  announce(USERNAME_GUIDANCE);
+  input?.focus();
+  return null;
+}
+
 let visibleRecoveryCodes = [];
 
 function showAuthView(view) {
@@ -27,7 +51,7 @@ function rememberUsername(account) {
 function knownUsername() {
   try {
     const value = localStorage.getItem(ACCOUNT_HINT_KEY) ?? "";
-    return /^[a-z0-9_]{3,32}$/.test(value) ? value : null;
+    return USERNAME_PATTERN.test(value) ? value : null;
   } catch { return null; }
 }
 
@@ -42,9 +66,11 @@ function restoreUsernameHint() {
   if (adminRecoveryInput && !adminRecoveryInput.value) adminRecoveryInput.value = username;
 }
 
-export function showRecoveryCodes(codes) {
+export function showRecoveryCodes(codes, { afterRecovery = false } = {}) {
   if (!Array.isArray(codes) || !codes.length) {
-    announce("Не удалось получить резервные коды. Создайте их в настройках безопасности.");
+    announce(afterRecovery
+      ? "Пароль восстановлен. Старые сеансы и ключи доступа отключены. Новые резервные коды не созданы. Создайте их в настройках безопасности."
+      : "Не удалось получить резервные коды. Создайте их в настройках безопасности.");
     return;
   }
   visibleRecoveryCodes = [...codes];
@@ -54,7 +80,9 @@ export function showRecoveryCodes(codes) {
   area.value = codes.join("\n");
   dialog.showModal();
   document.querySelector("#recovery-codes-title")?.focus();
-  announce("Восемь резервных кодов созданы. Сохраните их. Повторно посмотреть их нельзя.");
+  announce(afterRecovery
+    ? "Пароль восстановлен. Старые устройства, прежние ключи доступа и все старые резервные коды больше не действуют. Сохраните восемь новых резервных кодов. При необходимости создайте ключи доступа заново."
+    : "Восемь резервных кодов созданы. Сохраните их. Повторно посмотреть их нельзя.");
 }
 
 export function setupAuth() {
@@ -65,7 +93,18 @@ export function setupAuth() {
     announce(`Вы вошли как ${account.displayName} с помощью ключа доступа.`);
     await loadSessions({quiet:true});
   });
+  window.addEventListener("bulbam:language-changed",()=>{
+    const error=document.querySelector("#register-username-error");
+    if(error && !error.hidden)error.textContent=translateText(USERNAME_GUIDANCE);
+  });
   elements.registerForm.addEventListener("submit", register);
+  setupDisplayNameForms();
+  elements.registerForm.querySelector('[name="username"]')?.addEventListener("input",()=>{
+    const input=elements.registerForm.querySelector('[name="username"]');
+    input.removeAttribute("aria-invalid");
+    const error=document.querySelector("#register-username-error");
+    if(error){error.hidden=true;error.textContent="";}
+  });
   elements.loginForm.addEventListener("submit", login);
   elements.logoutButton.addEventListener("click", logout);
   document.querySelector("#auth-retry")?.addEventListener("click", () => void loadCurrentAccount());
@@ -77,6 +116,7 @@ export function setupAuth() {
   document.querySelector("#auth-login-from-register")?.addEventListener("click", () => showAuthView("login"));
   document.querySelector("#auth-login-from-recovery")?.addEventListener("click", () => showAuthView("login"));
   document.querySelector("#recovery-form")?.addEventListener("submit", recoverWithCode);
+  setupRecoveryCodeSmartPaste(document.querySelector('#recovery-form [name="code"]'), document.querySelector("#recovery-code-paste-status"));
   document.querySelector("#change-password-form")?.addEventListener("submit", changePassword);
   document.querySelector("#new-recovery-codes")?.addEventListener("click", () => void regenerateRecoveryCodes());
   document.querySelector("#copy-recovery-codes")?.addEventListener("click", async () => {
@@ -142,8 +182,73 @@ export async function loadCurrentAccount({ quiet = false } = {}) {
   }
 }
 
+function showOptionalNameSetup(){
+  const dialog=document.querySelector("#profile-first-setup-dialog");
+  if(!dialog || !getCurrentAccount() || dialog.open)return;
+  const blocker=[...document.querySelectorAll("dialog[open]")].find(other=>other!==dialog);
+  if(blocker){
+    blocker.addEventListener("close",()=>queueMicrotask(showOptionalNameSetup),{once:true});
+    return;
+  }
+  dialog.showModal();
+  document.querySelector("#profile-first-setup-title")?.focus();
+}
+
+function scheduleOptionalNameSetup(recoveryCodes){
+  if(Array.isArray(recoveryCodes) && recoveryCodes.length){
+    const dialog=document.querySelector("#recovery-codes-dialog");
+    if(dialog){
+      dialog.addEventListener("close",()=>queueMicrotask(showOptionalNameSetup),{once:true});
+      return;
+    }
+  }
+  queueMicrotask(showOptionalNameSetup);
+}
+
+async function saveDisplayName(event){
+  event.preventDefault();
+  const form=event.currentTarget;
+  const button=form.querySelector("button[type=submit]");
+  const first=form.id==="profile-first-setup-form";
+  const status=document.querySelector(first?"#profile-first-setup-status":"#profile-settings-status");
+  const name=String(new FormData(form).get("displayName")??"").trim();
+  if(!name && first){
+    document.querySelector("#profile-first-setup-dialog")?.close();
+    return;
+  }
+  button.disabled=true;
+  try{
+    const result=await api("/api/v1/auth/profile",{
+      method:"PATCH",body:JSON.stringify({displayName:name})
+    });
+    updateAccountProfile(result.account);
+    const settingsInput=document.querySelector("#profile-settings-display-name");
+    if(settingsInput)settingsInput.value=result.account.displayName;
+    if(status)status.textContent="Отображаемое имя сохранено.";
+    announce("Отображаемое имя сохранено.");
+    if(first)document.querySelector("#profile-first-setup-dialog")?.close();
+  }catch(error){
+    if(status)status.textContent="Не удалось сохранить имя: "+error.message;
+    announce("Не удалось сохранить имя: "+error.message);
+  }finally{button.disabled=false;}
+}
+function setupDisplayNameForms(){
+  for(const id of ["profile-first-setup-form","profile-settings-form"])
+    document.querySelector("#"+id)?.addEventListener("submit",saveDisplayName);
+  document.querySelector("#profile-first-setup-skip")?.addEventListener("click",()=>{
+    document.querySelector("#profile-first-setup-dialog")?.close();
+    announce("Вы можете выбрать отображаемое имя позже в настройках.");
+  });
+  window.addEventListener("bulbam:account-changed",event=>{
+    const input=document.querySelector("#profile-settings-display-name");
+    if(input)input.value=event.detail?.account?.displayName??"";
+  });
+}
+
 async function register(event) {
   event.preventDefault();
+  const username=validateRegistrationUsername();
+  if(username===null)return;
   const button = elements.registerForm.querySelector("button[type=submit]");
   button.disabled = true;
   const data = new FormData(elements.registerForm);
@@ -153,8 +258,7 @@ async function register(event) {
     const result = await api("/api/v1/auth/register", {
       method: "POST",
       body: JSON.stringify({
-        username: data.get("username"),
-        displayName: data.get("displayName"),
+        username,
         password: data.get("password"),
         inviteCode: data.get("inviteCode"),
         deviceName: deviceName()
@@ -165,6 +269,7 @@ async function register(event) {
     showSignedIn(result.account, result.session);
     rememberUsername(result.account);
     announce(`Аккаунт ${result.account.displayName} создан. Вы уже вошли в Бульбам.`);
+    scheduleOptionalNameSetup(result.recoveryCodes);
     showRecoveryCodes(result.recoveryCodes);
     await loadSessions({ quiet: true });
   } catch (error) {
@@ -240,10 +345,12 @@ async function recoverWithCode(event) {
   try {
     const data = new FormData(form);
     const newPassword = passwordsMatch(data);
+    const oneCode = firstRecoveryCode(data.get("code"));
+    if (!oneCode) throw new Error("Не найден полный резервный код. Вставьте один код из сохранённого списка.");
     const result = await api("/api/v1/auth/reset-with-recovery-code", {
       method: "POST",
       body: JSON.stringify({
-        username: data.get("username"), code: String(data.get("code") ?? "").trim(),
+        username: data.get("username"), code: oneCode,
         newPassword, deviceName: deviceName()
       })
     });
@@ -251,8 +358,9 @@ async function recoverWithCode(event) {
     clearAuthCheckProblem();
     showSignedIn(result.account, result.session);
     rememberUsername(result.account);
-    announce("Пароль восстановлен. Вы вошли в прежний аккаунт. Старые устройства отключены.");
-    showRecoveryCodes(result.recoveryCodes);
+    const pasteStatus = document.querySelector("#recovery-code-paste-status");
+    if (pasteStatus) pasteStatus.textContent = "";
+    showRecoveryCodes(result.recoveryCodes, { afterRecovery: true });
     await loadSessions({ quiet: true });
   } catch (error) {
     announce(`Не удалось восстановить аккаунт: ${error.message}`);
@@ -272,7 +380,7 @@ async function changePassword(event) {
       method: "POST", body: JSON.stringify({ newPassword })
     });
     form.reset();
-    announce("Пароль изменён. Другие устройства отключены, прежние резервные коды недействительны. Создайте новые коды.");
+    announce("Пароль изменён. Другие устройства и прежние ключи доступа отключены, старые резервные коды недействительны. Создайте новые коды и при необходимости добавьте ключи доступа заново.");
     await loadSessions({ quiet: true });
   } catch (error) {
     announce(`Не удалось изменить пароль: ${error.message}`);

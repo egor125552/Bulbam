@@ -1,0 +1,20 @@
+import {readFileSync} from "node:fs";
+import {parseHTML} from "linkedom";
+import {test,expect} from "vitest";
+import {be} from "../web/js/locales/be.js";
+const html=readFileSync(new URL("../web/index.html",import.meta.url),"utf8");
+const css=readFileSync(new URL("../web/canonical-ui.css",import.meta.url),"utf8");
+test("pocket exit is a native discoverable button in the call dialog",()=>{
+ const {document}=parseHTML(html);
+ const panel=document.querySelector("#call-panel");
+ const exit=document.querySelector("#call-pocket");
+ expect(panel?.contains(exit)).toBe(true);
+ expect(exit?.tagName).toBe("BUTTON");
+ expect(exit?.getAttribute("type")).toBe("button");
+ expect(exit?.textContent).toBe("Режим в кармане");
+ expect(panel?.getAttribute("role")).toBe("dialog");
+ expect(be["Режим в кармане"]).toBe("Рэжым у кішэні");
+ expect(be["Выйти из режима в кармане"]).toBe("Выйсці з рэжыму ў кішэні");
+ expect(css).toMatch(/\.call-banner\.is-pocket > :not\(#call-pocket\)\s*\{\s*display:\s*none\s*!important;/);
+ expect(css).toMatch(/\.call-banner\.is-pocket:not\(\[hidden\]\)[\s\S]*?background:\s*#000\s*!important;/);
+});

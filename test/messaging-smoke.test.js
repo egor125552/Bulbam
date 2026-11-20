@@ -146,11 +146,25 @@ describe("persistent direct messaging", () => {
     await expectStatus(deliveredAgain, 200);
     expect((await json(deliveredAgain)).receipts[0].deliveredAt).toBe(deliveredPayload.receipts[0].deliveredAt);
 
+    const readReceipt = await api(`/api/v1/chats/${chat.conversationId}/receipts/read`, beta.cookie, {
+      method: "POST", body: JSON.stringify({ messageIds: [sent[0].messageId] })
+    });
+    await expectStatus(readReceipt, 200);
+    const readPayload = await json(readReceipt);
+    expect(readPayload.receipts[0].messageId).toBe(sent[0].messageId);
+    expect(readPayload.receipts[0].deliveredAt).toEqual(expect.any(Number));
+    expect(readPayload.receipts[0].readAt).toEqual(expect.any(Number));
+
     const fakeOwnDelivery = await api(`/api/v1/chats/${chat.conversationId}/receipts/delivered`, alpha.cookie, {
       method: "POST",
       body: JSON.stringify({ messageIds: [sent[0].messageId] })
     });
     await expectStatus(fakeOwnDelivery, 400);
+
+    const fakeOwnRead = await api(`/api/v1/chats/${chat.conversationId}/receipts/read`, alpha.cookie, {
+      method: "POST", body: JSON.stringify({ messageIds: [sent[0].messageId] })
+    });
+    await expectStatus(fakeOwnRead, 400);
 
     for (const account of [alpha, beta]) {
       const history = await api(`/api/v1/chats/${chat.conversationId}/messages`, account.cookie);
@@ -161,7 +175,9 @@ describe("persistent direct messaging", () => {
         Array.from({ length: 10 }, (_, index) => `Сообщение ${index + 1}`)
       );
       expect(payload.messages[0].deliveredAt).toBe(deliveredPayload.receipts[0].deliveredAt);
+      expect(payload.messages[0].readAt).toBe(readPayload.receipts[0].readAt);
       expect(payload.messages[1].deliveredAt).toBeNull();
+      expect(payload.messages[1].readAt).toBeNull();
 
       const chats = await api("/api/v1/chats", account.cookie);
       await expectStatus(chats, 200);
@@ -173,4 +189,46 @@ describe("persistent direct messaging", () => {
 
     expect(sent).toHaveLength(10);
   });
+});
+
+test("profile update is persisted and immediately published to chat peers",async()=>{
+ const inviteA="BULBAM-PROFILE-NOTIFY-A-2026",inviteB="BULBAM-PROFILE-NOTIFY-B-2026";
+ await seedInvite(inviteA,"profile-a-invite");
+ await seedInvite(inviteB,"profile-b-invite");
+ const alpha=await register({username:"prof_alpha",displayName:"Старое имя",inviteCode:inviteA});
+ const beta=await register({username:"prof_beta",displayName:"Получатель",inviteCode:inviteB});
+ const opened=await api("/api/v1/chats/direct",alpha.cookie,{
+   method:"POST",body:JSON.stringify({userId:beta.account.userId})
+ });
+ await expectStatus(opened,200);
+ const worker=server.getWorker("bulbam-api-test"),env=await worker.getEnv();
+ const response=await env.REALTIME.getByName(beta.account.userId).fetch("https://realtime.internal/socket",{
+   headers:{upgrade:"websocket"}
+ });
+ expect(response.status).toBe(101);
+ const socket=response.webSocket;
+ socket.accept();
+ const eventReceived=new Promise((resolve,reject)=>{
+   const timeout=setTimeout(()=>reject(new Error("No profile notification")),5000);
+   socket.addEventListener("message",event=>{
+     try{
+       const payload=JSON.parse(event.data);
+       if(payload.type==="chat.profile-updated"){
+         clearTimeout(timeout);
+         resolve(payload);
+       }
+     }catch{}
+   });
+ });
+ const updated=await api("/api/v1/auth/profile",alpha.cookie,{
+   method:"PATCH",body:JSON.stringify({displayName:"Новое имя"})
+ });
+ await expectStatus(updated,200);
+ expect((await json(updated)).account.displayName).toBe("Новое имя");
+ expect(await eventReceived).toMatchObject({
+   type:"chat.profile-updated",userId:alpha.account.userId,displayName:"Новое имя"
+ });
+ const chats=await api("/api/v1/chats",beta.cookie);
+ expect((await json(chats)).chats.some(ch=>ch.peer?.displayName==="Новое имя")).toBe(true);
+ socket.close(1000,"done");
 });

@@ -23,4 +23,13 @@ describe("messenger-first interface", () => {
     expect(html).not.toContain("кбит/с");
     expect(html).toContain("Имя пользователя");
   });
+
+  test("owner invitation is reachable directly from settings navigation", async () => {
+    const html = await read("index.html");
+    const ui = await read("js/ui.js");
+
+    expect(html).toContain('id="invite-settings-link" href="#invite-title" hidden>Приглашения</a>');
+    expect(ui).toContain('const canInvite = ["owner", "admin"].includes(account.role);');
+    expect(ui).toContain("elements.inviteSettingsLink.hidden = !canInvite");
+  });
 });

@@ -11,4 +11,11 @@ describe("conversation layout regression", () => {
     expect(css).toMatch(/\.conversation-empty,\s*\n?\.message-list\s*\{[^}]*grid-row:\s*2/s);
     expect(css).toMatch(/\.composer\s*\{[^}]*grid-row:\s*3/s);
   });
+
+  test("chat presence has its own visible row instead of falling out of the chat card", async () => {
+    const css = await readFile(new URL("../web/canonical-ui.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.chat-item\s*\{[^}]*grid-template-rows:\s*auto auto auto/s);
+    expect(css).toMatch(/\.chat-item > \.chat-presence\s*\{[^}]*grid-row:\s*2[^}]*grid-column:\s*2 \/ 4/s);
+    expect(css).toMatch(/\.chat-item > \.chat-preview\s*\{[^}]*grid-row:\s*3[^}]*grid-column:\s*2 \/ 4/s);
+  });
 });
