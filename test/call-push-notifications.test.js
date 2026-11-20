@@ -1,13 +1,18 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { IDBFactory } from "fake-indexeddb";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import webpush from "web-push";
 import {
   CallRoom,
   RING_PUSH_INTERVAL_MS,
   RING_PUSH_MAX_PULSES
 } from "../worker/src/modules/calls/infrastructure/call-room.ts";
-import { callPushTopic } from "../worker/src/modules/notifications/application/push-notification-service.ts";
+import {
+  PushNotificationService,
+  callPushTopic,
+  isAppleWebPushEndpoint
+} from "../worker/src/modules/notifications/application/push-notification-service.ts";
 
 function createServiceWorkerHarness({ visibleClients = [] } = {}) {
   const listeners = {};
@@ -300,5 +305,140 @@ describe("incoming call push notifications do not accumulate", () => {
     // Initial pulse was #1 (sent by CallService), alarm sends pulses #2..RING_PUSH_MAX_PULSES.
     const call2Pulses = sentIncoming.filter((item) => item.callId === callId2);
     expect(call2Pulses.length).toBeLessThanOrEqual(RING_PUSH_MAX_PULSES - 1);
+  });
+
+  test("new incoming call clears prior missed-call notification while preserving chat alerts", async () => {
+    const sw = createServiceWorkerHarness();
+    const oldCallId = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+    const newCallId = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+    const chatId = "cccccccc-dddd-4eee-8fff-000000000000";
+
+    await sw.dispatch("push", {
+      data: {
+        json: () => ({
+          kind: "message",
+          title: "Ольга",
+          body: "На связи?",
+          tag: `chat-${chatId}`,
+          data: { url: `/?chat=${chatId}`, conversationId: chatId }
+        })
+      }
+    });
+    await sw.dispatch("push", {
+      data: {
+        json: () => ({
+          kind: "call-ended",
+          title: "Пропущенный звонок — телефлон",
+          body: "Звонок завершён.",
+          tag: `call-${oldCallId}`,
+          data: { url: `/?chat=${chatId}`, callId: oldCallId, conversationId: chatId, reason: "missed" }
+        })
+      }
+    });
+    expect(sw.activeNotifications).toHaveLength(2);
+
+    await sw.dispatch("push", {
+      data: {
+        json: () => ({
+          kind: "call",
+          title: "Входящий звонок — телефлон",
+          body: "Нажмите, чтобы открыть Бульбам и ответить.",
+          tag: `call-${newCallId}`,
+          data: { url: `/?chat=${chatId}&call=${newCallId}`, callId: newCallId, conversationId: chatId }
+        })
+      }
+    });
+
+    const callAlerts = sw.activeNotifications.filter((n) => n.data?.kind === "call" || n.data?.kind === "call-ended");
+    const chatAlerts = sw.activeNotifications.filter((n) => n.tag === `chat-${chatId}`);
+    expect(callAlerts).toHaveLength(1);
+    expect(callAlerts[0].data.callId).toBe(newCallId);
+    expect(chatAlerts).toHaveLength(1);
+  });
+});
+
+describe("Apple Web Push single-notification policy (prevents iOS Grouped stacks)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("isAppleWebPushEndpoint strictly identifies Apple push hosts", () => {
+    expect(isAppleWebPushEndpoint("https://web.push.apple.com/QABCD123")).toBe(true);
+    expect(isAppleWebPushEndpoint("https://us-east.web.push.apple.com/token")).toBe(true);
+    expect(isAppleWebPushEndpoint("https://push.apple.com/token")).toBe(true);
+    expect(isAppleWebPushEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(false);
+    expect(isAppleWebPushEndpoint("https://updates.push.services.mozilla.com/wpush/v2/abc")).toBe(false);
+    expect(isAppleWebPushEndpoint("https://evil-push.apple.com.attacker.test/abc")).toBe(false);
+    expect(isAppleWebPushEndpoint("not-a-url")).toBe(false);
+  });
+
+  test("Apple endpoints receive only the initial incoming-call push and skip repeat/ended duplicates while Android keeps them", async () => {
+    const sendSpy = vi.spyOn(webpush, "sendNotification").mockResolvedValue({});
+    const appleSub = {
+      endpoint: "https://web.push.apple.com/Q_IPHONE_SUBSCRIPTION_1",
+      userId: "user-b",
+      expirationTime: null,
+      keys: { p256dh: "aaaaaaaaaaaa", auth: "bbbbbbbbbbbb" }
+    };
+    const androidSub = {
+      endpoint: "https://fcm.googleapis.com/fcm/send/ANDROID_SUBSCRIPTION_1",
+      userId: "user-b",
+      expirationTime: null,
+      keys: { p256dh: "cccccccccccc", auth: "dddddddddddd" }
+    };
+    const repo = {
+      initialize: async () => {},
+      listForUser: async () => [appleSub, androidSub],
+      removeEndpoint: async () => {}
+    };
+    const service = new PushNotificationService(repo, {
+      VAPID_PUBLIC_KEY: "public-key-test",
+      VAPID_PRIVATE_KEY: "private-key-test",
+      VAPID_SUBJECT: "mailto:test@example.org"
+    });
+
+    const callId = "88888888-9999-4aaa-8bbb-cccccccccccc";
+    const conversationId = "99999999-aaaa-4bbb-8ccc-dddddddddddd";
+
+    // Pulse #1 -> sent to both Apple (iPhone) and Android.
+    await service.notifyIncomingCall({
+      recipientUserId: "user-b",
+      callerDisplayName: "телефлон",
+      callId,
+      conversationId,
+      sequence: 1
+    });
+    expect(sendSpy.mock.calls.map(([sub]) => sub.endpoint)).toEqual([appleSub.endpoint, androidSub.endpoint]);
+
+    sendSpy.mockClear();
+
+    // Repeat pulses #2 and #3 -> sent ONLY to Android, skipped for Apple so iOS never creates a Grouped stack.
+    await service.notifyIncomingCall({
+      recipientUserId: "user-b",
+      callerDisplayName: "телефлон",
+      callId,
+      conversationId,
+      sequence: 2
+    });
+    await service.notifyIncomingCall({
+      recipientUserId: "user-b",
+      callerDisplayName: "телефлон",
+      callId,
+      conversationId,
+      sequence: 3
+    });
+    expect(sendSpy.mock.calls.map(([sub]) => sub.endpoint)).toEqual([androidSub.endpoint, androidSub.endpoint]);
+
+    sendSpy.mockClear();
+
+    // Call ended / missed -> sent ONLY to Android (in-place tag replacement), skipped for Apple.
+    await service.notifyCallEnded({
+      recipientUserId: "user-b",
+      callerDisplayName: "телефлон",
+      callId,
+      conversationId,
+      reason: "missed"
+    });
+    expect(sendSpy.mock.calls.map(([sub]) => sub.endpoint)).toEqual([androidSub.endpoint]);
   });
 });

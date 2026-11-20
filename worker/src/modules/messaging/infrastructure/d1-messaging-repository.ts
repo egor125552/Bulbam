@@ -46,7 +46,12 @@ const MESSAGE_COLUMNS = `
   vl.heard_ranges,
   vl.completed_at,
   vl.updated_at AS voice_updated_at,
-  COALESCE(vps.share_progress, 1) AS share_progress
+  COALESCE(vps.share_progress, 1) AS share_progress,
+  f.object_key AS file_object_key,
+  f.file_name AS file_name,
+  f.mime_type AS file_mime_type,
+  f.media_kind AS file_media_kind,
+  f.size_bytes AS file_size_bytes
 `;
 
 const MESSAGE_JOINS = `
@@ -57,6 +62,7 @@ const MESSAGE_JOINS = `
     ))
   )
   LEFT JOIN voice_privacy_settings vps ON vps.user_id = vl.listener_user_id
+  LEFT JOIN file_message_attachments f ON f.message_id = m.message_id
 `;
 
 export class D1MessagingRepository implements MessagingRepository {
@@ -243,7 +249,7 @@ export class D1MessagingRepository implements MessagingRepository {
           input.conversationId,
           input.senderUserId,
           input.clientMessageId,
-          input.kind,
+          input.kind === "voice" ? "voice" : "text",
           input.text,
           input.createdAt
         )
@@ -268,6 +274,30 @@ export class D1MessagingRepository implements MessagingRepository {
             input.voice.mimeType,
             input.voice.bitrateBps,
             input.voice.sizeBytes,
+            input.messageId
+          )
+      );
+    }
+
+    if (input.kind === "file" && input.file) {
+      statements.push(
+        this.db
+          .prepare(`
+            INSERT OR IGNORE INTO file_message_attachments (
+              message_id, object_key, file_name, mime_type, media_kind, size_bytes
+            )
+            SELECT ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM messages WHERE message_id = ?
+            )
+          `)
+          .bind(
+            input.messageId,
+            input.file.objectKey,
+            input.file.fileName,
+            input.file.mimeType,
+            input.file.mediaKind,
+            input.file.sizeBytes,
             input.messageId
           )
       );
@@ -586,7 +616,8 @@ function mapConversation(row: Row): DirectConversation {
 }
 
 function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
-  const kind = row.message_type === "voice" ? "voice" : "text";
+  const hasFile = row.file_object_key != null;
+  const kind = row.message_type === "voice" ? "voice" : hasFile ? "file" : "text";
   const senderUserId = String(row.sender_user_id);
   const listenerUserId = row.listener_user_id == null ? null : String(row.listener_user_id);
   const shareProgress = Number(row.share_progress ?? 1) === 1;
@@ -605,6 +636,12 @@ function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
       }
     : null;
 
+  const rawMediaKind = String(row.file_media_kind ?? "file");
+  const mediaKind =
+    rawMediaKind === "image" || rawMediaKind === "video" || rawMediaKind === "audio"
+      ? rawMediaKind
+      : "file";
+
   return {
     messageId: String(row.message_id),
     conversationId: String(row.conversation_id),
@@ -620,6 +657,15 @@ function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
           bitrateBps: Number(row.bitrate_bps),
           sizeBytes: Number(row.size_bytes),
           progress
+        }
+      : null,
+    file: kind === "file" && hasFile
+      ? {
+          objectKey: String(row.file_object_key),
+          fileName: String(row.file_name),
+          mimeType: String(row.file_mime_type),
+          mediaKind,
+          sizeBytes: Number(row.file_size_bytes)
         }
       : null,
     createdAt: Number(row.created_at),
@@ -640,6 +686,14 @@ function sameMessage(existing: StoredMessage, input: StoredMessage): boolean {
   ) return false;
 
   if (existing.kind === "text") return true;
+  if (existing.kind === "file") {
+    if (!existing.file || !input.file) return false;
+    return existing.file.objectKey === input.file.objectKey &&
+      existing.file.fileName === input.file.fileName &&
+      existing.file.mimeType === input.file.mimeType &&
+      existing.file.mediaKind === input.file.mediaKind &&
+      existing.file.sizeBytes === input.file.sizeBytes;
+  }
   if (!existing.voice || !input.voice) return false;
   return existing.voice.objectKey === input.voice.objectKey &&
     existing.voice.durationMs === input.voice.durationMs &&

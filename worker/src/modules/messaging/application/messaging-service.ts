@@ -1,6 +1,6 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
-import type { Conversation, DirectConversation, GroupConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
+import type { Conversation, DirectConversation, FileAttachment, GroupConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
 import {
   validateConversationId,
   validateDeliveryReceiptInput,
@@ -15,6 +15,13 @@ export interface PreparedVoiceMessage {
   messageId: string;
   clientMessageId: string;
   voice: Omit<VoiceAttachment, "progress">;
+}
+
+export interface PreparedFileMessage {
+  messageId: string;
+  clientMessageId: string;
+  text: string;
+  file: FileAttachment;
 }
 
 export class MessagingService {
@@ -163,6 +170,30 @@ export class MessagingService {
       kind: "voice",
       text: "Голосовое сообщение",
       voice: { ...prepared.voice, progress: null },
+      file: null,
+      createdAt: Date.now(),
+      deliveredAt: null,
+      readAt: null
+    };
+    return this.persistAndPublish(actor, conversation, message);
+  }
+
+  async sendFileMessage(
+    actor: MessagingActor,
+    rawConversationId: string,
+    prepared: PreparedFileMessage
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const message: StoredMessage = {
+      messageId: prepared.messageId,
+      conversationId,
+      senderUserId: actor.userId,
+      clientMessageId: prepared.clientMessageId,
+      kind: "file",
+      text: prepared.text,
+      voice: null,
+      file: prepared.file,
       createdAt: Date.now(),
       deliveredAt: null,
       readAt: null
@@ -298,10 +329,11 @@ export class MessagingService {
       if (this.notifications) {
         const recipients=messageRecipients.filter(id=>id!==actor.userId);
         const sender=await this.users.findUser(actor.userId);
+        const notificationText = messageNotificationText(result.message);
         const pushTask=Promise.all(recipients.map(recipientUserId=>this.notifications!.notifyNewMessage({
           recipientUserId,senderDisplayName:sender?.displayName??'Бульбам',
           groupTitle:'title' in conversation?conversation.title:undefined,
-          conversationId:conversation.conversationId,messageId:result.message.messageId,text:result.message.text
+          conversationId:conversation.conversationId,messageId:result.message.messageId,text:notificationText
         }))).catch(error=>console.warn('[Push] notification task failed',error));
         if(this.defer)this.defer(pushTask);
         else await pushTask;
@@ -342,6 +374,23 @@ export class MessagingService {
       lastMessage
     };
   }
+}
+
+function messageNotificationText(message: StoredMessage): string {
+  if (message.kind === "file" && message.file) {
+    const label =
+      message.file.mediaKind === "image"
+        ? "Фото"
+        : message.file.mediaKind === "video"
+          ? "Видео"
+          : message.file.mediaKind === "audio"
+            ? "Аудио"
+            : "Файл";
+    const base = `${label}: ${message.file.fileName}`;
+    const caption = message.text.replace(/\s+/g, " ").trim();
+    return caption ? `${base} — ${caption}` : base;
+  }
+  return message.text;
 }
 
 function participants(conversation: DirectConversation): string[] {

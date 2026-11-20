@@ -21,6 +21,14 @@ export function setupVoicePlayer() {
     if (!nextAccountId && previousAccountId) void caches.delete(cacheName(previousAccountId)).catch(() => undefined);
     previousAccountId = nextAccountId;
   });
+  window.addEventListener("bulbam:media-play", (event) => {
+    const sourceId = event.detail?.sourceId;
+    for (const [id, candidate] of controllers.entries()) {
+      if (id !== sourceId && !candidate.audio.paused) {
+        try { candidate.audio.pause(); } catch {}
+      }
+    }
+  });
 }
 
 export function setVoiceMessageSequence(messages) {
@@ -134,6 +142,7 @@ export function renderVoiceMessage(message, mine) {
   audio.addEventListener("play", () => {
     logDiagnostic('Голосовые','воспроизведение началось');
     if (controller.disposing) return;
+    window.dispatchEvent(new CustomEvent("bulbam:media-play", { detail: { sourceId: controller.message.messageId } }));
     play.textContent = "Пауза";
     startHeartbeat(controller);
     void prefetchNextVoice(controller.message.messageId);

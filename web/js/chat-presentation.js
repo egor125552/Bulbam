@@ -1,3 +1,4 @@
+import { filePreviewText } from "./file-format.js";
 import { language, translateText } from "./i18n.js";
 
 // Presentation-only helpers. Chats, message delivery and server state remain separate.
@@ -47,6 +48,10 @@ export function chatPreview(lastMessage, ownUserId) {
   if (!lastMessage) return translateText("Начните переписку");
   const prefix = lastMessage.senderUserId === ownUserId ? "Вы: " : "";
   if (lastMessage.kind === "voice") return prefix + translateText("Голосовое сообщение");
+  if (lastMessage.kind === "file" && lastMessage.file) {
+    const preview = filePreviewText(lastMessage.file, lastMessage.text);
+    return prefix + (preview.length > 80 ? `${preview.slice(0, 77)}…` : preview);
+  }
   const text = String(lastMessage.text ?? "").replace(/\s+/g, " ").trim();
   if (!text) return prefix + translateText("Сообщение");
   return prefix + (text.length > 80 ? `${text.slice(0, 77)}…` : text);

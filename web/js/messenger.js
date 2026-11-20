@@ -2,6 +2,8 @@ import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
+import { filePreviewText } from "./file-format.js";
+import { renderFileMessage, resetFileMedia } from "./file-message.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -95,6 +97,7 @@ async function switchAccount(nextAccount) {
   selectedChat = null;
   messages = [];
   resetVoicePlayers();
+  resetFileMedia();
   stopRealtime();
   stopPolling();
   closeSearchPanel();
@@ -281,6 +284,7 @@ async function selectChat(chat, { focusHeading = false } = {}) {
   if (jumpButton) jumpButton.hidden = true;
   messages = [];
   resetVoicePlayers();
+  resetFileMedia();
   renderChats();
   renderConversation();
   window.dispatchEvent(new CustomEvent("bulbam:chat-changed", { detail: { chat } }));
@@ -313,6 +317,7 @@ async function loadMessages({ quiet = false } = {}) {
 function renderConversation() {
   const chat = selectedChat;
   resetVoicePlayers();
+  resetFileMedia();
   elements.messageList.replaceChildren();
   if (!account || !chat) {
     elements.conversationTitle.textContent = translateText("Выберите чат");
@@ -412,16 +417,19 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
     item.dataset.messageId = message.messageId;
     if (message.localState) item.classList.add(`message-${message.localState}`);
 
-    const author = document.createElement("span");
-    author.className = "message-author";
-    author.textContent = mine ? "Вы" : selectedChat.kind==='group'
+    const authorName = mine ? "Вы" : selectedChat.kind==='group'
       ? selectedChat.members?.find(member=>member.userId===message.senderUserId)?.displayName??'Участник'
       : selectedChat.peer.displayName;
+    const author = document.createElement("span");
+    author.className = "message-author";
+    author.textContent = authorName;
     if (!mine) author.dataset.userContent = "true";
     item.append(author);
 
     if (message.kind === "voice" && message.voice) {
       item.append(renderVoiceMessage(message, mine));
+    } else if (message.kind === "file" && message.file) {
+      item.append(renderFileMessage(message, authorName));
     } else {
       const body = document.createElement("p");
       body.dataset.userContent = "true";
@@ -651,7 +659,14 @@ function handleRealtimeMessage(payload) {
     const author=chat?.kind==='group'
       ? chat.members?.find(member=>member.userId===payload.message.senderUserId)?.displayName??'участника'
       :chat?.peer?.displayName??'собеседника';
-    announce(chat?.kind==='group'?`Новое сообщение в группе ${chat.title} от ${author}.`:`Новое сообщение от ${author}.`);
+    if (payload.message.kind === "file" && payload.message.file) {
+      const fileSummary = filePreviewText(payload.message.file, payload.message.text);
+      announce(chat?.kind==='group'
+        ? `Новое сообщение в группе ${chat.title} от ${author}: ${fileSummary}.`
+        : `Новое сообщение от ${author}: ${fileSummary}.`);
+    } else {
+      announce(chat?.kind==='group'?`Новое сообщение в группе ${chat.title} от ${author}.`:`Новое сообщение от ${author}.`);
+    }
   }
 }
 

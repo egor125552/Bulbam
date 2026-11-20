@@ -14,6 +14,8 @@ import { setupInvites } from "./js/invites.js";
 import { setupMessageAnnouncements } from "./js/message-announcements.js";
 import { setupMessageScroll } from "./js/message-scroll.js";
 import { setupComposerViewport } from "./js/composer-viewport.js";
+import { setupFileMedia } from "./js/file-message.js";
+import { setupFileUploader } from "./js/file-uploader.js";
 import { setupMessenger } from "./js/messenger.js";
 import { setupPushNotifications } from "./js/push.js";
 import { setupPresence } from "./js/presence.js";
@@ -44,6 +46,8 @@ export function startApp() {
   setupPresence();
   setupVoiceSettings();
   setupVoicePlayer();
+  setupFileMedia();
+  setupFileUploader();
   setupVoiceWebKitTimelineFix();
   setupAppleVoiceRecordingPreference();
   setupFinishedCallPanelCleanup();

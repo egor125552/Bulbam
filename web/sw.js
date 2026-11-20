@@ -73,7 +73,7 @@ function canonicalCallTag(data, callId) {
   return data?.tag || "call-active";
 }
 
-async function closeCallNotifications(callId, { includeAllRinging = false } = {}) {
+async function closeCallNotifications(callId, { includeAllRinging = false, includeAllCalls = false } = {}) {
   if (typeof self.registration?.getNotifications !== "function") return;
   let existing = [];
   try {
@@ -87,11 +87,14 @@ async function closeCallNotifications(callId, { includeAllRinging = false } = {}
     const tag = typeof notification.tag === "string" ? notification.tag : "";
     const noteCallId = typeof notification.data?.callId === "string" ? notification.data.callId : "";
     const noteKind = notification.data?.kind;
+    const isAnyCall = noteKind === "call" || noteKind === "call-ended" || tag.startsWith("call-");
     const matchesCall = callId
       ? (noteCallId === callId || tag === exactTag || tag.startsWith(prefixTag))
-      : (noteKind === "call" || tag.startsWith("call-"));
-    const isStaleRinging = includeAllRinging && (noteKind === "call" || (tag.startsWith("call-") && noteKind !== "call-ended"));
-    if (matchesCall || isStaleRinging) {
+      : isAnyCall;
+    const isStaleCall =
+      (includeAllCalls && isAnyCall) ||
+      (includeAllRinging && (noteKind === "call" || (tag.startsWith("call-") && noteKind !== "call-ended")));
+    if (matchesCall || isStaleCall) {
       try { notification.close(); } catch {}
     }
   }
@@ -105,7 +108,7 @@ self.addEventListener("message",(event)=>{
   if(event.data?.type==="bulbam.call-clear") {
     const callId = typeof event.data.callId === "string" ? event.data.callId.trim() : "";
     rememberEndedCall(callId);
-    event.waitUntil(enqueuePush(() => closeCallNotifications(callId, { includeAllRinging: !callId })));
+    event.waitUntil(enqueuePush(() => closeCallNotifications(callId, { includeAllRinging: !callId, includeAllCalls: !callId })));
   }
 });
 function localizedNotification(data,locale) {
@@ -226,10 +229,10 @@ async function handlePush(data) {
       return;
     }
 
-    // Remove any prior notifications for this call (and any stale ringing
-    // banners) before displaying the fresh alert so repeated ring pulses never
-    // accumulate in Notification Center on iOS, macOS, Android, or Desktop.
-    await closeCallNotifications(callId, { includeAllRinging: true });
+    // Remove any prior call notifications (including stale ringing or missed
+    // banners from earlier calls) before displaying the fresh alert so call
+    // notifications never accumulate into a grouped stack.
+    await closeCallNotifications(callId, { includeAllRinging: true, includeAllCalls: true });
     const callMessage = localizedNotification(data, locale);
     await self.registration.showNotification(callMessage.title, {
       body: callMessage.body,
@@ -277,7 +280,7 @@ async function openOrFocus(targetUrl) {
 
 // Public application shell only. Never cache authenticated /api endpoints,
 // voice messages, WebSocket traffic, or user data.
-const SHELL_CACHE = "bulbam-shell-7670a1cb8c4f";
+const SHELL_CACHE = "bulbam-shell-b748d813b517";
 const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
 
 self.addEventListener("fetch", (event) => {

@@ -1,11 +1,22 @@
 export const VOICE_CHUNK_SIZE_BYTES = 256 * 1024;
 
+export interface VoiceUploadCreateOptions {
+  kind?: "voice" | "file";
+  chunkSizeBytes?: number;
+  fileName?: string;
+  mediaKind?: "image" | "video" | "audio" | "file";
+}
+
 export interface VoiceUploadSession {
   sessionId: string;
   conversationId: string;
   senderUserId: string;
   mimeType: string;
   bitrateBps: number;
+  kind?: "voice" | "file";
+  chunkSizeBytes?: number;
+  fileName?: string;
+  mediaKind?: "image" | "video" | "audio" | "file";
   state: "uploading" | "ready";
   receivedParts: number[];
   sizeBytes: number;
@@ -18,6 +29,10 @@ export interface VoiceStoredObject {
   mimeType: string;
   bitrateBps: number;
   chunkCount: number;
+  kind?: "voice" | "file";
+  chunkSizeBytes?: number;
+  fileName?: string;
+  mediaKind?: "image" | "video" | "audio" | "file";
 }
 
 export interface VoiceReadResult {
@@ -33,7 +48,8 @@ export interface VoiceStorage {
     conversationId: string,
     senderUserId: string,
     mimeType: string,
-    bitrateBps: number
+    bitrateBps: number,
+    options?: VoiceUploadCreateOptions
   ): Promise<VoiceUploadSession>;
   inspect(sessionId: string, conversationId: string, senderUserId: string): Promise<VoiceUploadSession | null>;
   writeChunk(

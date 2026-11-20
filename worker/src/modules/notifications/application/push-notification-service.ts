@@ -111,7 +111,14 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     // the Service Worker suppresses the system notification when a Bulbam
     // window is actually visible. Use a stable tag + RFC 8030 topic so repeated
     // ringing pulses collapse in transit and replace the previous notification
-    // instead of piling up in Notification Center.
+    // on browsers that implement W3C `tag` replacement.
+    //
+    // Apple Web Push (iOS/iPadOS/macOS Safari via `*.push.apple.com`) does NOT
+    // reliably replace already-delivered notifications via `tag` or
+    // `notification.close()` (WebKit Bugs 258922 & 280766). Sending repeat
+    // ringing pulses to Apple endpoints creates stacked duplicates ("Grouped")
+    // in iOS Notification Center, so Apple endpoints receive only pulse #1.
+    const sequence = input.sequence ?? 1;
     await this.notifyAll(input.recipientUserId, {
       kind: "call",
       title: `Входящий звонок — ${input.callerDisplayName}`,
@@ -119,7 +126,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
       tag: `call-${input.callId}`,
       renotify: true,
       replace: true,
-      sequence: input.sequence ?? 1,
+      sequence,
       expiresAt: input.expiresAt ?? null,
       icon: "/icon.svg",
       data: {
@@ -127,13 +134,17 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
         callId: input.callId,
         conversationId: input.conversationId
       }
-    }, 15, callPushTopic(input.callId));
+    }, 15, callPushTopic(input.callId), {
+      skipAppleEndpoints: sequence > 1
+    });
   }
 
   async notifyCallEnded(input: CallEndedNotificationInput): Promise<void> {
     // Reuse the exact same tag and RFC 8030 topic so any queued ringing push
     // is collapsed at the push service and the active ringing banner is cleanly
-    // replaced by a single missed/ended notification (iOS userVisibleOnly safe).
+    // replaced by a single missed/ended notification on compliant browsers.
+    // Skip Apple Web Push endpoints: because WebKit does not replace the prior
+    // ringing notification in-place, a second push would stack into "Grouped".
     await this.notifyAll(input.recipientUserId, {
       kind: "call-ended",
       title: `Пропущенный звонок — ${input.callerDisplayName}`,
@@ -148,7 +159,9 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
         conversationId: input.conversationId,
         reason: input.reason
       }
-    }, 60, callPushTopic(input.callId));
+    }, 60, callPushTopic(input.callId), {
+      skipAppleEndpoints: true
+    });
   }
 
   async notifyAdminRecoveryRequest(recipientUserId:string):Promise<void> {
@@ -173,10 +186,14 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     recipientUserId: string,
     payload: Record<string, unknown>,
     ttl: number,
-    topic?: string
+    topic?: string,
+    options?: { skipAppleEndpoints?: boolean }
   ): Promise<void> {
     if (!this.configured()) return;
-    const subscriptions = await this.repository.listForUser(recipientUserId);
+    const allSubscriptions = await this.repository.listForUser(recipientUserId);
+    const subscriptions = options?.skipAppleEndpoints
+      ? allSubscriptions.filter((subscription) => !isAppleWebPushEndpoint(subscription.endpoint))
+      : allSubscriptions;
     if (!subscriptions.length) return;
     const encoded = JSON.stringify(payload);
     await Promise.all(subscriptions.map((subscription) => this.send(subscription, encoded, ttl, topic)));
@@ -222,6 +239,15 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
       }
       console.warn(`[Push] delivery failed with status ${statusCode || "unknown"}`, error);
     }
+  }
+}
+
+export function isAppleWebPushEndpoint(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname.toLowerCase();
+    return host === "push.apple.com" || host.endsWith(".push.apple.com");
+  } catch {
+    return false;
   }
 }
 

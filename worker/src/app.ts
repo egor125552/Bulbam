@@ -7,10 +7,11 @@ import { AdminRecoveryService } from "./modules/identity/application/admin-recov
 import { PasskeyService } from "./modules/identity/application/passkey-service";
 import { D1IdentityRepository } from "./modules/identity/infrastructure/d1-identity-repository";
 import { handleIdentityHttp, sessionToken } from "./modules/identity/transport/http";
+import { FileMessageService } from "./modules/media/application/file-message-service";
 import { VoiceMessageService } from "./modules/media/application/voice-message-service";
 import { D1VoiceMediaReferences } from "./modules/media/infrastructure/d1-voice-media-references";
 import { DurableObjectVoiceStorage } from "./modules/media/infrastructure/durable-object-voice-storage";
-import { handleVoiceHttp } from "./modules/media/transport/http";
+import { handleFileHttp, handleVoiceHttp } from "./modules/media/transport/http";
 import { MessagingService } from "./modules/messaging/application/messaging-service";
 import { D1MessagingRepository } from "./modules/messaging/infrastructure/d1-messaging-repository";
 import { handleMessagingHttp } from "./modules/messaging/transport/http";
@@ -113,6 +114,9 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
           voiceReferences ?? undefined
         )
       : null;
+    const files = voiceStorage && messagingRepository && messaging
+      ? new FileMessageService(messagingRepository, messaging, voiceStorage)
+      : null;
     const calls = env.CALL_ROOM && messagingRepository && directory
       ? new CallService(
           env.CALL_ROOM,
@@ -184,7 +188,11 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
       const voiceResponse = await handleVoiceHttp(request, url, voice, authenticate);
       if (voiceResponse) return voiceResponse;
     }
-    if (url.pathname.startsWith("/api/v1/") && url.pathname.includes("/voice") && !env.VOICE_UPLOAD) {
+    if (identity && files && authenticate) {
+      const fileResponse = await handleFileHttp(request, url, files, authenticate);
+      if (fileResponse) return fileResponse;
+    }
+    if (url.pathname.startsWith("/api/v1/") && (url.pathname.includes("/voice") || url.pathname.includes("/files/") || url.pathname.endsWith("/file")) && !env.VOICE_UPLOAD) {
       return voiceBindingMissing();
     }
     if (identity && messaging && authenticate) {

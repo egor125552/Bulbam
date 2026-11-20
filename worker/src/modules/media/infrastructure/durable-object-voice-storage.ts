@@ -4,6 +4,7 @@ import type {
   VoiceReadResult,
   VoiceStorage,
   VoiceStoredObject,
+  VoiceUploadCreateOptions,
   VoiceUploadSession
 } from "../ports/voice-storage";
 
@@ -17,11 +18,19 @@ export class DurableObjectVoiceStorage implements VoiceStorage {
     conversationId: string,
     senderUserId: string,
     mimeType: string,
-    bitrateBps: number
+    bitrateBps: number,
+    options?: VoiceUploadCreateOptions
   ): Promise<VoiceUploadSession> {
     return this.json<VoiceUploadSession>(sessionId, "/internal/init", {
       method: "POST",
-      body: JSON.stringify({ sessionId, conversationId, senderUserId, mimeType, bitrateBps })
+      body: JSON.stringify({
+        sessionId,
+        conversationId,
+        senderUserId,
+        mimeType,
+        bitrateBps,
+        ...(options ?? {})
+      })
     });
   }
 

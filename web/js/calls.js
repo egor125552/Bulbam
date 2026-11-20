@@ -211,6 +211,7 @@ export function setupCalls() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
+    clearCallNotifications(currentCall?.callId || "");
     if (account && !callSocket) connectCallRealtime();
     // A backgrounded iPhone may miss the remote hang-up WebSocket event.
     // Reconcile server state as soon as the app is visible again.

@@ -94,6 +94,21 @@ const migrations = [
       )`,
       "CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id,conversation_id)"
     ]
+  },
+  {
+    version: 5,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS file_message_attachments (
+        message_id TEXT PRIMARY KEY,
+        object_key TEXT NOT NULL UNIQUE,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        media_kind TEXT NOT NULL CHECK (media_kind IN ('image', 'video', 'audio', 'file')),
+        size_bytes INTEGER NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_file_attachments_object ON file_message_attachments(object_key)"
+    ]
   }
 ] as const;
 

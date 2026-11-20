@@ -487,7 +487,7 @@ html[data-message-view="compact"] .message p {
 .composer {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: end;
   gap: 0.45rem;
   padding: 0.65rem;
@@ -495,19 +495,35 @@ html[data-message-view="compact"] .message p {
   background: var(--surface);
 }
 
-/* Record and send are mutually exclusive actions in the SAME grid cell.
+/* Attach sits left of the input; record and send share the right grid cell.
    Never let a mobile browser create an extra implicit column offscreen. */
-.composer > .composer-input-wrap { grid-column: 1; grid-row: 1; }
+.composer > #file-attach-button {
+  grid-column: 1;
+  grid-row: 1;
+  background: var(--surface-raised);
+  color: CanvasText;
+  border: 1px solid var(--border-strong);
+}
+.composer > #file-attach-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--brand) 14%, var(--surface-raised));
+  color: var(--brand-strong);
+}
+.composer > .composer-input-wrap { grid-column: 2; grid-row: 1; }
 .composer > #voice-record-button,
-.composer > #send-message { grid-column: 2; grid-row: 1; justify-self: end; }
+.composer > #send-message { grid-column: 3; grid-row: 1; justify-self: end; }
 .composer .send-action { display: none; }
 .composer-has-text:not(.voice-recording) .composer .send-action { display: inline-flex; }
+.voice-recording .composer > #file-attach-button { display: none; }
 
-/* The first row stays a standard text input and one action button on iPhone.
-   Optional recording controls use separate full-width rows. */
+/* The first row stays a standard text input and action buttons on iPhone.
+   Optional recording controls and file uploads use full-width rows. */
+.composer > #voice-pause-button,
+.composer > #voice-quality-cycle,
+.composer > .file-upload-panel {
+  grid-column: 1 / -1;
+}
 .composer > #voice-pause-button,
 .composer > #voice-quality-cycle {
-  grid-column: 1 / -1;
   justify-self: start;
   max-width: 100%;
   white-space: normal;
@@ -877,6 +893,8 @@ html[data-message-view="compact"] .message p {
 [data-icon="rewind"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m11 6-7 6 7 6V6Zm9 0-7 6 7 6V6Z' fill='black'/%3E%3C/svg%3E"); }
 [data-icon="forward"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m4 6 7 6-7 6V6Zm9 0 7 6-7 6V6Z' fill='black'/%3E%3C/svg%3E"); }
 [data-icon="speed"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 14a8 8 0 1 1 16 0M12 14l4-4M5 18h14' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+[data-icon="attach"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+[data-icon="download"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 
 .voice-action[aria-pressed="true"] {
   --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m22 2-7 20-4-9-9-4 20-7Z' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='m22 2-11 11' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
@@ -1204,3 +1222,325 @@ html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !im
 .message > details { font-size:.78rem; color:var(--muted); margin-top:.2rem; }
 .message > details > summary { cursor:pointer; width:fit-content; }
 .message > details > p { white-space:normal; overflow-wrap:anywhere; }
+
+/* Drag-and-drop highlight on conversation pane. */
+.conversation-pane.is-drop-target {
+  outline: 3px dashed var(--brand);
+  outline-offset: -6px;
+}
+
+/* Upload queue & live progress panel inside composer. */
+.file-upload-panel {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.25rem;
+}
+
+.file-upload-item {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem 0.78rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.85rem;
+  background: var(--surface-soft);
+}
+
+.file-upload-item[data-state="failed"] {
+  border-color: var(--danger);
+}
+
+.file-upload-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.file-upload-name {
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-upload-percent {
+  flex: 0 0 auto;
+  font-size: 0.84rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-strong);
+}
+
+.file-upload-progress {
+  width: 100%;
+  height: 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  accent-color: var(--brand);
+}
+
+.file-upload-details {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.file-upload-actions button {
+  min-height: 2.2rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+/* Inline file messages: photos, videos, music/audio player, and generic files. */
+.file-message {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  min-width: 0;
+}
+
+.file-image-trigger {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.75rem;
+  background: transparent;
+  overflow: hidden;
+  text-align: left;
+}
+
+.file-image-trigger:hover:not(:disabled) {
+  background: transparent;
+  opacity: 0.94;
+}
+
+.file-image-preview {
+  display: block;
+  width: 100%;
+  max-height: 22rem;
+  object-fit: contain;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, CanvasText 6%, var(--surface));
+}
+
+.file-video-player {
+  display: block;
+  width: 100%;
+  max-height: 24rem;
+  border-radius: 0.75rem;
+  background: #000;
+}
+
+@media (max-width: 520px) {
+  .composer {
+    gap: 0.35rem;
+  }
+
+  .composer > #file-attach-button {
+    width: 2.45rem;
+    min-width: 2.45rem;
+    height: 2.45rem;
+    min-height: 2.45rem;
+  }
+
+  .composer textarea {
+    min-height: 2.75rem;
+    padding: 0.45rem 0.2rem;
+    font-size: 0.94rem;
+    line-height: 1.28;
+  }
+
+  .composer > #voice-record-button {
+    padding: 0.48rem 0.72rem;
+    font-size: 0.82rem;
+  }
+}
+
+.file-footer,
+.file-generic-row,
+.file-audio-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.file-generic-row {
+  flex-wrap: wrap;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, Canvas 70%, transparent);
+}
+
+.file-ext-badge {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-width: 2.75rem;
+  height: 2.75rem;
+  padding: 0 0.45rem;
+  border-radius: 0.7rem;
+  background: var(--brand);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+}
+
+.file-info {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.file-name {
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.file-size {
+  font-size: 0.76rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-download-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  min-height: 2.4rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: CanvasText;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.file-download-link:hover {
+  background: var(--surface-raised);
+}
+
+.file-audio-card {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, Canvas 72%, transparent);
+}
+
+.file-audio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.file-audio-play {
+  background: var(--brand);
+  color: white;
+  border-color: transparent;
+}
+
+.file-audio-play:hover:not(:disabled) {
+  background: var(--brand-strong);
+}
+
+.file-audio-speed {
+  min-height: 2.4rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-audio-progress {
+  width: 100%;
+  min-height: 1.8rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--brand);
+}
+
+.file-audio-time {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-caption {
+  margin: 0.15rem 0 0;
+  white-space: pre-wrap;
+}
+
+/* Full-screen accessible photo lightbox. */
+.media-lightbox {
+  width: min(94vw, 68rem);
+  max-height: 92dvh;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  color: CanvasText;
+}
+
+.media-lightbox::backdrop {
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.media-lightbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.media-lightbox-info {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+
+.media-lightbox-info h2 {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.media-lightbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.media-lightbox-stage {
+  display: grid;
+  place-items: center;
+  max-height: calc(92dvh - 6rem);
+  overflow: auto;
+}
+
+.media-lightbox-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(92dvh - 6.5rem);
+  object-fit: contain;
+  border-radius: 0.5rem;
+}

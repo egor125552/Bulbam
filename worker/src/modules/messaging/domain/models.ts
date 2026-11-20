@@ -41,14 +41,25 @@ export interface VoiceAttachment {
   progress: VoiceListenProgress | null;
 }
 
+export type FileMediaKind = "image" | "video" | "audio" | "file";
+
+export interface FileAttachment {
+  objectKey: string;
+  fileName: string;
+  mimeType: string;
+  mediaKind: FileMediaKind;
+  sizeBytes: number;
+}
+
 export interface StoredMessage {
   messageId: string;
   conversationId: string;
   senderUserId: string;
   clientMessageId: string;
-  kind: "text" | "voice";
+  kind: "text" | "voice" | "file";
   text: string;
   voice: VoiceAttachment | null;
+  file?: FileAttachment | null;
   createdAt: number;
   deliveredAt: number | null;
   readAt: number | null;

@@ -1,5 +1,6 @@
 import { ApiError } from "../../../core/errors";
 import type { DurableObjectState, Env } from "../../../platform/cloudflare";
+import { FILE_CHUNK_SIZE_BYTES } from "../domain/file-validation";
 import { VOICE_CHUNK_SIZE_BYTES, type VoiceStoredObject, type VoiceUploadSession } from "../ports/voice-storage";
 
 interface WebSocketPairValue {
@@ -37,6 +38,8 @@ const ABANDONED_UPLOAD_MS = 7 * 24 * 60 * 60 * 1000;
 const PUBLICATION_RECHECK_MS = 60 * 60 * 1000;
 
 export class VoiceUploadRoom {
+  private writeChain: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: Env
@@ -186,53 +189,78 @@ export class VoiceUploadRoom {
     try {
       input = await request.json() as Record<string, unknown>;
     } catch {
-      return jsonError(400, "invalid_voice_upload", "Некорректная сессия голосового сообщения.");
+      return jsonError(400, "invalid_voice_upload", "Некорректная сессия загрузки.");
     }
 
     const sessionId = stringField(input.sessionId);
     const conversationId = stringField(input.conversationId);
     const senderUserId = stringField(input.senderUserId);
     const mimeType = stringField(input.mimeType);
+    const kind = input.kind === "file" ? "file" : "voice";
     const bitrateBps = Number(input.bitrateBps);
-    if (!sessionId || !conversationId || !senderUserId || !mimeType || !Number.isSafeInteger(bitrateBps) || bitrateBps <= 0) {
-      return jsonError(400, "invalid_voice_upload", "Некорректная сессия голосового сообщения.");
+    const requestedChunkSize = input.chunkSizeBytes === undefined
+      ? (kind === "file" ? FILE_CHUNK_SIZE_BYTES : VOICE_CHUNK_SIZE_BYTES)
+      : Number(input.chunkSizeBytes);
+    const fileName = kind === "file" ? stringField(input.fileName) : undefined;
+    const rawMediaKind = stringField(input.mediaKind);
+    const mediaKind = kind === "file" && (rawMediaKind === "image" || rawMediaKind === "video" || rawMediaKind === "audio" || rawMediaKind === "file")
+      ? rawMediaKind
+      : undefined;
+
+    const validBitrate = kind === "file"
+      ? Number.isSafeInteger(bitrateBps) && bitrateBps >= 0
+      : Number.isSafeInteger(bitrateBps) && bitrateBps > 0;
+    const validChunkSize =
+      Number.isSafeInteger(requestedChunkSize) &&
+      requestedChunkSize >= 1024 &&
+      requestedChunkSize <= FILE_CHUNK_SIZE_BYTES;
+
+    if (!sessionId || !conversationId || !senderUserId || !mimeType || !validBitrate || !validChunkSize) {
+      return jsonError(400, "invalid_voice_upload", "Некорректная сессия загрузки.");
     }
 
-    const existing = await this.meta();
-    if (existing) {
-      if (
-        existing.sessionId !== sessionId ||
-        existing.conversationId !== conversationId ||
-        existing.senderUserId !== senderUserId ||
-        existing.mimeType !== mimeType ||
-        existing.bitrateBps !== bitrateBps
-      ) {
-        return jsonError(409, "voice_upload_conflict", "Сессия голосового сообщения уже существует с другими параметрами.");
+    return this.enqueueWrite(async () => {
+      const existing = await this.meta();
+      if (existing) {
+        if (
+          existing.sessionId !== sessionId ||
+          existing.conversationId !== conversationId ||
+          existing.senderUserId !== senderUserId ||
+          existing.mimeType !== mimeType ||
+          existing.bitrateBps !== bitrateBps ||
+          chunkSizeOf(existing) !== requestedChunkSize
+        ) {
+          return jsonError(409, "voice_upload_conflict", "Сессия загрузки уже существует с другими параметрами.");
+        }
+        if (existing.publishedAt == null) await this.state.storage.setAlarm(existing.updatedAt + ABANDONED_UPLOAD_MS);
+        return Response.json(publicSession(existing));
       }
-      if (existing.publishedAt == null) await this.state.storage.setAlarm(existing.updatedAt + ABANDONED_UPLOAD_MS);
-      return Response.json(publicSession(existing));
-    }
 
-    const now = Date.now();
-    const meta: VoiceObjectMeta = {
-      sessionId,
-      conversationId,
-      senderUserId,
-      mimeType,
-      bitrateBps,
-      state: "uploading",
-      receivedParts: [],
-      sizeBytes: 0,
-      chunkCount: 0,
-      createdAt: now,
-      updatedAt: now,
-      publishedAt: null,
-      tailPartNumber: null,
-      tailSizeBytes: null
-    };
-    await this.state.storage.put(META_KEY, meta);
-    await this.state.storage.setAlarm(now + ABANDONED_UPLOAD_MS);
-    return Response.json(publicSession(meta), { status: 201 });
+      const now = Date.now();
+      const meta: VoiceObjectMeta = {
+        sessionId,
+        conversationId,
+        senderUserId,
+        mimeType,
+        bitrateBps,
+        kind,
+        chunkSizeBytes: requestedChunkSize,
+        ...(fileName ? { fileName } : {}),
+        ...(mediaKind ? { mediaKind } : {}),
+        state: "uploading",
+        receivedParts: [],
+        sizeBytes: 0,
+        chunkCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: null,
+        tailPartNumber: null,
+        tailSizeBytes: null
+      };
+      await this.state.storage.put(META_KEY, meta);
+      await this.state.storage.setAlarm(now + ABANDONED_UPLOAD_MS);
+      return Response.json(publicSession(meta), { status: 201 });
+    });
   }
 
   private async inspectUpload(request: Request): Promise<Response> {
@@ -246,79 +274,86 @@ export class VoiceUploadRoom {
   }
 
   private async writeInternalChunk(request: Request, url: URL): Promise<Response> {
-    const meta = await this.meta();
-    if (!meta) return jsonError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
+    // Read network payload BEFORE acquiring the storage write lock so parallel
+    // HTTP chunk uploads stream concurrently over the wire and commit atomically.
     const context = requestContext(request);
-    if (!sameContext(meta, context.userId, context.conversationId)) {
-      return jsonError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
-    }
     const partNumber = Number(url.searchParams.get("partNumber"));
     const bytes = new Uint8Array(await request.arrayBuffer());
-    try {
-      return Response.json(await this.storeChunk(meta, partNumber, bytes));
-    } catch (error) {
-      return errorResponse(error);
-    }
+    return this.enqueueWrite(async () => {
+      const meta = await this.meta();
+      if (!meta) return jsonError(404, "voice_upload_not_found", "Сессия загрузки не найдена.");
+      if (!sameContext(meta, context.userId, context.conversationId)) {
+        return jsonError(404, "voice_upload_not_found", "Сессия загрузки не найдена.");
+      }
+      try {
+        return Response.json(await this.storeChunk(meta, partNumber, bytes));
+      } catch (error) {
+        return errorResponse(error);
+      }
+    });
   }
 
   private async completeUpload(request: Request): Promise<Response> {
-    const meta = await this.meta();
-    if (!meta) return jsonError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
     const context = requestContext(request);
-    if (!sameContext(meta, context.userId, context.conversationId)) {
-      return jsonError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
-    }
-
     let input: Record<string, unknown>;
     try {
       input = await request.json() as Record<string, unknown>;
     } catch {
-      return jsonError(400, "invalid_voice_parts", "Некорректное завершение голосового сообщения.");
+      return jsonError(400, "invalid_voice_parts", "Некорректное завершение загрузки.");
     }
     const expectedChunkCount = Number(input.expectedChunkCount);
     const expectedSizeBytes = Number(input.expectedSizeBytes);
     if (!Number.isSafeInteger(expectedChunkCount) || expectedChunkCount < 1 || expectedChunkCount > MAX_PART_NUMBER ||
         !Number.isSafeInteger(expectedSizeBytes) || expectedSizeBytes < 1) {
-      return jsonError(400, "invalid_voice_parts", "Некорректное завершение голосового сообщения.");
+      return jsonError(400, "invalid_voice_parts", "Некорректное завершение загрузки.");
     }
 
-    if (meta.state === "ready") {
-      if (meta.chunkCount !== expectedChunkCount || meta.sizeBytes !== expectedSizeBytes) {
-        return jsonError(409, "voice_upload_metadata_mismatch", "Завершённое голосовое имеет другие размеры.");
+    return this.enqueueWrite(async () => {
+      const meta = await this.meta();
+      if (!meta) return jsonError(404, "voice_upload_not_found", "Сессия загрузки не найдена.");
+      if (!sameContext(meta, context.userId, context.conversationId)) {
+        return jsonError(404, "voice_upload_not_found", "Сессия загрузки не найдена.");
       }
-      if (meta.publishedAt == null) await this.state.storage.setAlarm(meta.updatedAt + ABANDONED_UPLOAD_MS);
-      return Response.json(storedObject(meta));
-    }
 
-    if (meta.receivedParts.length !== expectedChunkCount || meta.sizeBytes !== expectedSizeBytes) {
-      return jsonError(409, "voice_upload_incomplete", "Не все части голосового сообщения подтверждены сервером.");
-    }
-    for (let index = 0; index < expectedChunkCount; index += 1) {
-      if (meta.receivedParts[index] !== index + 1) {
-        return jsonError(409, "voice_upload_incomplete", "Части голосового сообщения идут с пропусками.");
+      if (meta.state === "ready") {
+        if (meta.chunkCount !== expectedChunkCount || meta.sizeBytes !== expectedSizeBytes) {
+          return jsonError(409, "voice_upload_metadata_mismatch", "Завершённая загрузка имеет другие размеры.");
+        }
+        if (meta.publishedAt == null) await this.state.storage.setAlarm(meta.updatedAt + ABANDONED_UPLOAD_MS);
+        return Response.json(storedObject(meta));
       }
-    }
-    if (meta.tailPartNumber != null && meta.tailPartNumber !== expectedChunkCount) {
-      return jsonError(409, "voice_upload_incomplete", "Короткая часть голосового сообщения оказалась не последней.");
-    }
-    const derivedSize = meta.tailPartNumber == null
-      ? expectedChunkCount * VOICE_CHUNK_SIZE_BYTES
-      : (expectedChunkCount - 1) * VOICE_CHUNK_SIZE_BYTES + Number(meta.tailSizeBytes ?? 0);
-    if (derivedSize !== expectedSizeBytes) {
-      return jsonError(409, "voice_upload_metadata_mismatch", "Размер голосового сообщения не совпадает с сохранёнными частями.");
-    }
 
-    const now = Date.now();
-    const ready: VoiceObjectMeta = {
-      ...meta,
-      state: "ready",
-      chunkCount: expectedChunkCount,
-      updatedAt: now,
-      publishedAt: null
-    };
-    await this.state.storage.put(META_KEY, ready);
-    await this.state.storage.setAlarm(now + ABANDONED_UPLOAD_MS);
-    return Response.json(storedObject(ready));
+      if (meta.receivedParts.length !== expectedChunkCount || meta.sizeBytes !== expectedSizeBytes) {
+        return jsonError(409, "voice_upload_incomplete", "Не все части файла подтверждены сервером.");
+      }
+      for (let index = 0; index < expectedChunkCount; index += 1) {
+        if (meta.receivedParts[index] !== index + 1) {
+          return jsonError(409, "voice_upload_incomplete", "Части файла идут с пропусками.");
+        }
+      }
+      if (meta.tailPartNumber != null && meta.tailPartNumber !== expectedChunkCount) {
+        return jsonError(409, "voice_upload_incomplete", "Короткая часть файла оказалась не последней.");
+      }
+      const partSize = chunkSizeOf(meta);
+      const derivedSize = meta.tailPartNumber == null
+        ? expectedChunkCount * partSize
+        : (expectedChunkCount - 1) * partSize + Number(meta.tailSizeBytes ?? 0);
+      if (derivedSize !== expectedSizeBytes) {
+        return jsonError(409, "voice_upload_metadata_mismatch", "Размер файла не совпадает с сохранёнными частями.");
+      }
+
+      const now = Date.now();
+      const ready: VoiceObjectMeta = {
+        ...meta,
+        state: "ready",
+        chunkCount: expectedChunkCount,
+        updatedAt: now,
+        publishedAt: null
+      };
+      await this.state.storage.put(META_KEY, ready);
+      await this.state.storage.setAlarm(now + ABANDONED_UPLOAD_MS);
+      return Response.json(storedObject(ready));
+    });
   }
 
   private async markPublished(): Promise<Response> {
@@ -374,7 +409,7 @@ export class VoiceUploadRoom {
     const end = range?.end ?? meta.sizeBytes - 1;
     if (range) headers.set("content-range", `bytes ${start}-${end}/${meta.sizeBytes}`);
     headers.set("content-length", String(end - start + 1));
-    return new Response(this.chunkStream(start, end), { status: range ? 206 : 200, headers });
+    return new Response(this.chunkStream(start, end, chunkSizeOf(meta)), { status: range ? 206 : 200, headers });
   }
 
   private async storeChunk(
@@ -382,21 +417,22 @@ export class VoiceUploadRoom {
     partNumber: number,
     bytes: Uint8Array
   ): Promise<{ duplicate: boolean; sizeBytes: number }> {
+    const partSize = chunkSizeOf(meta);
     if (meta.state !== "uploading") {
-      throw new ApiError(409, "voice_upload_completed", "Голосовое сообщение уже завершено.");
+      throw new ApiError(409, "voice_upload_completed", "Загрузка уже завершена.");
     }
     if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > MAX_PART_NUMBER) {
-      throw new ApiError(400, "invalid_voice_part", "Некорректный номер части голосового сообщения.");
+      throw new ApiError(400, "invalid_voice_part", "Некорректный номер части файла.");
     }
-    if (!bytes.byteLength || bytes.byteLength > VOICE_CHUNK_SIZE_BYTES) {
-      throw new ApiError(413, "voice_part_too_large", "Часть голосового сообщения имеет недопустимый размер.");
+    if (!bytes.byteLength || bytes.byteLength > partSize) {
+      throw new ApiError(413, "voice_part_too_large", "Часть файла имеет недопустимый размер.");
     }
 
     const key = chunkKey(partNumber);
     const existing = await this.state.storage.get<Uint8Array>(key);
     if (existing) {
       if (!sameBytes(existing, bytes)) {
-        throw new ApiError(409, "voice_part_conflict", "Эта часть голосового уже сохранена с другими данными.");
+        throw new ApiError(409, "voice_part_conflict", "Эта часть уже сохранена с другими данными.");
       }
       return { duplicate: true, sizeBytes: bytes.byteLength };
     }
@@ -407,12 +443,12 @@ export class VoiceUploadRoom {
 
     let tailPartNumber = meta.tailPartNumber;
     let tailSizeBytes = meta.tailSizeBytes;
-    if (bytes.byteLength < VOICE_CHUNK_SIZE_BYTES) {
+    if (bytes.byteLength < partSize) {
       if (tailPartNumber != null && tailPartNumber !== partNumber) {
-        throw new ApiError(409, "voice_tail_conflict", "У голосового уже есть другая последняя часть.");
+        throw new ApiError(409, "voice_tail_conflict", "У загрузки уже есть другая последняя часть.");
       }
       if (meta.receivedParts.some((received) => received > partNumber)) {
-        throw new ApiError(409, "voice_tail_not_last", "Короткая часть должна быть последней частью голосового.");
+        throw new ApiError(409, "voice_tail_not_last", "Короткая часть должна быть последней частью загрузки.");
       }
       tailPartNumber = partNumber;
       tailSizeBytes = bytes.byteLength;
@@ -443,24 +479,36 @@ export class VoiceUploadRoom {
 
   private async isReferencedByPublishedMessage(objectKey: string): Promise<boolean> {
     const db = this.env.DB;
-    if (!db) throw new Error("D1 binding is unavailable while reconciling voice publication");
+    if (!db) throw new Error("D1 binding is unavailable while reconciling media publication");
 
-    const table = await db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'voice_message_attachments' LIMIT 1")
-      .first<{ name: string }>();
-    if (!table) return false;
+    const tables = await db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('voice_message_attachments', 'file_message_attachments')"
+      )
+      .all<{ name: string }>();
+    const existing = new Set((tables.results ?? []).map((row) => String(row.name ?? "")));
 
-    const reference = await db
-      .prepare("SELECT object_key FROM voice_message_attachments WHERE object_key = ? LIMIT 1")
-      .bind(objectKey)
-      .first<{ object_key: string }>();
-    return Boolean(reference?.object_key);
+    for (const table of ["voice_message_attachments", "file_message_attachments"] as const) {
+      if (!existing.has(table)) continue;
+      const reference = await db
+        .prepare(`SELECT object_key FROM ${table} WHERE object_key = ? LIMIT 1`)
+        .bind(objectKey)
+        .first<{ object_key: string }>();
+      if (reference?.object_key) return true;
+    }
+    return false;
+  }
+
+  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.writeChain.then(task, task);
+    this.writeChain = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   private async requireContext(userId: string, conversationId: string, sessionId: string): Promise<VoiceObjectMeta> {
     const meta = await this.meta();
     if (!meta || meta.sessionId !== sessionId || !sameContext(meta, userId, conversationId)) {
-      throw new ApiError(404, "voice_upload_not_found", "Сессия голосового сообщения не найдена.");
+      throw new ApiError(404, "voice_upload_not_found", "Сессия загрузки не найдена.");
     }
     return meta;
   }
@@ -469,9 +517,9 @@ export class VoiceUploadRoom {
     return this.state.storage.get<VoiceObjectMeta>(META_KEY);
   }
 
-  private chunkStream(start: number, end: number): ReadableStream<Uint8Array> {
-    const firstPart = Math.floor(start / VOICE_CHUNK_SIZE_BYTES) + 1;
-    const lastPart = Math.floor(end / VOICE_CHUNK_SIZE_BYTES) + 1;
+  private chunkStream(start: number, end: number, partSize: number): ReadableStream<Uint8Array> {
+    const firstPart = Math.floor(start / partSize) + 1;
+    const lastPart = Math.floor(end / partSize) + 1;
     let partNumber = firstPart;
 
     return new ReadableStream<Uint8Array>({
@@ -482,10 +530,10 @@ export class VoiceUploadRoom {
         }
         const bytes = await this.state.storage.get<Uint8Array>(chunkKey(partNumber));
         if (!bytes) {
-          controller.error(new Error(`Missing voice chunk ${partNumber}`));
+          controller.error(new Error(`Missing media chunk ${partNumber}`));
           return;
         }
-        const partStart = (partNumber - 1) * VOICE_CHUNK_SIZE_BYTES;
+        const partStart = (partNumber - 1) * partSize;
         const sliceStart = partNumber === firstPart ? Math.max(0, start - partStart) : 0;
         const sliceEnd = partNumber === lastPart ? Math.min(bytes.byteLength, end - partStart + 1) : bytes.byteLength;
         partNumber += 1;
@@ -496,6 +544,10 @@ export class VoiceUploadRoom {
   }
 }
 
+function chunkSizeOf(meta: VoiceObjectMeta): number {
+  return meta.chunkSizeBytes ?? VOICE_CHUNK_SIZE_BYTES;
+}
+
 function publicSession(meta: VoiceObjectMeta): VoiceUploadSession {
   return {
     sessionId: meta.sessionId,
@@ -503,6 +555,10 @@ function publicSession(meta: VoiceObjectMeta): VoiceUploadSession {
     senderUserId: meta.senderUserId,
     mimeType: meta.mimeType,
     bitrateBps: meta.bitrateBps,
+    kind: meta.kind ?? "voice",
+    chunkSizeBytes: chunkSizeOf(meta),
+    ...(meta.fileName ? { fileName: meta.fileName } : {}),
+    ...(meta.mediaKind ? { mediaKind: meta.mediaKind } : {}),
     state: meta.state,
     receivedParts: meta.receivedParts,
     sizeBytes: meta.sizeBytes,
@@ -516,7 +572,11 @@ function storedObject(meta: VoiceObjectMeta): VoiceStoredObject {
     size: meta.sizeBytes,
     mimeType: meta.mimeType,
     bitrateBps: meta.bitrateBps,
-    chunkCount: meta.chunkCount
+    chunkCount: meta.chunkCount,
+    kind: meta.kind ?? "voice",
+    chunkSizeBytes: chunkSizeOf(meta),
+    ...(meta.fileName ? { fileName: meta.fileName } : {}),
+    ...(meta.mediaKind ? { mediaKind: meta.mediaKind } : {})
   };
 }
 

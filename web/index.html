@@ -10,7 +10,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
   <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.780432b9b832.js">
+  <link rel="modulepreload" href="/boot.97716fcb505a.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -277,6 +277,9 @@
               </div>
               <p id="voice-recording-visual-hint">Голосовое ещё не отправлено. Говорите в микрофон.</p>
             </div>
+            <div id="file-upload-panel" class="file-upload-panel" aria-label="Загрузка файлов" hidden></div>
+            <input id="file-input" type="file" multiple hidden aria-hidden="true" tabindex="-1">
+            <button id="file-attach-button" class="icon-button composer-action attach-action" data-icon="attach" type="button" aria-label="Прикрепить файл">Прикрепить файл</button>
             <div class="composer-input-wrap">
               <label class="visually-hidden" for="message-input">Сообщение</label>
               <textarea id="message-input" name="text" rows="1" maxlength="4000" placeholder="Написать сообщение" enterkeyhint="send" aria-describedby="message-send-hint"></textarea>
@@ -357,6 +360,21 @@
         <div class="group-dialog-actions">
           <button id="group-members-close" type="button">Закрыть</button>
           <button id="group-members-add" type="button" hidden>Добавить участников</button>
+        </div>
+      </dialog>
+      <dialog id="media-lightbox" class="media-lightbox" aria-labelledby="media-lightbox-title">
+        <div class="media-lightbox-header">
+          <div class="media-lightbox-info">
+            <h2 id="media-lightbox-title" data-user-content="true">Фото</h2>
+            <span id="media-lightbox-meta" class="hint"></span>
+          </div>
+          <div class="media-lightbox-actions">
+            <a id="media-lightbox-download" class="file-download-link button-with-icon" data-icon="download" href="#">Скачать</a>
+            <button id="media-lightbox-close" class="icon-button" data-icon="close" type="button" aria-label="Закрыть просмотр">Закрыть</button>
+          </div>
+        </div>
+        <div class="media-lightbox-stage">
+          <img id="media-lightbox-image" alt="">
         </div>
       </dialog>
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
@@ -620,7 +638,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.780432b9b832.js");
+      await import("/boot.97716fcb505a.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

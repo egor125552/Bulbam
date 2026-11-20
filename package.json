@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --port 3000 --ip 0.0.0.0",
+    "build": "npm run build:web && npm run check && npm run check:worker",
+    "lint": "npm run check && npm run check:web && npm run check:web-bundle",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
     "check:web": "for f in web/app.js web/sw.js web/js/*.js; do node --check \"$f\" || exit 1; done",
