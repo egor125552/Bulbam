@@ -12,6 +12,7 @@ import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
 import { describeCallDiagnostics, selectedCallRoute, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
 import { api } from "./api.js";
+import { subscribeRealtime,reconnectRealtime } from "./shared-realtime.js";
 import {
   applySelectedAudioProfileToTrack,
   getSelectedAudioProfile,
@@ -32,9 +33,7 @@ let signalPollCursor = 0;
 let signalPollTimer = null;
 let statePollTimer = null;
 let ringTimeout = null;
-let callSocket = null;
-let reconnectTimer = null;
-let heartbeatTimer = null;
+let unsubscribeRealtime=null;
 let answeredLocally = false;
 let offerStarted = false;
 let restartInFlight = false;
@@ -126,7 +125,14 @@ function restoreCallAudioOnReturn() {
 }
 
 export function setupCalls() {
-  window.addEventListener("pagehide", markCallAudioInterrupted);
+  window.addEventListener("pagehide", ()=>{
+    markCallAudioInterrupted();
+    // Keepalive works during navigation when ordinary asynchronous requests
+    // would be cancelled. Expired leases remain a fallback if it fails.
+    if(!currentCall || !["ringing","accepted"].includes(currentCall.status))return;
+    const path=callPath("/end");
+    try{void fetch(path,{method:"POST",credentials:"same-origin",keepalive:true});}catch{}
+  });
   window.addEventListener("pageshow", restoreCallAudioOnReturn);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") markCallAudioInterrupted();
@@ -211,7 +217,7 @@ export function setupCalls() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
-    if (account && !callSocket) connectCallRealtime();
+    if(account)reconnectRealtime();
     // A backgrounded iPhone may miss the remote hang-up WebSocket event.
     // Reconcile server state as soon as the app is visible again.
     if (currentCall) void pollCallState();
@@ -532,46 +538,19 @@ async function selectedChatFromUi() {
   return (result.chats ?? []).find((chat) => chat.peer?.username === username) ?? null;
 }
 
-function connectCallRealtime() {
-  if (!account || callSocket?.readyState === WebSocket.OPEN || callSocket?.readyState === WebSocket.CONNECTING) return;
-  clearTimeout(reconnectTimer);
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  callSocket = new WebSocket(`${protocol}//${location.host}/api/v1/realtime`);
-
-  callSocket.addEventListener("open", () => {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
-      if (callSocket?.readyState === WebSocket.OPEN) callSocket.send("ping");
-    }, 25_000);
-  });
-  callSocket.addEventListener("message", (event) => {
-    let payload;
-    try { payload = JSON.parse(String(event.data)); } catch { return; }
-    void handleCallEvent(payload).catch((error) => {
-      logDiagnostic("Ошибки", "обработка события звонка", diagnosticErrorName(error));
-    });
-  });
-  callSocket.addEventListener("close", () => {
-    callSocket = null;
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-    if (!account) return;
-    reconnectTimer = setTimeout(connectCallRealtime, 2_000);
-  });
-  callSocket.addEventListener("error", () => {
-    try { callSocket?.close(); } catch {}
+function connectCallRealtime(){
+  if(!account || unsubscribeRealtime)return;
+  unsubscribeRealtime=subscribeRealtime(account.userId,{
+    message(payload){
+      void handleCallEvent(payload).catch(error=>{
+        logDiagnostic("Ошибки","обработка события звонка",diagnosticErrorName(error));
+      });
+    }
   });
 }
-
-function closeCallRealtime() {
-  clearTimeout(reconnectTimer);
-  clearInterval(heartbeatTimer);
-  reconnectTimer = null;
-  heartbeatTimer = null;
-  if (callSocket) {
-    try { callSocket.close(); } catch {}
-  }
-  callSocket = null;
+function closeCallRealtime(){
+  unsubscribeRealtime?.();
+  unsubscribeRealtime=null;
 }
 
 async function handleCallEvent(event) {
@@ -1635,6 +1614,8 @@ function renderIdle() {
 }
 
 function setCallPresentation(mode) {
+  if(mode==="finished")elements.callPanel.classList.add("is-finished");
+  else elements.callPanel.classList.remove("is-finished");
   elements.callDiagnostics.hidden = !(mode === "incoming" || mode === "outgoing" || mode === "connected");
   if (["incoming", "outgoing", "finished", "idle"].includes(mode)) {
     elements.callPanel.classList.remove("is-minimized");
@@ -1644,7 +1625,7 @@ function setCallPresentation(mode) {
   elements.callMinimizeButton.hidden = !canMinimize || minimized;
   elements.callExpandButton.hidden = !canMinimize || !minimized;
   elements.callDismissButton.hidden = mode !== "finished";
-  const fullScreen = !elements.callPanel.hidden && !minimized;
+  const fullScreen = !elements.callPanel.hidden && !minimized && mode !== "finished";
   const shell = document.querySelector(".messenger-shell");
   if (shell) shell.inert = fullScreen;
   if (fullScreen) elements.callPanel.setAttribute?.("aria-modal", "true");

@@ -31,7 +31,7 @@ export interface CallRoomSignal {
 const CALL_KEY = "activeCall";
 const SIGNALS_KEY = "signals";
 const RINGING_TTL_MS = 2 * 60 * 1000;
-const ACCEPTED_TTL_MS = 2 * 60 * 60 * 1000;
+const ACCEPTED_TTL_MS = 90 * 1000;
 const MAX_SIGNALS = 128;
 
 export class CallRoom {
@@ -95,6 +95,14 @@ export class CallRoom {
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, viewerUserId)) {
       return result({ ok: false, error: { code: "call_not_found", message: "Звонок не найден." } }, 404);
+    }
+    // A regular state poll proves that at least one participant still has
+    // the call open. Extend both users' availability lease for another 90s.
+    if(call.status==="accepted" && Date.now()-call.updatedAt>=10_000) {
+      const updated={...call,updatedAt:Date.now()};
+      await this.state.storage.put(CALL_KEY,updated);
+      await this.syncActivePointers(updated);
+      return result({ok:true,call:publicCall(updated,viewerUserId)});
     }
     return result({ ok: true, call: publicCall(call, viewerUserId) });
   }
@@ -218,6 +226,7 @@ export class CallRoom {
       this.state.storage.put(SIGNALS_KEY, [...currentSignals, signal].slice(-MAX_SIGNALS)),
       this.state.storage.put(CALL_KEY, { ...call, updatedAt: now })
     ]);
+    await this.syncActivePointers({...call,updatedAt:now});
     const recipientUserId = actorUserId === call.callerUserId ? call.calleeUserId : call.callerUserId;
     await this.realtime.publishToUsers([recipientUserId], {
       type: "call.signal",

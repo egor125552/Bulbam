@@ -215,6 +215,7 @@ function refreshController(controller, message, mine) {
 export function applyRemoteVoiceProgress(messageId, progress, active, staleAt) {
   const controller = controllers.get(messageId);
   if (!controller) return;
+  if(controller.mine && controller.message.voice.progress?.completedAt && !progress?.completedAt)return;
   controller.message.voice.progress = progress;
   controller.remoteActiveUntil = active && staleAt ? Number(staleAt) : 0;
   updateListenStatus(controller.listenStatus, progress, active, controller.mine);

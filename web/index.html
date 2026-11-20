@@ -9,8 +9,8 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
-  <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.780432b9b832.js">
+  <link rel="stylesheet" href="/canonical-ui.css?v=38f4aab4a5e5" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.0c90d5786658.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -355,6 +355,7 @@
         <p id="group-members-presence" class="hint"></p>
         <ul id="group-members-list" class="user-results"></ul>
         <div class="group-dialog-actions">
+          <button id="group-members-delete" type="button" hidden>Удалить группу</button>
           <button id="group-members-close" type="button">Закрыть</button>
           <button id="group-members-add" type="button" hidden>Добавить участников</button>
         </div>
@@ -620,7 +621,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.780432b9b832.js");
+      await import("/boot.0c90d5786658.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
