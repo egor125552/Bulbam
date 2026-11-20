@@ -1,4 +1,3 @@
-import { optionRecordingKeyAction } from "./voice-option-key-policy.js";
 import { renderVoiceRecorderVisual, renderVoiceDeliveryVisual } from "./voice-recorder-visual.js";
 import { rawVoiceConstraints, keepVoiceRaw } from "./voice-raw-capture.js";
 import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
@@ -11,7 +10,7 @@ import {
   getSelectedChat,
   refreshChatsAfterExternalMessage
 } from "./messenger.js";
-import { playVoiceCue, prepareVoiceCues, setupVoiceCueRestoration } from "./voice-cues.js";
+import { playVoiceCue, prepareVoiceCues } from "./voice-cues.js";
 import {
   appendVoiceChunk,
   createVoiceDraft,
@@ -22,7 +21,7 @@ import {
   updateVoiceDraft
 } from "./voice-drafts.js";
 import { getVoiceBitrate } from "./voice-settings.js";
-import { VoiceUploadSocket,canReuseVoiceUploadTransport } from "./voice-upload-socket.js";
+import { VoiceUploadSocket } from "./voice-upload-socket.js";
 import { createRecordingClock } from "./voice-recording-clock.js";
 
 const LOCAL_PART_SIZE = 256 * 1024;
@@ -90,7 +89,6 @@ export function setupVoiceRecorder() {
   window.addEventListener("online", () => void refreshRecoverableDraft());
   observeCallPanel();
 
-  setupVoiceCueRestoration();
   document.addEventListener("keydown", handleOptionKeyDown, true);
   document.addEventListener("keyup", handleOptionKeyUp, true);
   window.addEventListener("blur", () => {
@@ -474,7 +472,6 @@ async function finishStoppedRecorder(state) {
   }
 
   await refreshRecoverableDraft();
-  window.dispatchEvent(new CustomEvent("bulbam:voice-recording-finished"));
 }
 
 async function sendDraftById(id, existingTransport = null) {
@@ -487,8 +484,7 @@ async function sendDraftById(id, existingTransport = null) {
     if (!totalBytes) throw new Error("запись пустая");
 
     logDiagnostic("Голосовые", "подготовка серверной загрузки");
-    const liveUpload=canReuseVoiceUploadTransport(transport,draft.upload);
-    const upload = liveUpload ? draft.upload : await ensureDraftUpload(draft);
+    const upload = await ensureDraftUpload(draft);
     logDiagnostic("Голосовые", "сервер подтвердил загрузку");
     const partSize = upload.chunkSizeBytes || LOCAL_PART_SIZE;
     const partCount = Math.ceil(totalBytes / partSize);
@@ -788,11 +784,7 @@ function updateVisualRecording() {
 }
 
 function handleOptionKeyDown(event) {
-  const action=optionRecordingKeyAction(event.key,{
-    isRecording:Boolean(current),trigger:current?.trigger,
-    altKey:event.altKey,timerActive:Boolean(optionTimer)
-  });
-  if (action==="cancel") {
+  if (event.key === "Escape" && current) {
     event.preventDefault();
     void cancelRecording();
     return;
@@ -800,11 +792,10 @@ function handleOptionKeyDown(event) {
   if (!isMacLike()) return;
 
   if (event.key !== "Alt") {
-    if(action==="interrupt" || action==="block") {
-      optionBlocked=true;
+    if (event.altKey || optionTimer || current?.trigger === "option") {
+      optionBlocked = true;
       clearOptionTimer();
-      if(action==="interrupt")
-        void interruptRecording("Во время удержания Option нажата другая клавиша.");
+      if (current?.trigger === "option") void cancelRecording();
     }
     return;
   }

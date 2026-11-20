@@ -20,9 +20,7 @@ export function createCallHeadsetControls(navigatorLike, { onMute, onHangup } = 
     muted = Boolean(nextMuted);
     if (!active || !session) return;
     try { session.setMicrophoneActive?.(!muted); } catch {}
-    // Keep media playback 'playing' so headset pause/play controls continue
-    // to work after the microphone was muted.
-    try { session.playbackState = "playing"; } catch {}
+    try { session.playbackState = muted ? "paused" : "playing"; } catch {}
   }
 
   return {

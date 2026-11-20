@@ -1,7 +1,9 @@
 import type { DurableObjectState, Env } from "../../../platform/cloudflare";
+import {
+  createCallNotificationPublisher,
+  type IncomingCallNotificationPublisher
+} from "../../notifications/public";
 import { DurableObjectRealtime } from "../../realtime/public";
-import { D1PushRepository } from "../../notifications/infrastructure/d1-push-repository";
-import { PushNotificationService } from "../../notifications/application/push-notification-service";
 
 export type CallStatus = "ringing" | "accepted" | "declined" | "ended";
 export interface CallPeerSnapshot { userId: string; username: string; displayName: string; }
@@ -29,70 +31,34 @@ export interface CallRoomSignal {
   payload: unknown;
   createdAt: number;
 }
+interface RingPushState {
+  callId: string;
+  pulsesSent: number;
+  startedAt: number;
+}
 
 const CALL_KEY = "activeCall";
 const SIGNALS_KEY = "signals";
+const RING_PUSH_KEY = "ringPush";
 const RINGING_TTL_MS = 2 * 60 * 1000;
-const ACCEPTED_TTL_MS = 90 * 1000;
+const ACCEPTED_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_SIGNALS = 128;
-const REPEAT_KEY = "ringingPushRepeats";
-const REPEAT_MS = 5_000;
-const MAX_REPEATS = 6;
-interface RingingPushRepeats { callId: string; attempts: number; }
+export const RING_PUSH_INTERVAL_MS = 2_000;
+export const RING_PUSH_WINDOW_MS = 30_000;
+export const RING_PUSH_MAX_PULSES = 15;
 
 export class CallRoom {
   private readonly realtime: DurableObjectRealtime;
-  private readonly env: Env;
-  constructor(private readonly state: DurableObjectState, env: Env) {
+  private readonly notifications: IncomingCallNotificationPublisher | null;
+  constructor(
+    private readonly state: DurableObjectState,
+    env: Env,
+    notificationsOverride?: IncomingCallNotificationPublisher | null
+  ) {
     this.realtime = new DurableObjectRealtime(env.REALTIME);
-    this.env = env;
-  }
-
-  async alarm(): Promise<void> {
-    const call = await this.current();
-    const progress = await this.state.storage.get<RingingPushRepeats>(REPEAT_KEY);
-    if(!call || call.status!=="ringing" || progress?.callId!==call.callId ||
-       progress.attempts>=MAX_REPEATS || Date.now()-call.createdAt>30_500){
-      await this.stopRingingPushes();
-      return;
-    }
-    if(!this.env.DB){await this.stopRingingPushes();return;}
-    const dueAt=call.createdAt+(progress.attempts+1)*REPEAT_MS;
-    if(Date.now()<dueAt){await this.state.storage.setAlarm(dueAt);return;}
-    const repository = new D1PushRepository(this.env.DB);
-    // Once the recipient opens Bulbam, realtime takes over. Do not ring
-    // every other signed-in device just because its screen remains locked.
-    if(await repository.isForeground(call.calleeUserId,Date.now())){
-      await this.stopRingingPushes();
-      return;
-    }
-    const attempts=progress.attempts+1;
-    await this.state.storage.put(REPEAT_KEY,{callId:call.callId,attempts});
-    try {
-      await new PushNotificationService(repository,this.env).notifyIncomingCall({
-        recipientUserId:call.calleeUserId,
-        callerDisplayName:call.caller.displayName,
-        callId:call.callId,
-        conversationId:call.conversationId
-      });
-    }catch(error){console.warn("[CallRoom] repeated push failed",error);}
-    const latest=await this.state.storage.get<CallRoomRecord>(CALL_KEY);
-    if(latest && latest.callId!==call.callId)return; // The next call owns its own alarm.
-    if(!latest || latest.status!=="ringing" || attempts>=MAX_REPEATS){
-      await this.stopRingingPushes();
-    }else{
-      await this.state.storage.setAlarm(call.createdAt+(attempts+1)*REPEAT_MS);
-    }
-  }
-
-  private async stopRingingPushes():Promise<void> {
-    // Notification maintenance must never block accepting or ending the call.
-    const outcomes=await Promise.allSettled([
-      this.state.storage.delete?.(REPEAT_KEY) ?? Promise.resolve(false),
-      this.state.storage.deleteAlarm?.() ?? Promise.resolve()
-    ]);
-    for(const outcome of outcomes)
-      if(outcome.status==="rejected")console.warn("[CallRoom] alarm cleanup failed",outcome.reason);
+    this.notifications = notificationsOverride !== undefined
+      ? notificationsOverride
+      : createCallNotificationPublisher(env);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -119,6 +85,45 @@ export class CallRoom {
     }
   }
 
+  async alarm(): Promise<void> {
+    const call = await this.current();
+    if (!call || call.status !== "ringing" || !this.notifications) {
+      await this.stopRingPushes();
+      return;
+    }
+    const ringState = await this.state.storage.get<RingPushState>(RING_PUSH_KEY);
+    if (!ringState || ringState.callId !== call.callId) {
+      await this.stopRingPushes();
+      return;
+    }
+    const now = Date.now();
+    if (now - ringState.startedAt >= RING_PUSH_WINDOW_MS || ringState.pulsesSent >= RING_PUSH_MAX_PULSES) {
+      await this.stopRingPushes();
+      return;
+    }
+
+    const nextSequence = ringState.pulsesSent + 1;
+    await this.notifications.notifyIncomingCall({
+      recipientUserId: call.calleeUserId,
+      callerDisplayName: call.caller.displayName,
+      callId: call.callId,
+      conversationId: call.conversationId,
+      sequence: nextSequence,
+      expiresAt: call.createdAt + RINGING_TTL_MS
+    }).catch((error) => console.warn("[CallRoom] repeat ring push failed", error));
+
+    const nextAt = now + RING_PUSH_INTERVAL_MS;
+    if (nextSequence >= RING_PUSH_MAX_PULSES || nextAt - ringState.startedAt >= RING_PUSH_WINDOW_MS) {
+      await this.stopRingPushes();
+      return;
+    }
+    await this.state.storage.put<RingPushState>(RING_PUSH_KEY, {
+      ...ringState,
+      pulsesSent: nextSequence
+    });
+    await this.state.storage.setAlarm(nextAt);
+  }
+
   private async start(body: Record<string, unknown>): Promise<Response> {
     const incoming = asCall(body.call);
     if (!incoming) return invalid("invalid_call", "Некорректное состояние звонка.");
@@ -126,10 +131,11 @@ export class CallRoom {
     if (current && isActive(current)) {
       return result({ ok: false, error: { code: "call_busy", message: "В этом диалоге уже есть активный звонок." } }, 409);
     }
+    const now = Date.now();
     const call: CallRoomRecord = {
       ...incoming,
       status: "ringing",
-      updatedAt: Date.now(),
+      updatedAt: now,
       answeredAt: null,
       endedAt: null,
       endedByUserId: null
@@ -138,14 +144,8 @@ export class CallRoom {
       this.state.storage.put(CALL_KEY, call),
       this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
     ]);
+    await this.startRingPushes(call, now);
     await this.syncActivePointers(call);
-    // An alarm runs even if the caller's web page is suspended.
-    if(this.env.DB && this.env.VAPID_PUBLIC_KEY && this.env.VAPID_PRIVATE_KEY && this.env.VAPID_SUBJECT){
-      try {
-        await this.state.storage.put(REPEAT_KEY,{callId:call.callId,attempts:0});
-        await this.state.storage.setAlarm(call.createdAt+REPEAT_MS);
-      }catch(error){console.warn("[CallRoom] repeat scheduling unavailable",error);}
-    }
     await this.realtime.publishToUsers([call.calleeUserId], {
       type: "call.ringing",
       call: publicCall(call, call.calleeUserId)
@@ -157,14 +157,6 @@ export class CallRoom {
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, viewerUserId)) {
       return result({ ok: false, error: { code: "call_not_found", message: "Звонок не найден." } }, 404);
-    }
-    // A regular state poll proves that at least one participant still has
-    // the call open. Extend both users' availability lease for another 90s.
-    if(call.status==="accepted" && Date.now()-call.updatedAt>=10_000) {
-      const updated={...call,updatedAt:Date.now()};
-      await this.state.storage.put(CALL_KEY,updated);
-      await this.syncActivePointers(updated);
-      return result({ok:true,call:publicCall(updated,viewerUserId)});
     }
     return result({ ok: true, call: publicCall(call, viewerUserId) });
   }
@@ -185,15 +177,13 @@ export class CallRoom {
       const updated: CallRoomRecord = { ...call, status: "accepted", answeredAt: now, updatedAt: now,
         calleeSessionId: stringValue(body.actorSessionId) || null };
       await this.state.storage.put(CALL_KEY, updated);
-      await this.stopRingingPushes();
+      await this.stopRingPushes();
       await this.syncActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
         type: "call.answered",
         callId: updated.callId,
         conversationId: updated.conversationId,
-        answeredAt: updated.answeredAt,
-        actorUserId,
-        actorSessionId: updated.calleeSessionId
+        answeredAt: updated.answeredAt
       });
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }
@@ -206,7 +196,7 @@ export class CallRoom {
         this.state.storage.put(CALL_KEY, updated),
         this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
       ]);
-      await this.stopRingingPushes();
+      await this.stopRingPushes();
       await this.clearActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
         type: "call.declined",
@@ -219,6 +209,7 @@ export class CallRoom {
 
     if (action === "end") {
       if (!isActive(call)) return result({ ok: true, call: publicCall(call, actorUserId) });
+      const wasRinging = call.status === "ringing";
       // Hanging up is user-wide. A signed-in user may stop their call from
       // any device; session ownership limits who can transmit media, not
       // who can close the call and release the other participant.
@@ -227,7 +218,7 @@ export class CallRoom {
         this.state.storage.put(CALL_KEY, updated),
         this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
       ]);
-      await this.stopRingingPushes();
+      await this.stopRingPushes();
       await this.clearActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
         type: "call.ended",
@@ -236,6 +227,9 @@ export class CallRoom {
         endedAt: updated.endedAt,
         endedByUserId: updated.endedByUserId
       });
+      if (wasRinging) {
+        await this.notifyMissedCall(updated);
+      }
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }
     return invalid("invalid_call_action", "Неизвестное действие звонка.");
@@ -268,10 +262,7 @@ export class CallRoom {
     const kind = stringValue(body.kind);
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, actorUserId)) return notFoundResponse();
-    const preoffer=call.status==="ringing" && actorUserId===call.callerUserId &&
-      (kind==="offer" || kind==="ice");
-    if(call.status!=="accepted" && !preoffer)
-      return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
+    if (call.status !== "accepted") return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
     if (kind !== "offer" && kind !== "answer" && kind !== "ice" && kind !== "resume") {
       return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
     }
@@ -296,7 +287,6 @@ export class CallRoom {
       this.state.storage.put(SIGNALS_KEY, [...currentSignals, signal].slice(-MAX_SIGNALS)),
       this.state.storage.put(CALL_KEY, { ...call, updatedAt: now })
     ]);
-    await this.syncActivePointers({...call,updatedAt:now});
     const recipientUserId = actorUserId === call.callerUserId ? call.calleeUserId : call.callerUserId;
     await this.realtime.publishToUsers([recipientUserId], {
       type: "call.signal",
@@ -322,12 +312,13 @@ export class CallRoom {
     const call = await this.state.storage.get<CallRoomRecord>(CALL_KEY);
     if (!call || !isStale(call, Date.now())) return call ?? null;
     if (!isActive(call)) return call;
+    const wasRinging = call.status === "ringing";
     const expired = endRecord(call, "ended", "system-timeout");
     await Promise.all([
       this.state.storage.put(CALL_KEY, expired),
       this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
     ]);
-    await this.stopRingingPushes();
+    await this.stopRingPushes();
     await this.clearActivePointers(expired);
     await this.realtime.publishToUsers([expired.callerUserId, expired.calleeUserId], {
       type: "call.ended",
@@ -337,7 +328,40 @@ export class CallRoom {
       endedByUserId: expired.endedByUserId,
       reason: "timeout"
     });
+    if (wasRinging) {
+      await this.notifyMissedCall(expired);
+    }
     return expired;
+  }
+
+  private async startRingPushes(call: CallRoomRecord, now: number): Promise<void> {
+    if (!this.notifications) return;
+    if (typeof this.notifications.isConfigured === "function" && !this.notifications.isConfigured()) return;
+    await this.state.storage.put<RingPushState>(RING_PUSH_KEY, {
+      callId: call.callId,
+      pulsesSent: 1,
+      startedAt: now
+    });
+    await this.state.storage.setAlarm(now + RING_PUSH_INTERVAL_MS);
+  }
+
+  private async stopRingPushes(): Promise<void> {
+    await Promise.all([
+      this.state.storage.delete(RING_PUSH_KEY),
+      this.state.storage.deleteAlarm()
+    ]);
+  }
+
+  private async notifyMissedCall(call: CallRoomRecord): Promise<void> {
+    if (!this.notifications?.notifyCallEnded) return;
+    if (typeof this.notifications.isConfigured === "function" && !this.notifications.isConfigured()) return;
+    await this.notifications.notifyCallEnded({
+      recipientUserId: call.calleeUserId,
+      callerDisplayName: call.caller.displayName,
+      callId: call.callId,
+      conversationId: call.conversationId,
+      reason: "missed"
+    }).catch((error) => console.warn("[CallRoom] missed call push failed", error));
   }
 
   private async syncActivePointers(call: CallRoomRecord): Promise<void> {

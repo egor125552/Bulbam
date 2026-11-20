@@ -1,4 +1,3 @@
-import { shouldAutoPlayNextVoice } from "./voice-autoplay-policy.js";
 import {logDiagnostic,logTraceEvent} from "./diagnostics-log.js";
 import { explainVoicePlaybackError } from "./voice-playback-diagnostics.js";
 import { announce, getCurrentAccount } from "./ui.js";
@@ -25,10 +24,7 @@ export function setupVoicePlayer() {
 }
 
 export function setVoiceMessageSequence(messages) {
-  messageSequence = messages.map((message) => ({
-    messageId:message.messageId,kind:message.kind,senderUserId:message.senderUserId,
-    completedAt:message.voice?.progress?.completedAt??null
-  }));
+  messageSequence = messages.map((message) => ({ messageId: message.messageId, kind: message.kind }));
 }
 
 export function renderVoiceMessage(message, mine) {
@@ -219,7 +215,6 @@ function refreshController(controller, message, mine) {
 export function applyRemoteVoiceProgress(messageId, progress, active, staleAt) {
   const controller = controllers.get(messageId);
   if (!controller) return;
-  if(controller.mine && controller.message.voice.progress?.completedAt && !progress?.completedAt)return;
   controller.message.voice.progress = progress;
   controller.remoteActiveUntil = active && staleAt ? Number(staleAt) : 0;
   updateListenStatus(controller.listenStatus, progress, active, controller.mine);
@@ -418,12 +413,11 @@ async function handleEnded(controller) {
 
   const index = messageSequence.findIndex((entry) => entry.messageId === controller.message.messageId);
   const next = messageSequence[index + 1];
-  if(!shouldAutoPlayNextVoice(next,getCurrentAccount()?.userId))return;
-  const nextController=controllers.get(next.messageId);
-  if(!nextController || nextController.message.voice.progress?.completedAt)return;
+  if (next?.kind !== "voice") return;
+  const nextController = controllers.get(next.messageId);
+  if (!nextController) return;
   await togglePlayback(nextController);
 }
-
 
 async function prefetchNextVoice(messageId) {
   const index = messageSequence.findIndex((entry) => entry.messageId === messageId);

@@ -4,7 +4,7 @@
   "version": "0.7.3",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --port 3000 --ip 0.0.0.0",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
     "check:web": "for f in web/app.js web/sw.js web/js/*.js; do node --check \"$f\" || exit 1; done",

@@ -8,9 +8,9 @@
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=ebe9780c9f8c">
-  <link rel="stylesheet" href="/canonical-ui.css?v=88a4be9a6ad6" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.afdfa19850cc.js">
+  <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
+  <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.780432b9b832.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -298,7 +298,6 @@
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
-              <p id="call-quality-status" role="status" aria-live="polite" hidden></p>
               <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
             </div>
             <div class="call-screen-navigation">
@@ -311,17 +310,14 @@
               <button id="call-resume" class="button-with-icon" data-icon="refresh" type="button" hidden>Восстановить звук</button>
               <button id="call-handoff" class="button-with-icon" data-icon="refresh" type="button" hidden>Перенести звонок на это устройство</button>
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
-              <button id="call-quality-check" class="button-with-icon" data-icon="refresh" type="button" aria-controls="call-quality-status" hidden>Проверить качество связи</button>
               <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
-            <button id="call-pocket" type="button" hidden>Режим в кармане</button>
-            <audio id="call-keepalive-audio" src="/audio/call-keepalive.wav" preload="auto" loop playsinline aria-hidden="true"></audio>
             <audio id="call-remote-audio" autoplay playsinline></audio>
           </section>
 
-
+  
       <dialog id="group-editor" aria-labelledby="group-editor-title" class="group-dialog">
         <form id="group-editor-form" class="form-stack">
           <h2 id="group-editor-title" tabindex="-1">Создать группу</h2>
@@ -359,7 +355,6 @@
         <p id="group-members-presence" class="hint"></p>
         <ul id="group-members-list" class="user-results"></ul>
         <div class="group-dialog-actions">
-          <button id="group-members-delete" type="button" hidden>Удалить группу</button>
           <button id="group-members-close" type="button">Закрыть</button>
           <button id="group-members-add" type="button" hidden>Добавить участников</button>
         </div>
@@ -470,14 +465,9 @@
             <h3 id="accessibility-title">Специальные возможности</h3>
             <label class="switch-row">
               <input id="voice-detailed-help" type="checkbox" checked>
-              Подробные подсказки во всём Бульбаме
+              Подробные подсказки для начинающих
             </label>
             <p class="hint">Если выключить, Бульбам скроет дополнительные пояснения и будет озвучивать действия короче. Важные статусы и ошибки останутся.</p>
-            <label class="switch-row">
-              <input id="settings-simple-controls" type="checkbox">
-              Простые кнопки без раскрывающихся списков
-            </label>
-            <p class="hint" data-detailed-help>Вместо раскрывающихся списков будут обычные кнопки для выбора вариантов. Их можно активировать двойным касанием VoiceOver.</p>
           </section>
 
           <section class="card" aria-labelledby="voice-settings-title">
@@ -630,7 +620,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.afdfa19850cc.js");
+      await import("/boot.780432b9b832.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

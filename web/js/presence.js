@@ -1,4 +1,3 @@
-import { offlinePresenceAfterFailedRefresh } from "./presence-failure-policy.js";
 import {logTraceEvent,logDiagnostic,diagnosticErrorName} from "./diagnostics-log.js";
 import { api } from "./api.js";
 import { language } from "./i18n.js";
@@ -118,10 +117,7 @@ async function refreshPresence() {
   } catch (error) {
     logDiagnostic('Ошибки','не удалось проверить присутствие',diagnosticErrorName(error));
     // Do not falsely claim someone is online if their status cannot be read.
-    if(currentGeneration===generation){
-      statusList=offlinePresenceAfterFailedRefresh(statusList);
-      publishPresence();
-    }
+    if(currentGeneration===generation){statusList=[];publishPresence();}
   } finally {
     requestInFlight=false;
   }

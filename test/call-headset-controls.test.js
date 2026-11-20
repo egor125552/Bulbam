@@ -28,7 +28,7 @@ describe("headset and OS call controls", () => {
     expect(onMute).toHaveBeenLastCalledWith(true);
     controls.updateMuted(true);
     expect(session.setMicrophoneActive).toHaveBeenLastCalledWith(false);
-    expect(session.playbackState).toBe("playing");
+    expect(session.playbackState).toBe("paused");
     session.actions.get("play")();
     expect(onMute).toHaveBeenLastCalledWith(false);
     controls.updateMuted(false);

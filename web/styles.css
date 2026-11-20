@@ -1204,11 +1204,3 @@ html[data-detailed-help="false"] [data-detailed-help="true"] { display: none !im
 .message > details { font-size:.78rem; color:var(--muted); margin-top:.2rem; }
 .message > details > summary { cursor:pointer; width:fit-content; }
 .message > details > p { white-space:normal; overflow-wrap:anywhere; }
-
-
-/* Simple choices are separate from the native selectors. */
-.settings-simple-options { display: grid; gap: .4rem; margin: .35rem 0 .8rem; }
-.settings-simple-options button { min-height: 2.75rem; text-align: left; }
-.settings-simple-options button[aria-pressed="true"] { border: 2px solid var(--brand-strong); font-weight: 700; }
-.settings-simple-options[hidden], select[hidden] + .settings-simple-options { display: none !important; }
-html[data-simple-controls="on"] select { display: none !important; }

@@ -101,7 +101,9 @@ export class CallService {
         recipientUserId: calleeUserId,
         callerDisplayName: caller.displayName,
         callId: call.callId,
-        conversationId
+        conversationId,
+        sequence: 1,
+        expiresAt: now + RINGING_SLOT_MS
       }).catch((error) => console.warn("[CallPush] notification failed", error));
       if (this.defer) this.defer(task);
       else await task;

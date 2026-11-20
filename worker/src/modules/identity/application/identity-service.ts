@@ -20,11 +20,7 @@ const DUMMY_PASSWORD_HASH =
   "PBKDF2-SHA256$100000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
 
 export class IdentityService {
-  constructor(
-    private readonly repository: IdentityRepository,
-    private readonly onProfileChanged?: (userId:string,displayName:string)=>Promise<void>,
-    private readonly onSessionsRevoked?: (userId:string)=>Promise<void>
-  ) {}
+  constructor(private readonly repository: IdentityRepository) {}
 
   async register(input: {
     username: string;
@@ -117,7 +113,6 @@ export class IdentityService {
     const accountCredentials = await this.repository.findAccountCredentialsByUsername(input.username);
     if (!accountCredentials) throw new Error("Recovered account was not found.");
     const { passwordHash: _hash, ...account } = accountCredentials;
-    await this.cleanupRevokedSessions(account.userId);
     const issued = await this.issueSession(account.userId, input.deviceName, Date.now());
     let recoveryCodes: string[] = [];
     try {
@@ -133,12 +128,6 @@ export class IdentityService {
     const displayName=validateDisplayName(requestedName);
     const changed=await this.repository.updateDisplayName(authenticated.account.userId,displayName);
     if(!changed)throw new ApiError(404,"account_not_found","Аккаунт не найден.");
-    if(displayName!==authenticated.account.displayName) {
-      // A successful profile update must not be rolled back by a transient
-      // realtime delivery failure. Peers still get fresh names on next GET.
-      try{await this.onProfileChanged?.(authenticated.account.userId,displayName);}
-      catch(error){console.warn("[Identity] profile notification failed",error);}
-    }
     return {...authenticated.account,displayName};
   }
 
@@ -151,7 +140,6 @@ export class IdentityService {
       sessionId: authenticated.session.sessionId,
       passwordHash, now: Date.now()
     });
-    await this.cleanupRevokedSessions(authenticated.account.userId);
   }
 
   async authenticate(token: string | null): Promise<AuthenticatedSession> {
@@ -180,7 +168,6 @@ export class IdentityService {
       authenticated.session.sessionId,
       Date.now()
     );
-    await this.cleanupRevokedSessions(authenticated.account.userId);
   }
 
   async listSessions(authenticated: AuthenticatedSession): Promise<Session[]> {
@@ -195,19 +182,6 @@ export class IdentityService {
     );
     if (!revoked) {
       throw new ApiError(404, "session_not_found", "Сессия не найдена.");
-    }
-    await this.cleanupRevokedSessions(authenticated.account.userId);
-  }
-
-  async cleanupRevokedSessions(userId:string):Promise<void> {
-    // Database-backed delivery always filters revoked sessions, even when
-    // physical cleanup has to be retried after a transient storage failure.
-    try { await this.onSessionsRevoked?.(userId); }
-    catch(error){
-      // The push recipient query independently excludes revoked and expired
-      // sessions, so a cleanup failure cannot leak data or invalidate a
-      // successful password reset or logout.
-      console.warn("[Identity] revoked-session cleanup deferred",error);
     }
   }
 

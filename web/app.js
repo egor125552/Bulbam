@@ -2,7 +2,6 @@ import { setupI18n } from "./js/i18n.js";
 import { setupDiagnostics } from "./js/diagnostics-ui.js";
 import { setupDetailedDiagnostics } from "./js/diagnostics-runtime.js";
 import { setupDetailedHelp } from "./js/accessibility-help.js";
-import { setupAccessibilityOptions } from "./js/accessibility-options.js";
 import { setupSettingsScreens } from "./js/settings-screens.js";
 import { setupWelcome } from "./js/welcome.js";
 import { setupAdminRecovery } from "./js/admin-recovery.js";
@@ -30,7 +29,6 @@ export function startApp() {
   setupDiagnostics();
   setupDetailedDiagnostics();
   setupDetailedHelp();
-  setupAccessibilityOptions();
   setupSettingsScreens();
   setupHealth();
   setupAuth();
@@ -55,8 +53,5 @@ export function startApp() {
 
   // Login is the only critical API request at startup. Health checks remain
   // available on demand, but must not block account/chat initialization.
-  // A one-time recovery link must open its password form instead of being
-  // overwritten by startup session checks or an existing account session.
-  if(!document.querySelector("#auth-view-recovery")?.dataset.recoveryLink)
-    void loadCurrentAccount({ quiet: false });
+  void loadCurrentAccount({ quiet: false });
 }

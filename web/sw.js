@@ -40,9 +40,72 @@ async function preferredLocale() {
     return value==="be"?"be":"ru";
   }catch{return "ru";}
 }
+let pushQueue = Promise.resolve();
+const endedCallIds = new Set();
+
+function enqueuePush(task) {
+  const next = pushQueue.then(task, task);
+  pushQueue = next.catch(() => {});
+  return next;
+}
+
+function rememberEndedCall(callId) {
+  if (!callId) return;
+  endedCallIds.add(callId);
+  if (endedCallIds.size > 50) {
+    const oldest = endedCallIds.values().next().value;
+    if (oldest) endedCallIds.delete(oldest);
+  }
+}
+
+function extractCallId(data) {
+  const fromData = data?.data?.callId;
+  if (typeof fromData === "string" && fromData.trim()) return fromData.trim();
+  const tag = typeof data?.tag === "string" ? data.tag : "";
+  const match = tag.match(/^call-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (match) return match[1];
+  if (tag.startsWith("call-") && tag.length > 5) return tag.slice(5);
+  return "";
+}
+
+function canonicalCallTag(data, callId) {
+  if (callId) return `call-${callId}`;
+  return data?.tag || "call-active";
+}
+
+async function closeCallNotifications(callId, { includeAllRinging = false } = {}) {
+  if (typeof self.registration?.getNotifications !== "function") return;
+  let existing = [];
+  try {
+    existing = await self.registration.getNotifications();
+  } catch {
+    return;
+  }
+  const exactTag = callId ? `call-${callId}` : "";
+  const prefixTag = callId ? `call-${callId}-` : "";
+  for (const notification of existing) {
+    const tag = typeof notification.tag === "string" ? notification.tag : "";
+    const noteCallId = typeof notification.data?.callId === "string" ? notification.data.callId : "";
+    const noteKind = notification.data?.kind;
+    const matchesCall = callId
+      ? (noteCallId === callId || tag === exactTag || tag.startsWith(prefixTag))
+      : (noteKind === "call" || tag.startsWith("call-"));
+    const isStaleRinging = includeAllRinging && (noteKind === "call" || (tag.startsWith("call-") && noteKind !== "call-ended"));
+    if (matchesCall || isStaleRinging) {
+      try { notification.close(); } catch {}
+    }
+  }
+}
+
 self.addEventListener("message",(event)=>{
   if(event.data?.type==="bulbam.locale") {
     event.waitUntil(saveLocale(event.data.locale).catch(()=>{}));
+    return;
+  }
+  if(event.data?.type==="bulbam.call-clear") {
+    const callId = typeof event.data.callId === "string" ? event.data.callId.trim() : "";
+    rememberEndedCall(callId);
+    event.waitUntil(enqueuePush(() => closeCallNotifications(callId, { includeAllRinging: !callId })));
   }
 });
 function localizedNotification(data,locale) {
@@ -53,6 +116,14 @@ function localizedNotification(data,locale) {
     return {
       title:title.startsWith(marker)?"Уваходны званок — "+title.slice(marker.length):title,
       body:"Націсніце, каб адкрыць Бульбам і адказаць."
+    };
+  }
+  if(data.kind==="call-ended"){
+    const title=String(data.title||"");
+    const marker="Пропущенный звонок — ";
+    return {
+      title:title.startsWith(marker)?"Прапушчаны званок — "+title.slice(marker.length):title,
+      body:"Званок завершаны."
     };
   }
   if(data.kind==="admin-recovery")return {
@@ -73,25 +144,20 @@ self.addEventListener("push", (event) => {
     data = { title: "Бульбам", body: event.data.text() };
   }
 
-  event.waitUntil(handlePush(data));
+  event.waitUntil(enqueuePush(() => handlePush(data)));
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const callId = typeof event.notification.data?.callId === "string" ? event.notification.data.callId : "";
   const rawUrl = event.notification.data?.url || "/";
   const target = new URL(rawUrl, self.location.origin);
   if (target.origin !== self.location.origin) return;
 
-  const action=event.action||"";
-  const details=event.notification.data;
-  if(action==="decline" && details?.kind==="call"){
-    event.waitUntil(declineFromNotification(details));
-    return;
-  }
-  if(action==="answer" && details?.kind==="call"){
-    target.searchParams.set("answer","1");
-  }
-  event.waitUntil(openOrFocus(target.href));
+  event.waitUntil((async () => {
+    if (callId) await closeCallNotifications(callId);
+    return openOrFocus(target.href);
+  })());
 });
 
 async function handlePush(data) {
@@ -103,63 +169,91 @@ async function handlePush(data) {
     (client) => client.url.startsWith(self.location.origin) && client.visibilityState === "visible"
   );
 
-  if (data.kind === "call" && visibleClients.length) {
-    // Realtime is normally the foreground path. Push is still sent server-side
-    // for reliability; when the app is genuinely visible, use it only as a
-    // second delivery path and avoid a duplicate system notification.
-    for (const client of visibleClients) {
-      client.postMessage({ type: "bulbam.call-push", data: data.data || {} });
+  if (data.kind === "call" || data.kind === "call-ended") {
+    const callId = extractCallId(data);
+    const tag = canonicalCallTag(data, callId);
+    const locale = await preferredLocale();
+
+    if (data.kind === "call-ended") {
+      rememberEndedCall(callId);
+      await closeCallNotifications(callId);
+      if (visibleClients.length) return;
+      const endedMessage = localizedNotification(data, locale);
+      await self.registration.showNotification(endedMessage.title, {
+        body: endedMessage.body,
+        icon: data.icon || "/icon.svg",
+        tag,
+        renotify: false,
+        requireInteraction: false,
+        data: { ...(data.data || { url: "/" }), kind: "call-ended", ...(callId ? { callId } : {}) }
+      });
+      return;
     }
+
+    if (visibleClients.length) {
+      // Realtime is normally the foreground path. Push is still sent server-side
+      // for reliability; when the app is genuinely visible, clear any leftover
+      // background call notification and avoid a duplicate system alert.
+      await closeCallNotifications(callId, { includeAllRinging: true });
+      for (const client of visibleClients) {
+        client.postMessage({ type: "bulbam.call-push", data: data.data || {} });
+      }
+      return;
+    }
+
+    const expired = Number.isFinite(Number(data.expiresAt)) && Number(data.expiresAt) > 0 && Date.now() > Number(data.expiresAt);
+    if ((callId && endedCallIds.has(callId)) || expired) {
+      // An out-of-order or stale ring pulse arrived after the call already ended.
+      // Clear any active ringing alert and show a single silent ended notice so
+      // Apple Safari's strict userVisibleOnly policy never revokes push access.
+      await closeCallNotifications(callId);
+      const callerTitle = String(data.title || "").replace(/^Входящий звонок — /, "");
+      const staleData = {
+        kind: "call-ended",
+        title: callerTitle ? `Пропущенный звонок — ${callerTitle}` : "Бульбам",
+        body: "Звонок завершён."
+      };
+      const staleMessage = localizedNotification(staleData, locale);
+      await self.registration.showNotification(staleMessage.title, {
+        body: staleMessage.body,
+        icon: data.icon || "/icon.svg",
+        tag,
+        renotify: false,
+        silent: true,
+        requireInteraction: false,
+        data: { ...(data.data || { url: "/" }), kind: "call-ended", ...(callId ? { callId } : {}) }
+      });
+      return;
+    }
+
+    // Remove any prior notifications for this call (and any stale ringing
+    // banners) before displaying the fresh alert so repeated ring pulses never
+    // accumulate in Notification Center on iOS, macOS, Android, or Desktop.
+    await closeCallNotifications(callId, { includeAllRinging: true });
+    const callMessage = localizedNotification(data, locale);
+    await self.registration.showNotification(callMessage.title, {
+      body: callMessage.body,
+      icon: data.icon || "/icon.svg",
+      tag,
+      renotify: true,
+      requireInteraction: true,
+      timestamp: Date.now(),
+      data: { ...(data.data || { url: "/" }), kind: "call", ...(callId ? { callId } : {}) }
+    });
     return;
   }
 
-  const locale=await preferredLocale();
-  const message=localizedNotification(data,locale);
-  const call=data.kind==="call";
-  if(call && data.tag && typeof self.registration.getNotifications==="function"){
-    try {
-      const old=await self.registration.getNotifications({tag:data.tag});
-      for(const notification of old)notification.close();
-    }catch(error){console.warn("[CallPush] notification replacement failed",error);}
-  }
-  const basics={
+  const message=localizedNotification(data,await preferredLocale());
+  await self.registration.showNotification(message.title, {
     body: message.body,
     icon: data.icon || "/icon.svg",
     tag: data.tag,
-    data: {...(data.data||{url:"/"}),kind:data.kind}
-  };
-  if(call){
-    try {
-      await self.registration.showNotification(message.title,{
-        ...basics,renotify:true,
-        actions:[
-          {action:"answer",title:locale==="be"?"Адказаць":"Ответить"},
-          {action:"decline",title:locale==="be"?"Адхіліць":"Отклонить"}
-        ]
-      });
-    }catch(error){
-      // Some WebKit implementations reject action/renotify options. A basic
-      // incoming-call notification is preferable to silently missing a call.
-      await self.registration.showNotification(message.title,basics);
-    }
-  }else await self.registration.showNotification(message.title,basics);
+    data: data.data || { url: "/" }
+  });
 
   if (data.kind === "message" && typeof self.navigator?.setAppBadge === "function") {
     try { await self.navigator.setAppBadge(); } catch {}
   }
-}
-
-const CALL_ID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-async function declineFromNotification(details){
-  const chat=details.conversationId,call=details.callId;
-  if(typeof chat!=="string" || typeof call!=="string" ||
-     !CALL_ID_PATTERN.test(chat) || !CALL_ID_PATTERN.test(call))return;
-  // Cookies are browser-managed; no tokens or other secrets enter push data.
-  try {
-    await fetch(`/api/v1/chats/${chat}/calls/${call}/decline`,{
-      method:"POST",credentials:"same-origin",cache:"no-store"
-    });
-  }catch(error){console.warn("[CallPush] could not decline notification",error);}
 }
 
 async function openOrFocus(targetUrl) {
@@ -170,15 +264,12 @@ async function openOrFocus(targetUrl) {
 
   for (const client of windowClients) {
     if (!client.url.startsWith(self.location.origin)) continue;
-    // Navigating an existing PWA client reloads it and destroys live calls,
-    // recordings and local drafts. Let the running app route internally.
     try {
-      if ("focus" in client) await client.focus();
-      client.postMessage({type:"bulbam.notification-open",url:new URL(targetUrl).pathname+new URL(targetUrl).search});
-      return client;
+      if ("navigate" in client) await client.navigate(targetUrl);
     } catch {
-      // A dead client can be ignored; another window or a fresh one may work.
+      // If navigation is unavailable, focusing the existing Bulbam window is still safe.
     }
+    if ("focus" in client) return client.focus();
   }
 
   return self.clients.openWindow(targetUrl);
@@ -186,7 +277,7 @@ async function openOrFocus(targetUrl) {
 
 // Public application shell only. Never cache authenticated /api endpoints,
 // voice messages, WebSocket traffic, or user data.
-const SHELL_CACHE = "bulbam-shell-65f6b29d6d81";
+const SHELL_CACHE = "bulbam-shell-7670a1cb8c4f";
 const STATIC_FILES = new Set(["/styles.css", "/canonical-ui.css", "/icon.svg"]);
 
 self.addEventListener("fetch", (event) => {

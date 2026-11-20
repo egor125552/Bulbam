@@ -20,6 +20,16 @@ export interface IncomingCallNotificationInput {
   callerDisplayName: string;
   callId: string;
   conversationId: string;
+  sequence?: number;
+  expiresAt?: number;
+}
+
+export interface CallEndedNotificationInput {
+  recipientUserId: string;
+  callerDisplayName: string;
+  callId: string;
+  conversationId: string;
+  reason: "missed" | "answered" | "declined" | "ended";
 }
 
 export interface MessageNotificationPublisher {
@@ -27,7 +37,9 @@ export interface MessageNotificationPublisher {
 }
 
 export interface IncomingCallNotificationPublisher {
+  isConfigured?(): boolean;
   notifyIncomingCall(input: IncomingCallNotificationInput): Promise<void>;
+  notifyCallEnded?(input: CallEndedNotificationInput): Promise<void>;
 }
 
 export class PushNotificationService
@@ -41,6 +53,10 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     return this.repository.initialize();
   }
 
+  isConfigured(): boolean {
+    return this.configured();
+  }
+
   publicConfig() {
     return {
       configured: this.configured(),
@@ -48,7 +64,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     };
   }
 
-  async subscribe(userId: string, sessionId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
+  async subscribe(userId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
     if (!this.configured()) {
       badRequest(
         "push_not_configured",
@@ -59,7 +75,6 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     await this.repository.upsert({
       ...subscription,
       userId,
-      sessionId,
       userAgent
     });
   }
@@ -94,20 +109,46 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   async notifyIncomingCall(input: IncomingCallNotificationInput): Promise<void> {
     // Calls are latency-sensitive. Always send the push to subscribed devices;
     // the Service Worker suppresses the system notification when a Bulbam
-    // window is actually visible. This avoids a stale server foreground lease
-    // swallowing a call when a mobile browser is frozen immediately on hide.
+    // window is actually visible. Use a stable tag + RFC 8030 topic so repeated
+    // ringing pulses collapse in transit and replace the previous notification
+    // instead of piling up in Notification Center.
     await this.notifyAll(input.recipientUserId, {
       kind: "call",
       title: `Входящий звонок — ${input.callerDisplayName}`,
       body: "Нажмите, чтобы открыть Бульбам и ответить.",
       tag: `call-${input.callId}`,
+      renotify: true,
+      replace: true,
+      sequence: input.sequence ?? 1,
+      expiresAt: input.expiresAt ?? null,
       icon: "/icon.svg",
       data: {
         url: `/?chat=${encodeURIComponent(input.conversationId)}&call=${encodeURIComponent(input.callId)}`,
         callId: input.callId,
         conversationId: input.conversationId
       }
-    }, 15);
+    }, 15, callPushTopic(input.callId));
+  }
+
+  async notifyCallEnded(input: CallEndedNotificationInput): Promise<void> {
+    // Reuse the exact same tag and RFC 8030 topic so any queued ringing push
+    // is collapsed at the push service and the active ringing banner is cleanly
+    // replaced by a single missed/ended notification (iOS userVisibleOnly safe).
+    await this.notifyAll(input.recipientUserId, {
+      kind: "call-ended",
+      title: `Пропущенный звонок — ${input.callerDisplayName}`,
+      body: "Звонок завершён.",
+      tag: `call-${input.callId}`,
+      renotify: false,
+      replace: true,
+      icon: "/icon.svg",
+      data: {
+        url: `/?chat=${encodeURIComponent(input.conversationId)}`,
+        callId: input.callId,
+        conversationId: input.conversationId,
+        reason: input.reason
+      }
+    }, 60, callPushTopic(input.callId));
   }
 
   async notifyAdminRecoveryRequest(recipientUserId:string):Promise<void> {
@@ -131,13 +172,14 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   private async notifyAll(
     recipientUserId: string,
     payload: Record<string, unknown>,
-    ttl: number
+    ttl: number,
+    topic?: string
   ): Promise<void> {
     if (!this.configured()) return;
     const subscriptions = await this.repository.listForUser(recipientUserId);
     if (!subscriptions.length) return;
     const encoded = JSON.stringify(payload);
-    await Promise.all(subscriptions.map((subscription) => this.send(subscription, encoded, ttl)));
+    await Promise.all(subscriptions.map((subscription) => this.send(subscription, encoded, ttl, topic)));
   }
 
   private configured(): boolean {
@@ -148,10 +190,13 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     );
   }
 
-  private async send(subscription: PushSubscriptionRecord, payload: string, ttl: number): Promise<void> {
+  private async send(
+    subscription: PushSubscriptionRecord,
+    payload: string,
+    ttl: number,
+    topic?: string
+  ): Promise<void> {
     try {
-      // A session may be revoked while the fanout is being prepared.
-      if(!(await this.repository.isCurrentSession(subscription)))return;
       await webpush.sendNotification(
         {
           endpoint: subscription.endpoint,
@@ -165,7 +210,8 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
             privateKey: this.env.VAPID_PRIVATE_KEY!
           },
           TTL: ttl,
-          urgency: "high"
+          urgency: "high",
+          ...(topic ? { topic } : {})
         }
       );
     } catch (error) {
@@ -179,7 +225,13 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
   }
 }
 
-function validateSubscription(raw: Record<string, unknown>): Omit<PushSubscriptionRecord, "userId" | "sessionId"> {
+export function callPushTopic(callId: string): string {
+  // RFC 8030 Topic must be <= 32 URL-safe base64 characters ([A-Za-z0-9_-]).
+  const compact = String(callId).replace(/[^A-Za-z0-9_-]/g, "").replace(/-/g, "").slice(0, 27);
+  return `call-${compact || "active"}`;
+}
+
+function validateSubscription(raw: Record<string, unknown>): Omit<PushSubscriptionRecord, "userId"> {
   const endpoint = validateEndpoint(raw.endpoint);
   const expirationTime = raw.expirationTime === null || raw.expirationTime === undefined
     ? null
