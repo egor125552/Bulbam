@@ -8,9 +8,9 @@
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=4c22a182d15b">
+  <link rel="stylesheet" href="/styles.css?v=ebe9780c9f8c">
   <link rel="stylesheet" href="/canonical-ui.css?v=88a4be9a6ad6" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.69793d43ea23.js">
+  <link rel="modulepreload" href="/boot.afdfa19850cc.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -470,9 +470,14 @@
             <h3 id="accessibility-title">Специальные возможности</h3>
             <label class="switch-row">
               <input id="voice-detailed-help" type="checkbox" checked>
-              Подробные подсказки для начинающих
+              Подробные подсказки во всём Бульбаме
             </label>
             <p class="hint">Если выключить, Бульбам скроет дополнительные пояснения и будет озвучивать действия короче. Важные статусы и ошибки останутся.</p>
+            <label class="switch-row">
+              <input id="settings-simple-controls" type="checkbox">
+              Простые кнопки без раскрывающихся списков
+            </label>
+            <p class="hint" data-detailed-help>Вместо раскрывающихся списков будут обычные кнопки для выбора вариантов. Их можно активировать двойным касанием VoiceOver.</p>
           </section>
 
           <section class="card" aria-labelledby="voice-settings-title">
@@ -625,7 +630,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.69793d43ea23.js");
+      await import("/boot.afdfa19850cc.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);
