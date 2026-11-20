@@ -20,7 +20,10 @@ const DUMMY_PASSWORD_HASH =
   "PBKDF2-SHA256$100000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
 
 export class IdentityService {
-  constructor(private readonly repository: IdentityRepository) {}
+  constructor(
+    private readonly repository: IdentityRepository,
+    private readonly onProfileChanged?: (userId:string,displayName:string)=>Promise<void>
+  ) {}
 
   async register(input: {
     username: string;
@@ -128,6 +131,12 @@ export class IdentityService {
     const displayName=validateDisplayName(requestedName);
     const changed=await this.repository.updateDisplayName(authenticated.account.userId,displayName);
     if(!changed)throw new ApiError(404,"account_not_found","Аккаунт не найден.");
+    if(displayName!==authenticated.account.displayName) {
+      // A successful profile update must not be rolled back by a transient
+      // realtime delivery failure. Peers still get fresh names on next GET.
+      try{await this.onProfileChanged?.(authenticated.account.userId,displayName);}
+      catch(error){console.warn("[Identity] profile notification failed",error);}
+    }
     return {...authenticated.account,displayName};
   }
 

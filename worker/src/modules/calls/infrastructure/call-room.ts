@@ -128,7 +128,9 @@ export class CallRoom {
         type: "call.answered",
         callId: updated.callId,
         conversationId: updated.conversationId,
-        answeredAt: updated.answeredAt
+        answeredAt: updated.answeredAt,
+        actorUserId,
+        actorSessionId: updated.calleeSessionId
       });
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }

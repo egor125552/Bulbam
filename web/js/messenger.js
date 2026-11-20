@@ -67,6 +67,10 @@ export function setupMessenger() {
     presenceByUserId = new Map((event.detail?.users ?? []).map(user=>[user.userId,user]));
     updatePeerPresence();
   });
+  window.addEventListener("bulbam:profile-updated",event=>{
+    if(account?.userId===event.detail?.account?.userId)
+      account={...account,displayName:event.detail.account.displayName};
+  });
   window.addEventListener("bulbam:language-changed", () => {
     if(!account)return;
     // Regenerate dates, accessible chat previews and delivery statuses without
@@ -273,7 +277,9 @@ function renderChats() {
     preview.className = "chat-preview";
     preview.dataset.userContent = "true";
     const deliveryState = messageDeliveryState(chat.lastMessage, account.userId);
-    preview.textContent = [chatPreview(chat.lastMessage, account.userId), deliveryState].filter(Boolean).join(" · ");
+    const latestPreview=chatPreview(chat.lastMessage,account.userId);
+    button.dataset.searchPreview=latestPreview;
+    preview.textContent=[latestPreview,deliveryState].filter(Boolean).join(" · ");
 
     const time = document.createElement("time");
     time.className = "chat-time";
@@ -678,6 +684,19 @@ function connectRealtime() {
     } else if(payload?.type==='chat.removed'){
       if(selectedChat?.conversationId===payload.conversationId){selectedChat=null;messages=[];renderConversation();}
       void loadChats({quiet:true});
+    } else if(payload?.type==="chat.profile-updated") {
+      const {userId,displayName}=payload;
+      if(typeof displayName!=="string" || !userId)return;
+      for(const chat of chats){
+        if(chat.peer?.userId===userId)chat.peer.displayName=displayName;
+        for(const member of chat.members??[])if(member.userId===userId)member.displayName=displayName;
+      }
+      if(selectedChat){
+        elements.conversationTitle.textContent=selectedChat.kind==="group"?selectedChat.title:selectedChat.peer.displayName;
+        renderMessages({preserveVoicePlayback:true});
+      }
+      renderChats();
+      updatePeerPresence();
     } else if(payload?.type==='chat.created'||payload?.type==='chat.updated'){
       void loadChats({quiet:true});
     } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {

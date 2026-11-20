@@ -82,11 +82,19 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
     if (storageRequired && !env.DB) return storageBindingMissing();
 
     const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
-    const identity = identityRepository ? new IdentityService(identityRepository) : null;
-    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
+    const identity = identityRepository ? new IdentityService(identityRepository,async (userId,displayName)=>{
+      if(!messagingRepository)return;
+      const chats=await messagingRepository.listAllConversationsForUser(userId,500);
+      const recipients=new Set<string>([userId]);
+      for(const chat of chats)
+        for(const peer of await messagingRepository.listConversationRecipients(chat))
+          recipients.add(peer);
+      await realtime.publishToUsers([...recipients],{type:"chat.profile-updated",userId,displayName});
+    }) : null;
+    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
     const adminRecovery = env.DB && identity ? new AdminRecoveryService(
       env.DB,identity,realtime,push??undefined,ctx ? (promise)=>ctx.waitUntil(promise) : undefined
