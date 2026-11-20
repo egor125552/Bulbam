@@ -1,5 +1,7 @@
 import type { DurableObjectState, Env } from "../../../platform/cloudflare";
 import { DurableObjectRealtime } from "../../realtime/public";
+import { D1PushRepository } from "../../notifications/infrastructure/d1-push-repository";
+import { PushNotificationService } from "../../notifications/application/push-notification-service";
 
 export type CallStatus = "ringing" | "accepted" | "declined" | "ended";
 export interface CallPeerSnapshot { userId: string; username: string; displayName: string; }
@@ -31,13 +33,66 @@ export interface CallRoomSignal {
 const CALL_KEY = "activeCall";
 const SIGNALS_KEY = "signals";
 const RINGING_TTL_MS = 2 * 60 * 1000;
-const ACCEPTED_TTL_MS = 2 * 60 * 60 * 1000;
+const ACCEPTED_TTL_MS = 90 * 1000;
 const MAX_SIGNALS = 128;
+const REPEAT_KEY = "ringingPushRepeats";
+const REPEAT_MS = 5_000;
+const MAX_REPEATS = 6;
+interface RingingPushRepeats { callId: string; attempts: number; }
 
 export class CallRoom {
   private readonly realtime: DurableObjectRealtime;
+  private readonly env: Env;
   constructor(private readonly state: DurableObjectState, env: Env) {
     this.realtime = new DurableObjectRealtime(env.REALTIME);
+    this.env = env;
+  }
+
+  async alarm(): Promise<void> {
+    const call = await this.current();
+    const progress = await this.state.storage.get<RingingPushRepeats>(REPEAT_KEY);
+    if(!call || call.status!=="ringing" || progress?.callId!==call.callId ||
+       progress.attempts>=MAX_REPEATS || Date.now()-call.createdAt>30_500){
+      await this.stopRingingPushes();
+      return;
+    }
+    if(!this.env.DB){await this.stopRingingPushes();return;}
+    const dueAt=call.createdAt+(progress.attempts+1)*REPEAT_MS;
+    if(Date.now()<dueAt){await this.state.storage.setAlarm(dueAt);return;}
+    const repository = new D1PushRepository(this.env.DB);
+    // Once the recipient opens Bulbam, realtime takes over. Do not ring
+    // every other signed-in device just because its screen remains locked.
+    if(await repository.isForeground(call.calleeUserId,Date.now())){
+      await this.stopRingingPushes();
+      return;
+    }
+    const attempts=progress.attempts+1;
+    await this.state.storage.put(REPEAT_KEY,{callId:call.callId,attempts});
+    try {
+      await new PushNotificationService(repository,this.env).notifyIncomingCall({
+        recipientUserId:call.calleeUserId,
+        callerDisplayName:call.caller.displayName,
+        callId:call.callId,
+        conversationId:call.conversationId
+      });
+    }catch(error){console.warn("[CallRoom] repeated push failed",error);}
+    const latest=await this.state.storage.get<CallRoomRecord>(CALL_KEY);
+    if(latest && latest.callId!==call.callId)return; // The next call owns its own alarm.
+    if(!latest || latest.status!=="ringing" || attempts>=MAX_REPEATS){
+      await this.stopRingingPushes();
+    }else{
+      await this.state.storage.setAlarm(call.createdAt+(attempts+1)*REPEAT_MS);
+    }
+  }
+
+  private async stopRingingPushes():Promise<void> {
+    // Notification maintenance must never block accepting or ending the call.
+    const outcomes=await Promise.allSettled([
+      this.state.storage.delete?.(REPEAT_KEY) ?? Promise.resolve(false),
+      this.state.storage.deleteAlarm?.() ?? Promise.resolve()
+    ]);
+    for(const outcome of outcomes)
+      if(outcome.status==="rejected")console.warn("[CallRoom] alarm cleanup failed",outcome.reason);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -84,6 +139,13 @@ export class CallRoom {
       this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
     ]);
     await this.syncActivePointers(call);
+    // An alarm runs even if the caller's web page is suspended.
+    if(this.env.DB && this.env.VAPID_PUBLIC_KEY && this.env.VAPID_PRIVATE_KEY && this.env.VAPID_SUBJECT){
+      try {
+        await this.state.storage.put(REPEAT_KEY,{callId:call.callId,attempts:0});
+        await this.state.storage.setAlarm(call.createdAt+REPEAT_MS);
+      }catch(error){console.warn("[CallRoom] repeat scheduling unavailable",error);}
+    }
     await this.realtime.publishToUsers([call.calleeUserId], {
       type: "call.ringing",
       call: publicCall(call, call.calleeUserId)
@@ -95,6 +157,14 @@ export class CallRoom {
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, viewerUserId)) {
       return result({ ok: false, error: { code: "call_not_found", message: "Звонок не найден." } }, 404);
+    }
+    // A regular state poll proves that at least one participant still has
+    // the call open. Extend both users' availability lease for another 90s.
+    if(call.status==="accepted" && Date.now()-call.updatedAt>=10_000) {
+      const updated={...call,updatedAt:Date.now()};
+      await this.state.storage.put(CALL_KEY,updated);
+      await this.syncActivePointers(updated);
+      return result({ok:true,call:publicCall(updated,viewerUserId)});
     }
     return result({ ok: true, call: publicCall(call, viewerUserId) });
   }
@@ -115,12 +185,15 @@ export class CallRoom {
       const updated: CallRoomRecord = { ...call, status: "accepted", answeredAt: now, updatedAt: now,
         calleeSessionId: stringValue(body.actorSessionId) || null };
       await this.state.storage.put(CALL_KEY, updated);
+      await this.stopRingingPushes();
       await this.syncActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
         type: "call.answered",
         callId: updated.callId,
         conversationId: updated.conversationId,
-        answeredAt: updated.answeredAt
+        answeredAt: updated.answeredAt,
+        actorUserId,
+        actorSessionId: updated.calleeSessionId
       });
       return result({ ok: true, call: publicCall(updated, actorUserId) });
     }
@@ -133,6 +206,7 @@ export class CallRoom {
         this.state.storage.put(CALL_KEY, updated),
         this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
       ]);
+      await this.stopRingingPushes();
       await this.clearActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
         type: "call.declined",
@@ -153,6 +227,7 @@ export class CallRoom {
         this.state.storage.put(CALL_KEY, updated),
         this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
       ]);
+      await this.stopRingingPushes();
       await this.clearActivePointers(updated);
       await this.realtime.publishToUsers([updated.callerUserId, updated.calleeUserId], {
         type: "call.ended",
@@ -193,7 +268,10 @@ export class CallRoom {
     const kind = stringValue(body.kind);
     const call = await this.current();
     if (!call || call.callId !== callId || !participant(call, actorUserId)) return notFoundResponse();
-    if (call.status !== "accepted") return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
+    const preoffer=call.status==="ringing" && actorUserId===call.callerUserId &&
+      (kind==="offer" || kind==="ice");
+    if(call.status!=="accepted" && !preoffer)
+      return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
     if (kind !== "offer" && kind !== "answer" && kind !== "ice" && kind !== "resume") {
       return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
     }
@@ -218,6 +296,7 @@ export class CallRoom {
       this.state.storage.put(SIGNALS_KEY, [...currentSignals, signal].slice(-MAX_SIGNALS)),
       this.state.storage.put(CALL_KEY, { ...call, updatedAt: now })
     ]);
+    await this.syncActivePointers({...call,updatedAt:now});
     const recipientUserId = actorUserId === call.callerUserId ? call.calleeUserId : call.callerUserId;
     await this.realtime.publishToUsers([recipientUserId], {
       type: "call.signal",
@@ -248,6 +327,7 @@ export class CallRoom {
       this.state.storage.put(CALL_KEY, expired),
       this.state.storage.put(SIGNALS_KEY, [] as CallRoomSignal[])
     ]);
+    await this.stopRingingPushes();
     await this.clearActivePointers(expired);
     await this.realtime.publishToUsers([expired.callerUserId, expired.calleeUserId], {
       type: "call.ended",

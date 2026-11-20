@@ -142,9 +142,33 @@ describe("one-to-one audio call signaling", () => {
     await expectStatus(differentRoomBusy, 409);
     expect(await activeCallFor(gamma.account.userId)).toBeNull();
 
+    const env=await testEnv();
+    const realtimeResponse=await env.REALTIME.getByName(beta.account.userId).fetch(
+      "https://realtime.internal/socket",{headers:{upgrade:"websocket"}}
+    );
+    expect(realtimeResponse.status).toBe(101);
+    const notificationSocket=realtimeResponse.webSocket;
+    notificationSocket.accept();
+    const answeredNotification=new Promise((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new Error("Answer realtime event missing")),5000);
+      notificationSocket.addEventListener("message",event=>{
+        try{
+          const payload=JSON.parse(event.data);
+          if(payload.type==="call.answered"){
+            clearTimeout(timeout);resolve(payload);
+          }
+        }catch{}
+      });
+    });
+    const betaSession=await api("/api/v1/auth/me",beta.cookie);
+    const betaSessionId=(await json(betaSession)).session.sessionId;
     const answered = await api(`${callRoot}/answer`, beta.cookie, { method: "POST" });
     await expectStatus(answered, 200);
     expect((await json(answered)).call.status).toBe("accepted");
+    expect(await answeredNotification).toMatchObject({
+      type:"call.answered",actorUserId:beta.account.userId,actorSessionId:betaSessionId
+    });
+    notificationSocket.close(1000,"done");
     expect(await activeCallFor(alpha.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
     expect(await activeCallFor(beta.account.userId)).toMatchObject({ callId: call.callId, status: "accepted" });
 

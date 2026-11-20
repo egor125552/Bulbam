@@ -1,6 +1,9 @@
 import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
 import { translateText } from "./i18n.js";
 import { api } from "./api.js";
+import { subscribeRealtime, reconnectRealtime } from "./shared-realtime.js";
+import { createPendingMessageOutbox, isDisplayedConversation } from "./pending-message-outbox.js";
+import { takeRequestedChat } from "./chat-deeplink.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
@@ -16,11 +19,12 @@ let account = null;
 let chats = [];
 let selectedChat = null;
 let messages = [];
+const queuedMessages=createPendingMessageOutbox();
+let nextHistoryCursor=null;
+let loadingOlder=false;
+let historyButton=null;
 let searchTimer = null;
-let socket = null;
-let reconnectTimer = null;
-let reconnectDelay = 1000;
-let heartbeatTimer = null;
+let unsubscribeRealtime=null;
 let pollTimer = null;
 let generation = 0;
 let jumpButton = null;
@@ -30,9 +34,15 @@ let groupSelected=new Set();
 let groupEditorMode='create';
 let groupEditorConversation=null;
 let groupSearchTimer=null;
+let pendingNotificationChat=null;
 
 export function setupMessenger() {
   jumpButton = document.querySelector("#jump-to-latest");
+  historyButton=document.createElement("button");
+  historyButton.type="button";
+  historyButton.textContent="Загрузить предыдущие сообщения";
+  historyButton.hidden=true;
+  historyButton.addEventListener("click",()=>void loadOlderMessages());
   jumpButton?.addEventListener("click", jumpToLatest);
   elements.messageList.addEventListener("scroll", () => {
     if (jumpButton && isNearBottom(elements.messageList)) jumpButton.hidden = true;
@@ -58,6 +68,28 @@ export function setupMessenger() {
     presenceByUserId = new Map((event.detail?.users ?? []).map(user=>[user.userId,user]));
     updatePeerPresence();
   });
+  window.addEventListener("bulbam:notification-open",event=>{
+    const url=event.detail?.url;
+    if(typeof url!=="string" || !account)return;
+    const target=new URL(url,location.origin);
+    if(target.origin!==location.origin || !target.searchParams.has("chat"))return;
+    const chatId=target.searchParams.get("chat");
+    if(!/^[0-9a-f-]{36}$/i.test(chatId??""))return;
+    // Protect an active recording and any unsent text in the composer.
+    if(document.body.classList.contains("voice-recording") ||
+       (elements.messageInput.value.trim() && selectedChat?.conversationId!==chatId)){
+      pendingNotificationChat=chatId;
+      announce("Открою новый чат, когда вы завершите запись или отправите текст.");
+      return;
+    }
+    void openNotificationChat(chatId);
+  });
+  window.addEventListener("bulbam:voice-recording-finished",maybeOpenPendingNotification);
+  elements.messageInput.addEventListener("input",maybeOpenPendingNotification);
+  window.addEventListener("bulbam:profile-updated",event=>{
+    if(account?.userId===event.detail?.account?.userId)
+      account={...account,displayName:event.detail.account.displayName};
+  });
   window.addEventListener("bulbam:language-changed", () => {
     if(!account)return;
     // Regenerate dates, accessible chat previews and delivery statuses without
@@ -68,9 +100,10 @@ export function setupMessenger() {
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !account) return;
-    void refreshVisibleState();
-    if (!socket || socket.readyState > WebSocket.OPEN) connectRealtime();
+    void refreshVisibleState().then(openRequestedChat);
+    reconnectRealtime();
   });
+  window.addEventListener("focus",()=>{if(account)void openRequestedChat();});
 }
 
 export function getSelectedChat() {
@@ -88,12 +121,14 @@ export async function refreshChatsAfterExternalMessage() {
 
 async function switchAccount(nextAccount) {
   generation += 1;
+  pendingNotificationChat=null;
   account = nextAccount;
   logTraceEvent('Навигация','смена пользователя','',{active:Boolean(nextAccount)});
   chats = [];
   presenceByUserId.clear();
   selectedChat = null;
   messages = [];
+  queuedMessages.clear();
   resetVoicePlayers();
   stopRealtime();
   stopPolling();
@@ -110,7 +145,38 @@ async function switchAccount(nextAccount) {
   const currentGeneration = generation;
   await loadChats({ quiet: true });
   if (generation !== currentGeneration) return;
+  await openRequestedChat();
   connectRealtime();
+}
+
+function maybeOpenPendingNotification(){
+  if(!pendingNotificationChat || document.body.classList.contains("voice-recording") ||
+     elements.messageInput.value.trim())return;
+  const id=pendingNotificationChat;
+  pendingNotificationChat=null;
+  void openNotificationChat(id);
+}
+
+async function openNotificationChat(id){
+  if(!account)return;
+  let chat=chats.find(item=>item.conversationId===id);
+  if(!chat){
+    await loadChats({quiet:true});
+    chat=chats.find(item=>item.conversationId===id);
+  }
+  if(chat && account)await selectChat(chat,{focusHeading:true});
+}
+
+async function openRequestedChat() {
+  if(!account || typeof location==="undefined")return;
+  const id=takeRequestedChat(location.href,address=>history.replaceState(null,"",address));
+  if(!id)return;
+  let chat=chats.find(item=>item.conversationId===id);
+  if(!chat) {
+    await loadChats({quiet:true});
+    chat=chats.find(item=>item.conversationId===id);
+  }
+  if(chat)await selectChat(chat,{focusHeading:true});
 }
 
 function toggleSearchPanel() {
@@ -249,7 +315,9 @@ function renderChats() {
     preview.className = "chat-preview";
     preview.dataset.userContent = "true";
     const deliveryState = messageDeliveryState(chat.lastMessage, account.userId);
-    preview.textContent = [chatPreview(chat.lastMessage, account.userId), deliveryState].filter(Boolean).join(" · ");
+    const latestPreview=chatPreview(chat.lastMessage,account.userId);
+    button.dataset.searchPreview=latestPreview;
+    preview.textContent=[latestPreview,deliveryState].filter(Boolean).join(" · ");
 
     const time = document.createElement("time");
     time.className = "chat-time";
@@ -278,8 +346,10 @@ function renderChats() {
 
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
+  nextHistoryCursor=null;
+  if(historyButton)historyButton.hidden=true;
   if (jumpButton) jumpButton.hidden = true;
-  messages = [];
+  messages = [...(queuedMessages.forConversation(chat.conversationId))];
   resetVoicePlayers();
   renderChats();
   renderConversation();
@@ -295,9 +365,17 @@ async function loadMessages({ quiet = false } = {}) {
     const result = await api(`/api/v1/chats/${conversationId}/messages`);
     if (!selectedChat || selectedChat.conversationId !== conversationId) return;
     const serverMessages = result.messages ?? [];
+    const hasLoadedOlder=messages.some(message=>!message.localState &&
+      serverMessages.length && (message.createdAt<serverMessages[0].createdAt ||
+        (message.createdAt===serverMessages[0].createdAt && message.messageId<serverMessages[0].messageId)));
+    if(!hasLoadedOlder)nextHistoryCursor=result.hasMore && serverMessages.length
+      ? `${serverMessages[0].createdAt}_${serverMessages[0].messageId}` : null;
     logTraceEvent('Сервер','история чата загружена','',{messages:serverMessages.length});
-    const pending = messages.filter((message) => message.localState);
-    messages = serverMessages;
+    const pending = [...(queuedMessages.forConversation(conversationId))];
+    messages = hasLoadedOlder
+      ? [...new Map([...messages.filter(message=>!message.localState),...serverMessages]
+        .map(message=>[message.messageId,message])).values()]
+      : serverMessages;
     for (const local of pending) {
       if (!messages.some((message) => message.clientMessageId === local.clientMessageId)) {
         messages.push(local);
@@ -310,6 +388,31 @@ async function loadMessages({ quiet = false } = {}) {
   }
 }
 
+async function loadOlderMessages(){
+  if(!selectedChat || !nextHistoryCursor || loadingOlder)return;
+  const id=selectedChat.conversationId,cursor=nextHistoryCursor;
+  loadingOlder=true;
+  if(historyButton)historyButton.disabled=true;
+  const list=elements.messageList;
+  const height=list.scrollHeight,top=list.scrollTop;
+  try {
+    const result=await api(`/api/v1/chats/${id}/messages?before=${encodeURIComponent(cursor)}`);
+    if(selectedChat?.conversationId!==id)return;
+    const older=result.messages??[];
+    const byId=new Map([...older,...messages].map(message=>[message.messageId,message]));
+    messages=[...byId.values()];
+    nextHistoryCursor=result.hasMore && older.length
+      ? `${older[0].createdAt}_${older[0].messageId}` : null;
+    renderMessages({preserveVoicePlayback:true});
+    list.scrollTop=top+(list.scrollHeight-height);
+    if(historyButton && !historyButton.hidden)historyButton.focus({preventScroll:true});
+    else {
+      const first=list.querySelector(".message");
+      if(first){first.tabIndex=-1;first.focus({preventScroll:true});}
+    }
+  }catch(error){announce(`Не удалось загрузить предыдущие сообщения: ${error.message}`);}
+  finally{loadingOlder=false;if(historyButton)historyButton.disabled=false;}
+}
 function renderConversation() {
   const chat = selectedChat;
   resetVoicePlayers();
@@ -382,6 +485,14 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
   resetVoicePlayers();
   list.replaceChildren();
   if (!selectedChat) return;
+  if(historyButton) {
+    historyButton.hidden=!nextHistoryCursor;
+    if(nextHistoryCursor) {
+      const wrapper=document.createElement("li");
+      wrapper.append(historyButton);
+      list.append(wrapper);
+    }
+  }
 
   if (!messages.length) {
     const item = document.createElement("li");
@@ -519,18 +630,22 @@ async function sendCurrentMessage(event) {
     deliveredAt: null,
     localState: "pending"
   };
+  queuedMessages.add(pending);
   messages.push(pending);
   logTraceEvent('Интерфейс','сообщение поставлено в очередь','',{count:messages.length});
   elements.messageInput.value = "";
+  // The outgoing message is already pinned to its original conversation.
+  maybeOpenPendingNotification();
   renderMessages({ preserveVoicePlayback: true, scrollToBottom: true });
   await transmitPending(pending);
 }
 
 async function transmitPending(pending) {
-  if (!account || !selectedChat || pending.conversationId !== selectedChat.conversationId) return;
+  if (!account) return;
+  const sendingUserId=account.userId;
   pending.localState = "pending";
   logDiagnostic('Сеть','повтор или начало отправки текста');
-  renderMessages({ preserveVoicePlayback: true });
+  if(isDisplayedConversation(selectedChat,pending))renderMessages({ preserveVoicePlayback: true });
   try {
     const result = await api(`/api/v1/chats/${pending.conversationId}/messages`, {
       method: "POST",
@@ -539,19 +654,23 @@ async function transmitPending(pending) {
         text: pending.text
       })
     });
-    upsertServerMessage(result.message);
+    if(account?.userId!==sendingUserId)return;
+    queuedMessages.remove(pending);
+    if(isDisplayedConversation(selectedChat,pending))upsertServerMessage(result.message);
     logDiagnostic('Сеть','сообщение подтверждено сервером');
     announce("Сообщение отправлено.");
     await loadChats({ quiet: true });
   } catch (error) {
+    if(account?.userId!==sendingUserId)return;
     pending.localState = "failed";
     logDiagnostic('Ошибки','сообщение не отправлено',diagnosticErrorName(error));
-    renderMessages({ preserveVoicePlayback: true });
+    if(isDisplayedConversation(selectedChat,pending))renderMessages({ preserveVoicePlayback: true });
     announce(`Сообщение не отправлено: ${error.message}. Можно повторить отправку.`);
   }
 }
 
 function upsertServerMessage(message) {
+  if(!isDisplayedConversation(selectedChat,message))return;
   const existing = messages.find(
     (candidate) => candidate.messageId === message.messageId || candidate.clientMessageId === message.clientMessageId
   );
@@ -592,29 +711,11 @@ async function acknowledgeIncomingMessages(conversationId, candidates) {
 }
 
 function connectRealtime() {
-  if (!account || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
-  clearTimeout(reconnectTimer);
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  logDiagnostic('Сеть','начало подключения сокета сообщений');
-  socket = new WebSocket(`${protocol}//${location.host}/api/v1/realtime`);
-
-  socket.addEventListener("open", () => {
-    logDiagnostic("Сеть", "сокет сообщений подключён");
-    reconnectDelay = 1000;
-    stopPolling();
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
-      if (socket?.readyState === WebSocket.OPEN) socket.send("ping");
-    }, 25000);
-  });
-
-  socket.addEventListener("message", (event) => {
-    let payload;
-    try {
-      payload = JSON.parse(String(event.data));
-    } catch {
-      return;
-    }
+  if(!account || unsubscribeRealtime)return;
+  unsubscribeRealtime=subscribeRealtime(account.userId,{
+    open(){stopPolling();logDiagnostic("Сеть","сокет сообщений подключён");},
+    close(){if(account)startPolling();},
+    message(payload){
     const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed'];
     logDiagnostic('Сеть','получено событие сокета',known.includes(payload?.type)?payload.type:'другое');
     if (payload?.type === "message.created" && payload.message) {
@@ -623,6 +724,19 @@ function connectRealtime() {
     } else if(payload?.type==='chat.removed'){
       if(selectedChat?.conversationId===payload.conversationId){selectedChat=null;messages=[];renderConversation();}
       void loadChats({quiet:true});
+    } else if(payload?.type==="chat.profile-updated") {
+      const {userId,displayName}=payload;
+      if(typeof displayName!=="string" || !userId)return;
+      for(const chat of chats){
+        if(chat.peer?.userId===userId)chat.peer.displayName=displayName;
+        for(const member of chat.members??[])if(member.userId===userId)member.displayName=displayName;
+      }
+      if(selectedChat){
+        elements.conversationTitle.textContent=selectedChat.kind==="group"?selectedChat.title:selectedChat.peer.displayName;
+        renderMessages({preserveVoicePlayback:true});
+      }
+      renderChats();
+      updatePeerPresence();
     } else if(payload?.type==='chat.created'||payload?.type==='chat.updated'){
       void loadChats({quiet:true});
     } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {
@@ -630,12 +744,7 @@ function connectRealtime() {
     } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {
       handleVoiceProgress(payload);
     }
-  });
-
-  socket.addEventListener("close", handleRealtimeDisconnect);
-  socket.addEventListener("error", () => {
-    logDiagnostic('Ошибки','ошибка сокета сообщений');
-    try { socket?.close(); } catch {}
+  }
   });
 }
 
@@ -658,7 +767,8 @@ function handleRealtimeMessage(payload) {
 function handleVoiceProgress(payload) {
   if (selectedChat?.conversationId !== payload.conversationId) return;
   const message = messages.find((candidate) => candidate.messageId === payload.messageId);
-  if (message?.voice) message.voice.progress = payload.progress;
+  if(message?.voice && !(message.voice.progress?.completedAt && !payload.progress.completedAt))
+    message.voice.progress=payload.progress;
   applyRemoteVoiceProgress(payload.messageId, payload.progress, payload.active === true, payload.staleAt);
 }
 
@@ -694,29 +804,9 @@ function handleDeliveredReceipts(payload) {
   }
 }
 
-function handleRealtimeDisconnect() {
-  logDiagnostic("Сеть", "сокет сообщений отключён");
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = null;
-  socket = null;
-  if (!account) return;
-  startPolling();
-  clearTimeout(reconnectTimer);
-  const delay = reconnectDelay;
-  reconnectDelay = Math.min(15000, reconnectDelay * 2);
-  logTraceEvent('Сеть','переподключение сокета назначено','',{retryMs:delay,step:reconnectDelay});
-  reconnectTimer = setTimeout(connectRealtime, delay);
-}
-
-function stopRealtime() {
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = null;
-  if (socket) {
-    try { socket.close(); } catch {}
-  }
-  socket = null;
+function stopRealtime(){
+  unsubscribeRealtime?.();
+  unsubscribeRealtime=null;
 }
 
 function startPolling() {
@@ -786,6 +876,7 @@ function setupGroupEditor(){
   });
   document.querySelector('#group-info-open')?.addEventListener('click',()=>void openGroupMembers());
   document.querySelector('#group-members-close')?.addEventListener('click',()=>membersDialog.close());
+  document.querySelector('#group-members-delete')?.addEventListener('click',()=>void manageOwnGroup('delete'));
   document.querySelector('#group-members-add')?.addEventListener('click',()=>{
     membersDialog.close();openGroupEditor('add');
   });
@@ -896,6 +987,7 @@ async function openGroupMembers(){
   document.querySelector('#group-members-title').textContent=`Участники группы ${selectedChat.title}`;
   document.querySelector('#group-members-presence').textContent=groupPresenceLabel(selectedChat);
   document.querySelector('#group-members-add').hidden=selectedChat.ownerUserId!==account?.userId;
+  document.querySelector('#group-members-delete').hidden=selectedChat.ownerUserId!==account?.userId;
   const list=document.querySelector('#group-members-list');list.replaceChildren();
   renderGroupMembersList(list);
   dialog.showModal();
@@ -925,8 +1017,35 @@ function renderGroupMembersList(list){
       action.addEventListener('click',()=>void removeGroupUser(member));
       li.append(action);
     }
+    if(owner && member.userId!==account?.userId){
+      const transfer=document.createElement("button");transfer.type="button";
+      transfer.textContent="Передать права и выйти";
+      transfer.setAttribute("aria-label",`Передать права ${member.displayName} и выйти из группы`);
+      transfer.addEventListener("click",()=>void manageOwnGroup("transfer",member.userId));
+      li.append(transfer);
+    }
     list.append(li);
   }
+}
+
+async function manageOwnGroup(action,newOwnerUserId){
+  if(selectedChat?.kind!=="group"||selectedChat.ownerUserId!==account?.userId)return;
+  const id=selectedChat.conversationId;
+  const prompt=action==="delete"
+    ?"Удалить группу для всех участников вместе с историей сообщений?"
+    :"Передать права выбранному участнику и выйти из группы?";
+  if(!window.confirm(prompt))return;
+  try{
+    await api(`/api/v1/chats/${id}/group-actions`,{
+      method:"POST",body:JSON.stringify({action,newOwnerUserId})
+    });
+    document.querySelector("#group-members-dialog")?.close();
+    if(selectedChat?.conversationId===id){
+      selectedChat=null;messages=[];renderConversation();
+    }
+    await loadChats({quiet:true});
+    announce(action==="delete"?"Группа удалена.":"Права переданы. Вы вышли из группы.");
+  }catch(error){announce(`Не удалось изменить группу: ${error.message}`);}
 }
 
 async function removeGroupUser(member){

@@ -4,6 +4,9 @@ import { startCallTrace, logCallEvent } from "./call-event-log.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
 import { createCallHeadsetControls } from "./call-headset-controls.js";
+import { createCallWakeLock } from "./call-wake-lock.js";
+import { createCallPocketMode } from "./call-pocket-mode.js";
+import { createCallKeepaliveAudio } from "./call-keepalive-audio.js";
 import { switchCallAudioProfile, mediaErrorCategory } from "./call-audio-switch.js";
 import { logDiagnostic, diagnosticErrorName, logTraceEvent } from "./diagnostics-log.js";
 import { createCallNetworkRestoration } from "./call-network-restoration.js";
@@ -12,6 +15,7 @@ import { explainMicrophoneError } from "./microphone-permissions.js";
 import { classifyIceCandidate } from "./call-recovery-utils.js";
 import { describeCallDiagnostics, selectedCallRoute, formatCallDuration, turnAvailable, isTemporaryTurnOnly, setTemporaryTurnOnly, callIcePolicy } from "./call-monitor.js";
 import { api } from "./api.js";
+import { subscribeRealtime,reconnectRealtime } from "./shared-realtime.js";
 import {
   applySelectedAudioProfileToTrack,
   getSelectedAudioProfile,
@@ -32,9 +36,7 @@ let signalPollCursor = 0;
 let signalPollTimer = null;
 let statePollTimer = null;
 let ringTimeout = null;
-let callSocket = null;
-let reconnectTimer = null;
-let heartbeatTimer = null;
+let unsubscribeRealtime=null;
 let answeredLocally = false;
 let offerStarted = false;
 let restartInFlight = false;
@@ -64,6 +66,9 @@ let remoteNegotiationId = null;
 let remotePlaybackBlocked = false;
 let relayCandidateSeen = false;
 let headsetControls = null;
+let wakeLock = null;
+let pocketMode = null;
+let keepaliveAudio = null;
 let pendingFastRecovery = null;
 let profileSwitchEpoch = 0;
 let profileSwitchQueue = Promise.resolve();
@@ -126,22 +131,53 @@ function restoreCallAudioOnReturn() {
 }
 
 export function setupCalls() {
-  window.addEventListener("pagehide", markCallAudioInterrupted);
-  window.addEventListener("pageshow", restoreCallAudioOnReturn);
+  window.addEventListener("pagehide", ()=>{
+    markCallAudioInterrupted();
+    // Keepalive works during navigation when ordinary asynchronous requests
+    // would be cancelled. Expired leases remain a fallback if it fails.
+    if(!currentCall || !["ringing","accepted"].includes(currentCall.status))return;
+    const path=callPath("/end");
+    try{void fetch(path,{method:"POST",credentials:"same-origin",keepalive:true});}catch{}
+  });
+  window.addEventListener("pageshow", () => {
+    restoreCallAudioOnReturn();
+    if(currentCall?.status==="accepted")void keepaliveAudio?.resume();
+  });
+  wakeLock=createCallWakeLock(navigator,document);
+  pocketMode=createCallPocketMode(elements.callPanel,document.querySelector("#call-pocket"),announce);
+  keepaliveAudio=createCallKeepaliveAudio(document.querySelector("#call-keepalive-audio"),navigator);
+  document.querySelector("#call-pocket")?.addEventListener("click",()=>{
+    if(pocketMode?.enabled)pocketMode.exit();else pocketMode?.enter();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") markCallAudioInterrupted();
-    else restoreCallAudioOnReturn();
+    else {
+      restoreCallAudioOnReturn();
+      void wakeLock?.onVisible();
+      if(currentCall?.status==="accepted")void keepaliveAudio?.resume();
+    }
   });
   headsetControls = createCallHeadsetControls(navigator, {
-    onMute: (next) => setMuted(next),
+    onMute: (next) => {
+      const before=muted;
+      setMuted(next);
+      if(before!==muted){playCallCue(muted?"muted":"unmuted");}
+      void keepaliveAudio?.resume();
+    },
     onHangup: () => { if (currentCall) void endCall(); }
   });
   elements.callStartButton.addEventListener("click", () => {
     prepareRingback();
     prepareCallCues();
+    // Prime media playback in the actual tap gesture, before any network wait.
+    if(account && !elements.callStartButton.hidden)keepaliveAudio?.activate("Бульбам");
     void startCall();
   });
-  elements.callAnswerButton.addEventListener("click", () => { prepareCallCues(); void answerCall(); });
+  elements.callAnswerButton.addEventListener("click", () => {
+    prepareCallCues();
+    if(currentCall?.status==="ringing")keepaliveAudio?.activate(currentCall.peer.displayName);
+    void answerCall();
+  });
   elements.callDeclineButton.addEventListener("click", () => { prepareCallCues(); void declineCall(); });
   elements.callResumeButton.addEventListener("click", () => void resumeRecoveredCall());
   elements.callHandoffButton.addEventListener("click", () => void handoffCall());
@@ -190,6 +226,10 @@ export function setupCalls() {
   window.addEventListener("bulbam:account-changed", (event) => {
     void switchAccount(event.detail?.account ?? null);
   });
+  window.addEventListener("bulbam:profile-updated",event=>{
+    if(account?.userId===event.detail?.account?.userId)
+      account={...account,displayName:event.detail.account.displayName};
+  });
   window.addEventListener("bulbam:audio-profile-changed", () => {
     void applyAudioProfileDuringCall();
   });
@@ -211,7 +251,7 @@ export function setupCalls() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
-    if (account && !callSocket) connectCallRealtime();
+    if(account)reconnectRealtime();
     // A backgrounded iPhone may miss the remote hang-up WebSocket event.
     // Reconcile server state as soon as the app is visible again.
     if (currentCall) void pollCallState();
@@ -222,6 +262,14 @@ export function setupCalls() {
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "bulbam.call-push") {
         void handleVisibleCallPush(event.data.data ?? {});
+      } else if(event.data?.type==="bulbam.notification-open"){
+        const url=new URL(event.data.url??"/",location.origin);
+        if(url.origin===location.origin && url.searchParams.has("call")){
+          void handleVisibleCallPush({
+            callId:url.searchParams.get("call"),
+            conversationId:url.searchParams.get("chat")
+          },url.searchParams.get("answer")==="1");
+        }
       }
     });
   }
@@ -240,11 +288,16 @@ async function switchAccount(nextAccount) {
   await restoreCallFromUrl();
 }
 
-async function handleVisibleCallPush(data) {
-  if (!account || currentCall) return;
+async function handleVisibleCallPush(data,autoAnswer=false) {
+  if (!account) return;
   const callId = typeof data?.callId === "string" ? data.callId : "";
   const conversationId = typeof data?.conversationId === "string" ? data.conversationId : "";
   if (!callId || !conversationId) return;
+  if(currentCall){
+    if(autoAnswer && !answeredLocally && currentCall.callId===callId && currentCall.status==="ringing" &&
+       currentCall.direction==="incoming")void answerCall();
+    return;
+  }
 
   try {
     const result = await api(
@@ -261,6 +314,7 @@ async function handleVisibleCallPush(data) {
       void prefetchIceServers();
       startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      if(autoAnswer)void answerCall();
       return;
     }
 
@@ -280,6 +334,7 @@ async function startCall() {
   if (!account || currentCall) return;
   const chat = await selectedChatFromUi();
   if (!chat) {
+    keepaliveAudio?.deactivate();
     announce("Сначала откройте личный чат.");
     return;
   }
@@ -303,12 +358,13 @@ async function startCall() {
     startCallTrace("outgoing");
     showOutgoing(currentCall);
     startRingback();
-    void prewarmOutgoingPeerConnection();
+    void beginOfferIfNeeded(); // Start SDP/ICE gathering while the other phone rings.
     startCallPolling();
     ringTimeout = setTimeout(() => void timeoutRinging(), 60_000);
     announce(`Звоним ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
     stopLocalStream();
+    keepaliveAudio?.deactivate();
     announce(`Не удалось начать звонок: ${friendlyMediaError(error)}`);
   } finally {
     elements.callStartButton.disabled = false;
@@ -359,6 +415,7 @@ async function answerCall() {
     answeredLocally = false;
     cleanupPeerConnection();
     stopLocalStream();
+    keepaliveAudio?.deactivate();
     elements.callAnswerButton.hidden = false;
     elements.callDeclineButton.hidden = false;
     setCallStatus(`Не удалось ответить: ${friendlyMediaError(error)}`);
@@ -532,46 +589,19 @@ async function selectedChatFromUi() {
   return (result.chats ?? []).find((chat) => chat.peer?.username === username) ?? null;
 }
 
-function connectCallRealtime() {
-  if (!account || callSocket?.readyState === WebSocket.OPEN || callSocket?.readyState === WebSocket.CONNECTING) return;
-  clearTimeout(reconnectTimer);
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  callSocket = new WebSocket(`${protocol}//${location.host}/api/v1/realtime`);
-
-  callSocket.addEventListener("open", () => {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
-      if (callSocket?.readyState === WebSocket.OPEN) callSocket.send("ping");
-    }, 25_000);
-  });
-  callSocket.addEventListener("message", (event) => {
-    let payload;
-    try { payload = JSON.parse(String(event.data)); } catch { return; }
-    void handleCallEvent(payload).catch((error) => {
-      logDiagnostic("Ошибки", "обработка события звонка", diagnosticErrorName(error));
-    });
-  });
-  callSocket.addEventListener("close", () => {
-    callSocket = null;
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-    if (!account) return;
-    reconnectTimer = setTimeout(connectCallRealtime, 2_000);
-  });
-  callSocket.addEventListener("error", () => {
-    try { callSocket?.close(); } catch {}
+function connectCallRealtime(){
+  if(!account || unsubscribeRealtime)return;
+  unsubscribeRealtime=subscribeRealtime(account.userId,{
+    message(payload){
+      void handleCallEvent(payload).catch(error=>{
+        logDiagnostic("Ошибки","обработка события звонка",diagnosticErrorName(error));
+      });
+    }
   });
 }
-
-function closeCallRealtime() {
-  clearTimeout(reconnectTimer);
-  clearInterval(heartbeatTimer);
-  reconnectTimer = null;
-  heartbeatTimer = null;
-  if (callSocket) {
-    try { callSocket.close(); } catch {}
-  }
-  callSocket = null;
+function closeCallRealtime(){
+  unsubscribeRealtime?.();
+  unsubscribeRealtime=null;
 }
 
 async function handleCallEvent(event) {
@@ -637,12 +667,19 @@ async function handleCallEvent(event) {
   }
 
   if (event.type === "call.answered") {
-    if (currentCall.status === "accepted") return;
+    if(event.actorUserId===account.userId && event.actorSessionId){
+      currentCall.sessionOwnerId=event.actorSessionId;
+    }
+    if (currentCall.status === "accepted") {
+      if(recoveryPending)showRecoveredCall("Звонок принят на другом устройстве.");
+      return;
+    }
     logCallEvent("звонок принят");
     stopRingback();
     playCallCue("answered");
     currentCall.status = "accepted";
     currentCall.answeredAt = event.answeredAt ?? Date.now();
+
     clearTimeout(ringTimeout);
     ringTimeout = null;
     if (currentCall.direction === "outgoing") {
@@ -655,7 +692,9 @@ async function handleCallEvent(event) {
         await beginOfferIfNeeded();
       }
     } else if (!answeredLocally) {
-      finishCall("На звонок ответили на другом устройстве.");
+      recoveryPending=true;
+      showRecoveredCall("На звонок ответили на другом устройстве. Можно перенести его сюда.");
+      startStatePolling();
     }
     return;
   }
@@ -671,6 +710,9 @@ async function handleCallEvent(event) {
     return;
   }
   if (event.type === "call.signal" && event.signal) {
+    // Never create a microphone or accept an offer before the callee answers.
+    // The room retains pre-offer signals for the first accepted-state poll.
+    if(currentCall.status==="ringing" && currentCall.direction==="incoming")return;
     if (recoveryPending) { logCallEvent("пауза сигналов"); return; }
     await enqueueSignal(event.signal);
   }
@@ -1413,7 +1455,9 @@ async function pollCallState() {
           await beginOfferIfNeeded();
         }
       } else if (!answeredLocally) {
-        finishCall("На звонок ответили на другом устройстве.");
+        recoveryPending=true;
+        showRecoveredCall("На звонок ответили на другом устройстве. Можно перенести его сюда.");
+        startStatePolling();
       }
       return;
     }
@@ -1439,6 +1483,8 @@ async function restoreCallFromUrl() {
   const callId = url.searchParams.get("call");
   const conversationId = url.searchParams.get("chat");
   if (!callId || !conversationId || !account) return;
+  const autoAnswer=url.searchParams.get("answer")==="1";
+  url.searchParams.delete("answer");
   url.searchParams.delete("call");
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 
@@ -1453,6 +1499,7 @@ async function restoreCallFromUrl() {
       startStatePolling();
       elements.callTitle.focus();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      if(autoAnswer)void answerCall();
     } else if (currentCall?.status === "ringing" || currentCall?.status === "accepted") {
       recoveryPending = true;
       showRecoveredCall(
@@ -1511,6 +1558,7 @@ async function requestMicrophone() {
 function showIncoming(call) {
   startCallTimer();
   elements.callPanel.hidden = false;
+  void wakeLock?.activate();
   setCallPresentation("incoming");
   elements.callTitle.textContent = "Входящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
@@ -1529,6 +1577,7 @@ function showIncoming(call) {
 function showOutgoing(call) {
   startCallTimer();
   elements.callPanel.hidden = false;
+  void wakeLock?.activate();
   setCallPresentation("outgoing");
   elements.callTitle.textContent = "Исходящий звонок";
   elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
@@ -1551,6 +1600,8 @@ function showConnectedControls(status) {
   if (currentCall?.status === "accepted" && !audioConnectedOnce)
     initialConnectionWatchdog.arm(currentCall.callId);
   elements.callPanel.hidden = false;
+  void wakeLock?.activate();
+  if(currentCall?.status==="accepted")keepaliveAudio?.activate(currentCall.peer.displayName);
   const focusMoved = [elements.callAnswerButton, elements.callResumeButton].includes(document.activeElement);
   setCallPresentation("connected");
   elements.callTitle.textContent = "Аудиозвонок";
@@ -1572,6 +1623,7 @@ function showRecoveredCall(status) {
   startCallTimer();
   if (!currentCall) return;
   elements.callPanel.hidden = false;
+  void wakeLock?.activate();
   setCallPresentation("connected");
   elements.callTitle.textContent = "Активный звонок";
   elements.callPeer.textContent = `${currentCall.peer.displayName}, @${currentCall.peer.username}`;
@@ -1635,6 +1687,12 @@ function renderIdle() {
 }
 
 function setCallPresentation(mode) {
+  const pocketButton=document.querySelector("#call-pocket");
+  if(pocketButton && !pocketMode?.enabled)
+    pocketButton.hidden=!(currentCall && ["ringing","accepted"].includes(currentCall.status)) ||
+      elements.callPanel.classList.contains("is-minimized");
+  if(mode==="finished")elements.callPanel.classList.add("is-finished");
+  else elements.callPanel.classList.remove("is-finished");
   elements.callDiagnostics.hidden = !(mode === "incoming" || mode === "outgoing" || mode === "connected");
   if (["incoming", "outgoing", "finished", "idle"].includes(mode)) {
     elements.callPanel.classList.remove("is-minimized");
@@ -1644,7 +1702,7 @@ function setCallPresentation(mode) {
   elements.callMinimizeButton.hidden = !canMinimize || minimized;
   elements.callExpandButton.hidden = !canMinimize || !minimized;
   elements.callDismissButton.hidden = mode !== "finished";
-  const fullScreen = !elements.callPanel.hidden && !minimized;
+  const fullScreen = !elements.callPanel.hidden && !minimized && mode !== "finished";
   const shell = document.querySelector(".messenger-shell");
   if (shell) shell.inert = fullScreen;
   if (fullScreen) elements.callPanel.setAttribute?.("aria-modal", "true");
@@ -1738,6 +1796,9 @@ function setMuted(nextMuted) {
 
 function cleanupMedia() {
   initialConnectionWatchdog.disarm();
+  void wakeLock?.deactivate();
+  pocketMode?.reset();
+  keepaliveAudio?.deactivate();
   recoveryGate.reset();
   networkRestoration.reset();
   pendingFastRecovery = null;
@@ -1809,6 +1870,9 @@ function stopLocalStream() {
 
 function resetCallRuntime() {
   initialConnectionWatchdog.disarm();
+  void wakeLock?.deactivate();
+  pocketMode?.reset();
+  keepaliveAudio?.deactivate();
   recoveryGate.reset();
   networkRestoration.reset();
   pendingFastRecovery = null;

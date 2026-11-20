@@ -100,16 +100,45 @@ export class MessagingService {
     return {removedUserId:userId};
   }
 
+  async manageGroup(actor:MessagingActor,rawConversationId:string,body:Record<string,unknown>) {
+    const group=await this.requireGroup(rawConversationId,actor.userId);
+    if(group.ownerUserId!==actor.userId)throw new ApiError(403,"group_owner_only","Изменять владельца или удалять группу может только создатель.");
+    const members=(await this.repository.listGroupMembers(group.conversationId)).map(member=>member.userId);
+    if(body.action==="transfer") {
+      const nextOwner=validateUserId(body.newOwnerUserId);
+      if(nextOwner===actor.userId||!members.includes(nextOwner))
+        badRequest("invalid_group_owner","Выберите другого участника группы.");
+      await this.repository.transferGroupOwner(group.conversationId,actor.userId,nextOwner);
+      await this.realtime.publishToUsers([actor.userId],{type:"chat.removed",conversationId:group.conversationId});
+      await this.realtime.publishToUsers(members.filter(id=>id!==actor.userId),{type:"chat.updated",conversationId:group.conversationId});
+      return {action:"transfer",newOwnerUserId:nextOwner};
+    }
+    if(body.action==="delete") {
+      await this.repository.deleteGroup(group.conversationId);
+      await this.realtime.publishToUsers(members,{type:"chat.removed",conversationId:group.conversationId});
+      return {action:"delete"};
+    }
+    badRequest("invalid_group_action","Выберите действие с группой.");
+  }
+
   private async requireGroup(rawConversationId:string,userId:string):Promise<GroupConversation> {
     const conversation=await this.requireConversation(validateConversationId(rawConversationId),userId);
     if(!('title' in conversation))notFound('group_not_found','Группа не найдена.');
     return conversation as GroupConversation;
   }
 
-  async listMessages(actor: MessagingActor, rawConversationId: string) {
+  async listMessages(actor: MessagingActor, rawConversationId: string, before?: {createdAt:number;messageId:string}) {
+    return (await this.listMessagesPage(actor,rawConversationId,before)).messages;
+  }
+
+  async listMessagesPage(actor: MessagingActor, rawConversationId: string, before?: {createdAt:number;messageId:string}) {
     const conversationId = validateConversationId(rawConversationId);
     const conversation=await this.requireConversation(conversationId, actor.userId);
-    const messages=await this.repository.listMessages(conversationId, 200, actor.userId);
+    if(before && (!Number.isSafeInteger(before.createdAt) || before.createdAt<=0 || !/^[0-9a-f-]{36}$/i.test(before.messageId)))
+      badRequest("invalid_message_cursor","Неверная позиция загрузки сообщений.");
+    const received=await this.repository.listMessages(conversationId, 201, actor.userId,before);
+    const hasMore=received.length>200;
+    const messages=hasMore?received.slice(1):received;
     if ('title' in conversation) {
       const ownMessages=messages.filter(m=>m.senderUserId===actor.userId);
       const readers=await this.repository.listMessageReaders(conversationId,ownMessages.map(m=>m.messageId));
@@ -122,7 +151,7 @@ export class MessagingService {
         ).length;
       }
     }
-    return messages;
+    return {messages,hasMore};
   }
 
   async sendMessage(

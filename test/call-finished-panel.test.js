@@ -20,6 +20,22 @@ describe("finished call panel", () => {
     expect(panel.hidden).toBe(true);
   });
 
+  test("dismissal clears modal state and unblocks the messenger shell",()=>{
+    const original=globalThis.document;
+    const shell={inert:true};
+    const calls=[];
+    globalThis.document={querySelector:selector=>selector===".messenger-shell"?shell:null};
+    try{
+      const panel={hidden:false,removeAttribute:name=>calls.push(name)};
+      expect(releaseFinishedCallPanel(panel,[{hidden:true}])).toBe(true);
+      expect(panel.hidden).toBe(true);
+      expect(calls).toEqual(["aria-modal"]);
+      expect(shell.inert).toBe(false);
+    }finally{
+      if(original===undefined)delete globalThis.document;else globalThis.document=original;
+    }
+  });
+
   test("ringing, recovery or connected call remains active", () => {
     const panel = { hidden: false };
     const controls = [{ hidden: true }, { hidden: false }];
