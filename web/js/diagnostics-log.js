@@ -89,6 +89,8 @@ export function describeApiOperation(path, method = "GET") {
   else if (pathname === "/api/v1/voice/settings") label = "настройки голосовых";
   else if (/\/receipts\/(?:delivered|read)$/.test(pathname)) label = "подтверждение сообщений";
   else if (/\/voice\/uploads/.test(pathname)) label = "загрузка голосового";
+  else if (/\/files\/uploads/.test(pathname)) label = "загрузка файла";
+  else if (/\/messages\/[^/]+\/file$/.test(pathname)) label = "файл";
   else if (/\/messages(?:\/|$)/.test(pathname)) label = "сообщения";
   else if (/\/chats(?:\/|$)/.test(pathname)) label = "чаты";
   else if (/\/sessions/.test(pathname)) label = "сеансы";

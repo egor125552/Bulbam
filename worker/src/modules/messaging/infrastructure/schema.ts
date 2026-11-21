@@ -1,5 +1,18 @@
 import type { D1Database } from "../../../platform/cloudflare";
 
+const FILE_ATTACHMENTS_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS file_message_attachments (
+    message_id TEXT PRIMARY KEY,
+    object_key TEXT NOT NULL UNIQUE,
+    file_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    media_kind TEXT NOT NULL CHECK (media_kind IN ('image', 'video', 'audio', 'file')),
+    size_bytes INTEGER NOT NULL,
+    FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_file_attachments_object ON file_message_attachments(object_key)"
+] as const;
+
 const migrations = [
   {
     version: 1,
@@ -97,18 +110,11 @@ const migrations = [
   },
   {
     version: 5,
-    statements: [
-      `CREATE TABLE IF NOT EXISTS file_message_attachments (
-        message_id TEXT PRIMARY KEY,
-        object_key TEXT NOT NULL UNIQUE,
-        file_name TEXT NOT NULL,
-        mime_type TEXT NOT NULL,
-        media_kind TEXT NOT NULL CHECK (media_kind IN ('image', 'video', 'audio', 'file')),
-        size_bytes INTEGER NOT NULL,
-        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
-      )`,
-      "CREATE INDEX IF NOT EXISTS idx_file_attachments_object ON file_message_attachments(object_key)"
-    ]
+    statements: FILE_ATTACHMENTS_STATEMENTS
+  },
+  {
+    version: 6,
+    statements: FILE_ATTACHMENTS_STATEMENTS
   }
 ] as const;
 
@@ -122,6 +128,10 @@ export function ensureMessagingSchema(db: D1Database): Promise<void> {
     });
   }
   return initialization;
+}
+
+export function resetMessagingSchemaCache(): void {
+  initialization = null;
 }
 
 async function runStatement(db: D1Database, sql: string): Promise<void> {
@@ -158,6 +168,39 @@ async function initialize(db: D1Database): Promise<void> {
       .bind("messaging", migration.version, Date.now())
       .run();
   }
+
+  // Defensive invariant: even if an older deployment already wrote version 5/6
+  // into schema_migrations, guarantee file_message_attachments actually exists.
+  await ensureFileAttachmentsTable(db);
+}
+
+async function ensureFileAttachmentsTable(db: D1Database): Promise<void> {
+  const existing = await db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_message_attachments'")
+    .first<{ name: string }>();
+
+  if (!existing) {
+    for (const statement of FILE_ATTACHMENTS_STATEMENTS) {
+      await runStatement(db, statement);
+    }
+    return;
+  }
+
+  const info = await db.prepare("PRAGMA table_info(file_message_attachments)").all<{ name: string }>();
+  const columns = new Set((info.results ?? []).map((item) => String(item.name ?? "")));
+  if (!columns.has("file_name")) {
+    await runStatement(db, "ALTER TABLE file_message_attachments ADD COLUMN file_name TEXT NOT NULL DEFAULT 'file'");
+  }
+  if (!columns.has("mime_type")) {
+    await runStatement(db, "ALTER TABLE file_message_attachments ADD COLUMN mime_type TEXT NOT NULL DEFAULT 'application/octet-stream'");
+  }
+  if (!columns.has("media_kind")) {
+    await runStatement(db, "ALTER TABLE file_message_attachments ADD COLUMN media_kind TEXT NOT NULL DEFAULT 'file'");
+  }
+  if (!columns.has("size_bytes")) {
+    await runStatement(db, "ALTER TABLE file_message_attachments ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0");
+  }
+  await runStatement(db, "CREATE INDEX IF NOT EXISTS idx_file_attachments_object ON file_message_attachments(object_key)");
 }
 
 // D1 migration batches are not guaranteed to be atomic. A transient Worker

@@ -311,4 +311,39 @@ describe("file transfer & inline media playback end-to-end", () => {
     );
     await expectStatus(inspectResp, 404);
   }, 30_000);
+
+  test("self-heals missing file_message_attachments table when schema_migrations already recorded version 5", async () => {
+    await seedInvite("BULBAM-FILE-HEAL-0001", "inv-heal-1");
+    await seedInvite("BULBAM-FILE-HEAL-0002", "inv-heal-2");
+    const alice = await register({ username: "heal_alice", displayName: "Алиса", inviteCode: "BULBAM-FILE-HEAL-0001" });
+    const bob = await register({ username: "heal_bob", displayName: "Боб", inviteCode: "BULBAM-FILE-HEAL-0002" });
+    const chat = await openChat(alice, bob);
+
+    // Simulate production D1 where schema_migrations already had ('messaging', 5)
+    // from an earlier deployment without the file_message_attachments table.
+    const env = await testEnv();
+    await env.DB.prepare("DROP TABLE IF EXISTS file_message_attachments").run();
+    await env.DB
+      .prepare("DELETE FROM schema_migrations WHERE module = 'messaging' AND version >= 5")
+      .run();
+    await env.DB
+      .prepare("INSERT OR REPLACE INTO schema_migrations (module, version, applied_at) VALUES ('messaging', 5, ?)")
+      .bind(Date.now())
+      .run();
+
+    // Also verify cached schema promise recovery works when table is missing while warm.
+    const presenceResp = await api("/api/v1/presence", alice.cookie);
+    await expectStatus(presenceResp, 200);
+
+    const chatsResp = await api("/api/v1/chats", alice.cookie);
+    await expectStatus(chatsResp, 200);
+    const chatsData = await json(chatsResp);
+    expect(chatsData.chats.some((item) => item.conversationId === chat.conversationId)).toBe(true);
+
+    const reopenResp = await api("/api/v1/chats/direct", alice.cookie, {
+      method: "POST",
+      body: JSON.stringify({ userId: bob.account.userId })
+    });
+    await expectStatus(reopenResp, 200);
+  }, 30_000);
 });

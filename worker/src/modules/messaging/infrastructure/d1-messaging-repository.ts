@@ -9,7 +9,7 @@ import type {
   VoiceListenUpdate
 } from "../domain/models";
 import type { InsertMessageResult, MessagingRepository } from "../ports/messaging-repository";
-import { ensureMessagingSchema } from "./schema";
+import { ensureMessagingSchema, resetMessagingSchemaCache } from "./schema";
 
 type Row = Record<string, unknown>;
 
@@ -70,6 +70,19 @@ export class D1MessagingRepository implements MessagingRepository {
 
   initialize(): Promise<void> {
     return ensureMessagingSchema(this.db);
+  }
+
+  private async runWithSchemaRepair<T>(operation: () => Promise<T>): Promise<T> {
+    await this.initialize();
+    try {
+      return await operation();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "");
+      if (!/no such (?:table|column)/i.test(message)) throw error;
+      resetMessagingSchemaCache();
+      await this.initialize();
+      return operation();
+    }
   }
 
   async getOrCreateDirectConversation(userId: string, peerUserId: string, now: number): Promise<DirectConversation> {
@@ -210,25 +223,26 @@ export class D1MessagingRepository implements MessagingRepository {
   }
 
   async listMessages(conversationId: string, limit: number, viewerUserId: string): Promise<StoredMessage[]> {
-    await this.initialize();
-    const result = await this.db
-      .prepare(`
-        SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
-          own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at
-        FROM messages m
-        ${MESSAGE_JOINS}
-        LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
-        JOIN conversations c ON c.conversation_id=m.conversation_id
-        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-        WHERE m.conversation_id = ?
-        AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
-          (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-        ORDER BY m.created_at DESC, m.message_id DESC
-        LIMIT ?
-      `)
-      .bind(viewerUserId,viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
-      .all<Row>();
-    return (result.results ?? []).map((row) => mapMessage(row, viewerUserId)).reverse();
+    return this.runWithSchemaRepair(async () => {
+      const result = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
+            own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at
+          FROM messages m
+          ${MESSAGE_JOINS}
+          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+          JOIN conversations c ON c.conversation_id=m.conversation_id
+          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+          WHERE m.conversation_id = ?
+          AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
+            (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+          ORDER BY m.created_at DESC, m.message_id DESC
+          LIMIT ?
+        `)
+        .bind(viewerUserId,viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
+        .all<Row>();
+      return (result.results ?? []).map((row) => mapMessage(row, viewerUserId)).reverse();
+    });
   }
 
   async insertMessage(input: StoredMessage): Promise<InsertMessageResult> {
@@ -335,51 +349,52 @@ export class D1MessagingRepository implements MessagingRepository {
     messageIds: string[],
     now: number
   ): Promise<DeliveryReceiptUpdate[]> {
-    await this.initialize();
-    if (!messageIds.length) return [];
+    return this.runWithSchemaRepair(async () => {
+      if (!messageIds.length) return [];
 
-    const placeholders = messageIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(`
-        SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
-          own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
-        FROM messages m
-        ${MESSAGE_JOINS}
-        JOIN conversations c ON c.conversation_id=m.conversation_id
-        LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
-        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-        WHERE m.conversation_id = ?
-          AND m.message_id IN (${placeholders})
-          AND m.sender_user_id <> ?
-          AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-      `)
-      .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
-      .all<Row>();
+      const placeholders = messageIds.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
+            own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
+          FROM messages m
+          ${MESSAGE_JOINS}
+          JOIN conversations c ON c.conversation_id=m.conversation_id
+          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+          WHERE m.conversation_id = ?
+            AND m.message_id IN (${placeholders})
+            AND m.sender_user_id <> ?
+            AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+        `)
+        .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
+        .all<Row>();
 
-    const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
-    const pending = messages.filter((message) => message.deliveredAt === null);
-    if (pending.length) {
-      await this.db.batch(
-        pending.map((message) =>
-          this.db
-            .prepare(`
-              INSERT INTO message_receipts (message_id, recipient_user_id, delivered_at, read_at)
-              VALUES (?, ?, ?, NULL)
-              ON CONFLICT(message_id, recipient_user_id) DO UPDATE SET
-                delivered_at = COALESCE(message_receipts.delivered_at, excluded.delivered_at)
-            `)
-            .bind(message.messageId, recipientUserId, now)
-        )
-      );
-    }
-
-    return messages.map((message) => ({
-      changed: message.deliveredAt === null,
-      message: {
-        ...message,
-        deliveredAt: message.deliveredAt ?? now
+      const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
+      const pending = messages.filter((message) => message.deliveredAt === null);
+      if (pending.length) {
+        await this.db.batch(
+          pending.map((message) =>
+            this.db
+              .prepare(`
+                INSERT INTO message_receipts (message_id, recipient_user_id, delivered_at, read_at)
+                VALUES (?, ?, ?, NULL)
+                ON CONFLICT(message_id, recipient_user_id) DO UPDATE SET
+                  delivered_at = COALESCE(message_receipts.delivered_at, excluded.delivered_at)
+              `)
+              .bind(message.messageId, recipientUserId, now)
+          )
+        );
       }
-    }));
+
+      return messages.map((message) => ({
+        changed: message.deliveredAt === null,
+        message: {
+          ...message,
+          deliveredAt: message.deliveredAt ?? now
+        }
+      }));
+    });
   }
 
   async markMessagesRead(
@@ -388,90 +403,93 @@ export class D1MessagingRepository implements MessagingRepository {
     messageIds: string[],
     now: number
   ): Promise<DeliveryReceiptUpdate[]> {
-    await this.initialize();
-    if (!messageIds.length) return [];
+    return this.runWithSchemaRepair(async () => {
+      if (!messageIds.length) return [];
 
-    const placeholders = messageIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(`
-        SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
-          own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
-        FROM messages m
-        ${MESSAGE_JOINS}
-        JOIN conversations c ON c.conversation_id=m.conversation_id
-        LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
-        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-        WHERE m.conversation_id = ?
-          AND m.message_id IN (${placeholders})
-          AND m.sender_user_id <> ?
-          AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-      `)
-      .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
-      .all<Row>();
+      const placeholders = messageIds.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
+            own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
+          FROM messages m
+          ${MESSAGE_JOINS}
+          JOIN conversations c ON c.conversation_id=m.conversation_id
+          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+          WHERE m.conversation_id = ?
+            AND m.message_id IN (${placeholders})
+            AND m.sender_user_id <> ?
+            AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+        `)
+        .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
+        .all<Row>();
 
-    const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
-    const pending = messages.filter((message) => message.readAt === null);
-    if (pending.length) {
-      await this.db.batch(
-        pending.map((message) =>
-          this.db
-            .prepare(`
-              INSERT INTO message_receipts (message_id, recipient_user_id, delivered_at, read_at)
-              VALUES (?, ?, ?, ?)
-              ON CONFLICT(message_id, recipient_user_id) DO UPDATE SET
-                delivered_at = COALESCE(message_receipts.delivered_at, excluded.delivered_at),
-                read_at = COALESCE(message_receipts.read_at, excluded.read_at)
-            `)
-            .bind(message.messageId, recipientUserId, message.deliveredAt ?? now, now)
-        )
-      );
-    }
-
-    return messages.map((message) => ({
-      changed: message.readAt === null,
-      message: {
-        ...message,
-        deliveredAt: message.deliveredAt ?? now,
-        readAt: message.readAt ?? now
+      const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
+      const pending = messages.filter((message) => message.readAt === null);
+      if (pending.length) {
+        await this.db.batch(
+          pending.map((message) =>
+            this.db
+              .prepare(`
+                INSERT INTO message_receipts (message_id, recipient_user_id, delivered_at, read_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(message_id, recipient_user_id) DO UPDATE SET
+                  delivered_at = COALESCE(message_receipts.delivered_at, excluded.delivered_at),
+                  read_at = COALESCE(message_receipts.read_at, excluded.read_at)
+              `)
+              .bind(message.messageId, recipientUserId, message.deliveredAt ?? now, now)
+          )
+        );
       }
-    }));
+
+      return messages.map((message) => ({
+        changed: message.readAt === null,
+        message: {
+          ...message,
+          deliveredAt: message.deliveredAt ?? now,
+          readAt: message.readAt ?? now
+        }
+      }));
+    });
   }
 
   async findLatestMessage(conversationId: string): Promise<StoredMessage | null> {
-    await this.initialize();
-    const row = await this.db
-      .prepare(`
-        SELECT ${MESSAGE_COLUMNS}
-        FROM messages m
-        ${MESSAGE_JOINS}
-        WHERE m.conversation_id = ?
-        ORDER BY m.created_at DESC, m.message_id DESC
-        LIMIT 1
-      `)
-      .bind(null,null,conversationId)
-      .first<Row>();
-    return row ? mapMessage(row) : null;
+    return this.runWithSchemaRepair(async () => {
+      const row = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}
+          FROM messages m
+          ${MESSAGE_JOINS}
+          WHERE m.conversation_id = ?
+          ORDER BY m.created_at DESC, m.message_id DESC
+          LIMIT 1
+        `)
+        .bind(null,null,conversationId)
+        .first<Row>();
+      return row ? mapMessage(row) : null;
+    });
   }
 
   async findMessageForUser(conversationId: string, messageId: string, userId: string): Promise<StoredMessage | null> {
-    await this.initialize();
-    const row = await this.db
-      .prepare(`
-        SELECT ${MESSAGE_COLUMNS}
-        FROM messages m
-        ${MESSAGE_JOINS}
-        JOIN conversations c ON c.conversation_id = m.conversation_id
-        LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-        WHERE m.conversation_id = ?
-          AND m.message_id = ?
-          AND ((c.kind='direct' AND (c.participant_a_id = ? OR c.participant_b_id = ?))
-            OR (c.kind='group' AND gm.user_id IS NOT NULL AND
-              (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-        LIMIT 1
-      `)
-      .bind(userId,userId,userId, conversationId, messageId, userId, userId)
-      .first<Row>();
-    return row ? mapMessage(row, userId) : null;
+    return this.runWithSchemaRepair(async () => {
+      const row = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}
+          FROM messages m
+          ${MESSAGE_JOINS}
+          JOIN conversations c ON c.conversation_id = m.conversation_id
+          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+          WHERE m.conversation_id = ?
+            AND m.message_id = ?
+            AND ((c.kind='direct' AND (c.participant_a_id = ? OR c.participant_b_id = ?))
+              OR (c.kind='group' AND gm.user_id IS NOT NULL AND
+                (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+          LIMIT 1
+        `)
+        .bind(userId,userId,userId, conversationId, messageId, userId, userId)
+        .first<Row>();
+      return row ? mapMessage(row, userId) : null;
+    });
   }
 
   async updateVoiceListening(
@@ -585,17 +603,19 @@ export class D1MessagingRepository implements MessagingRepository {
   }
 
   private async findByClientMessageId(senderUserId: string, clientMessageId: string): Promise<StoredMessage | null> {
-    const row = await this.db
-      .prepare(`
-        SELECT ${MESSAGE_COLUMNS}
-        FROM messages m
-        ${MESSAGE_JOINS}
-        WHERE m.sender_user_id = ? AND m.client_message_id = ?
-        LIMIT 1
-      `)
-      .bind(senderUserId,senderUserId,senderUserId, clientMessageId)
-      .first<Row>();
-    return row ? mapMessage(row) : null;
+    return this.runWithSchemaRepair(async () => {
+      const row = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}
+          FROM messages m
+          ${MESSAGE_JOINS}
+          WHERE m.sender_user_id = ? AND m.client_message_id = ?
+          LIMIT 1
+        `)
+        .bind(senderUserId,senderUserId,senderUserId, clientMessageId)
+        .first<Row>();
+      return row ? mapMessage(row) : null;
+    });
   }
 }
 
