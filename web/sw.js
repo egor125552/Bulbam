@@ -312,7 +312,10 @@ self.addEventListener("fetch", (event) => {
       const cached = await cache.match(request);
       if (cached) return cached;
       const response = await fetch(request);
-      if (response.ok) void cache.put(request, response.clone()).catch(() => {});
+      const contentType = response.headers.get("content-type") || "";
+      if (response.ok && /javascript|ecmascript/i.test(contentType)) {
+        void cache.put(request, response.clone()).catch(() => {});
+      }
       return response;
     })());
     return;

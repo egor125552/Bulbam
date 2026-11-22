@@ -9,6 +9,7 @@ const result = await build({
   write: false,
   format: "esm",
   minify: true,
+  charset: "utf8",
   target: ["safari16", "chrome110", "firefox115"],
   legalComments: "none"
 });
@@ -20,7 +21,10 @@ const index = await readFile(indexPath, "utf8");
 // CSS URLs are content-versioned just like the JS bundle. The service worker
 // serves cached styles before background refresh, so unversioned URLs could
 // keep shipping obsolete iPhone/VoiceOver layouts after a successful deploy.
-let revised = index.replace(/\/boot(?:\.bundle|\.[a-f0-9]{12})?\.js/g, `/${file}`);
+let revised = index.replace(/\/boot\.(?:bundle|[a-f0-9]{12})\.js/g, `/${file}`);
+if (revised === index && !index.includes(`/${file}`)) {
+  revised = index.replace(/\/boot\.js(?!\?fallback=1)/g, `/${file}`);
+}
 if (revised === index && !index.includes(`/${file}`)) throw Error("Boot import not found in HTML");
 for (const stylesheet of ["styles.css", "canonical-ui.css"]) {
   const cssHash = createHash("sha256")
