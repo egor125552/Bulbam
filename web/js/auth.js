@@ -271,6 +271,7 @@ async function register(event) {
     announce(`Аккаунт ${result.account.displayName} создан. Вы уже вошли в Бульбам.`);
     scheduleOptionalNameSetup(result.recoveryCodes);
     showRecoveryCodes(result.recoveryCodes);
+    window.dispatchEvent(new CustomEvent("bulbam:registered", { detail: { account: result.account } }));
     await loadSessions({ quiet: true });
   } catch (error) {
     announce(`Регистрация не удалась: ${error.message}`);

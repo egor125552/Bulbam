@@ -8,9 +8,9 @@
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=3bbfea858bce">
-  <link rel="stylesheet" href="/canonical-ui.css?v=d4b9fa0199b9" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.0d218e6cad22.js">
+  <link rel="stylesheet" href="/styles.css?v=32684a31c0a7">
+  <link rel="stylesheet" href="/canonical-ui.css?v=c8193bfbadda" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.d0fb92a6f7f7.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -33,66 +33,176 @@
     </section>
     <section id="signed-out" class="auth-layout" aria-labelledby="account-start-title" hidden>
       <h2 id="account-start-title" class="visually-hidden">Вход в Бульбам</h2>
-      <div class="card auth-card">
-        <label for="auth-language">Язык интерфейса</label>
-        <select id="auth-language">
-          <option value="ru">Русский</option>
-          <option value="be">Беларуская</option>
-        </select>
-      </div>
 
-      <div id="auth-connection-problem" class="card auth-card" hidden>
-        <h3>Не получилось проверить вход</h3>
-        <p role="status">Бульбам не смог связаться с сервером. Это не означает, что ваш аккаунт удалён или что вы вышли из него.</p>
-        <button id="auth-retry" type="button">Проверить вход ещё раз</button>
-      </div>
-
-      <div id="auth-view-login" class="card auth-card">
-        <p id="auth-session-note" class="hint" role="status" hidden>Вход на этом устройстве завершён или срок сеанса истёк. Ваш аккаунт не удалён. Можно войти снова или восстановить пароль.</p>
-        <h3 id="auth-login-heading" tabindex="-1">Вход в Бульбам</h3>
-        <form id="login-form" class="form-stack">
-          <label>
-            Имя пользователя
-            <input name="username" autocomplete="username webauthn" required minlength="3" maxlength="32">
-          </label>
-          <label>
-            Пароль
-            <input name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
-          </label>
-          <button type="submit">Войти</button>
-        </form>
-        <button id="login-passkey" type="button">Войти с помощью ключа доступа</button>
-        <p class="hint">Если на устройстве есть ключ доступа, Safari может предложить его прямо в поле имени пользователя.</p>
-        <div class="auth-links">
-          <button id="auth-forgot-button" type="button">Забыли пароль?</button>
-          <button id="auth-register-button" type="button">Зарегистрироваться</button>
+      <section id="auth-showcase" class="card auth-showcase" aria-labelledby="showcase-title">
+        <div class="showcase-header">
+          <p id="showcase-kicker" class="showcase-kicker">Чистый звук 48 кГц</p>
+          <h3 id="showcase-title" class="showcase-title">Голосовые студийного качества</h3>
+          <p id="showcase-description" class="showcase-description">Записывайте без искажений, ставьте запись на паузу, ускоряйте прослушивание и слушайте с того места, где остановились.</p>
         </div>
-      </div>
 
-      <div id="auth-view-register" class="card auth-card" hidden>
-        <h3 id="auth-register-heading" tabindex="-1">Регистрация в Бульбаме</h3>
-        <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
-        <form id="register-form" class="form-stack">
-          <label>
-            Имя пользователя
-            <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="пользователь1" aria-describedby="register-username-help register-username-error">
-          </label>
-          <p id="register-username-help" class="hint">Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1.</p>
-          <p id="register-username-error" role="alert" aria-live="assertive" hidden></p>
-          <p class="hint">Символ @ можно поставить только перед именем пользователя, но при регистрации он не нужен. Внутри логина @ ставить нельзя.</p>
-          <p class="hint">Отображаемое имя можно выбрать после регистрации или пропустить. Позже его можно изменить в настройках.</p>
-          <label>
-            Пароль
-            <input name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
-          </label>
-          <label>
-            Код приглашения
-            <input name="inviteCode" autocomplete="off" required maxlength="160">
-          </label>
-          <button type="submit">Зарегистрироваться и войти</button>
-        </form>
-        <button id="auth-login-from-register" type="button">Уже есть аккаунт? Войти</button>
-      </div>
+        <div class="showcase-tabs" role="tablist" aria-label="Возможности Бульбама">
+          <button type="button" role="tab" class="showcase-tab is-active" data-showcase-tab="voice" aria-selected="true" tabindex="0">Голосовые</button>
+          <button type="button" role="tab" class="showcase-tab" data-showcase-tab="calls" aria-selected="false" tabindex="-1">Звонки</button>
+          <button type="button" role="tab" class="showcase-tab" data-showcase-tab="files" aria-selected="false" tabindex="-1">Файлы</button>
+          <button type="button" role="tab" class="showcase-tab" data-showcase-tab="security" aria-selected="false" tabindex="-1">Защита</button>
+        </div>
+
+        <div class="showcase-stage" aria-hidden="true">
+          <div class="showcase-scene showcase-scene-voice" data-showcase-stage="voice">
+            <div class="scene-glass-bar">
+              <span class="scene-badge scene-badge-voice">Запись 0:18</span>
+              <div class="scene-eq">
+                <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+              </div>
+              <span class="scene-pill-btn">Отправить</span>
+            </div>
+            <div class="scene-meta-row">
+              <span>48 кГц стерео</span>
+              <span>·</span>
+              <span>Пауза и продолжение</span>
+              <span>·</span>
+              <span>Ускорение 1.5x</span>
+            </div>
+          </div>
+
+          <div class="showcase-scene showcase-scene-calls" data-showcase-stage="calls" hidden>
+            <div class="scene-call-orbit">
+              <span class="scene-ring scene-ring-1"></span>
+              <span class="scene-ring scene-ring-2"></span>
+              <span class="scene-call-badge">Звонок</span>
+            </div>
+            <div class="scene-handoff-row">
+              <span class="scene-device">iPhone</span>
+              <span class="scene-handoff-arrow">⇄</span>
+              <span class="scene-device is-target">MacBook</span>
+            </div>
+            <div class="scene-meta-row">
+              <span>Бульбам Пераход</span>
+              <span>·</span>
+              <span>4 режима микрофона</span>
+            </div>
+          </div>
+
+          <div class="showcase-scene showcase-scene-files" data-showcase-stage="files" hidden>
+            <div class="scene-file-card">
+              <span class="scene-file-ext">FLAC</span>
+              <div class="scene-file-body">
+                <strong>studio-mix.flac</strong>
+                <div class="scene-progress-track"><span class="scene-progress-fill"></span></div>
+              </div>
+              <span class="scene-file-pct">78%</span>
+            </div>
+            <div class="scene-meta-row">
+              <span>Фото на весь экран</span>
+              <span>·</span>
+              <span>Видео и музыка в чате</span>
+              <span>·</span>
+              <span>До 512 МБ</span>
+            </div>
+          </div>
+
+          <div class="showcase-scene showcase-scene-security" data-showcase-stage="security" hidden>
+            <div class="scene-shield-card">
+              <div class="scene-shield-ring">
+                <span class="scene-shield-glyph">✓</span>
+              </div>
+              <div class="scene-shield-copy">
+                <strong>Ключ доступа готов</strong>
+                <span>Face ID · Touch ID · 8 резервных кодов</span>
+              </div>
+            </div>
+            <div class="scene-meta-row">
+              <span>Приглашения</span>
+              <span>·</span>
+              <span>VoiceOver</span>
+              <span>·</span>
+              <span>Клавиатура</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="showcase-footer">
+          <p id="showcase-cue" class="showcase-cue">Кнопка микрофона справа внизу чата</p>
+          <button id="showcase-demo-toggle" type="button" class="showcase-demo-toggle" aria-pressed="false">Оживить предпросмотр</button>
+        </div>
+      </section>
+
+      <div class="auth-forms-column">
+        <div class="card auth-card auth-language-card">
+          <label for="auth-language">Язык интерфейса</label>
+          <select id="auth-language">
+            <option value="ru">Русский</option>
+            <option value="be">Беларуская</option>
+          </select>
+        </div>
+
+        <div id="auth-connection-problem" class="card auth-card" hidden>
+          <h3>Не получилось проверить вход</h3>
+          <p role="status">Бульбам не смог связаться с сервером. Это не означает, что ваш аккаунт удалён или что вы вышли из него.</p>
+          <button id="auth-retry" type="button">Проверить вход ещё раз</button>
+        </div>
+
+        <div id="auth-view-login" class="card auth-card">
+          <p id="auth-session-note" class="hint" role="status" hidden>Вход на этом устройстве завершён или срок сеанса истёк. Ваш аккаунт не удалён. Можно войти снова или восстановить пароль.</p>
+          <h3 id="auth-login-heading" tabindex="-1">Вход в Бульбам</h3>
+          <form id="login-form" class="form-stack">
+            <label>
+              Имя пользователя
+              <input name="username" autocomplete="username webauthn" required minlength="3" maxlength="32">
+            </label>
+            <label>
+              Пароль
+              <input name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
+            </label>
+            <button type="submit" class="primary-action">Войти</button>
+          </form>
+          <button id="login-passkey" type="button" class="secondary-glass-button">Войти с помощью ключа доступа</button>
+          <p class="hint">Если на устройстве есть ключ доступа, Safari может предложить его прямо в поле имени пользователя.</p>
+          <div class="auth-links">
+            <button id="auth-forgot-button" type="button">Забыли пароль?</button>
+            <button id="auth-register-button" type="button">Зарегистрироваться</button>
+          </div>
+        </div>
+
+        <div id="auth-view-register" class="card auth-card" hidden>
+          <h3 id="auth-register-heading" tabindex="-1">Регистрация в Бульбаме</h3>
+          <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
+          <button id="auth-register-guide-button" type="button" class="button-with-icon guide-launch-button" data-icon="compass">Не знаете, как зарегистрироваться?</button>
+
+          <div id="registration-guide-dock" class="guide-dock" role="region" aria-label="Пошаговая подсказка" hidden>
+            <div class="guide-dock-copy">
+              <strong id="guide-dock-step">Шаг 1 из 6</strong>
+              <p id="guide-dock-status" class="hint" role="status" aria-live="polite"></p>
+            </div>
+            <div class="guide-dock-actions">
+              <button id="guide-dock-next" type="button" class="primary-action">Следующий шаг</button>
+              <button id="guide-dock-open" type="button">Открыть гид</button>
+              <button id="guide-dock-hide" type="button">Скрыть</button>
+            </div>
+          </div>
+
+          <form id="register-form" class="form-stack">
+            <label>
+              Имя пользователя
+              <input name="username" autocomplete="username" required minlength="3" maxlength="32" placeholder="пользователь1" aria-describedby="register-username-help register-username-error">
+            </label>
+            <p id="register-username-help" class="hint">Имя пользователя: от 3 до 32 русских, белорусских или латинских букв, цифр и знаков подчёркивания. Например, пользователь1.</p>
+            <p id="register-username-error" role="alert" aria-live="assertive" hidden></p>
+            <p class="hint">Символ @ можно поставить только перед именем пользователя, но при регистрации он не нужен. Внутри логина @ ставить нельзя.</p>
+            <p class="hint">Отображаемое имя можно выбрать после регистрации или пропустить. Позже его можно изменить в настройках.</p>
+            <label>
+              Пароль
+              <input name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+            </label>
+            <label>
+              Код приглашения
+              <input name="inviteCode" autocomplete="off" required maxlength="160">
+            </label>
+            <button type="submit" class="primary-action">Зарегистрироваться и войти</button>
+          </form>
+          <button id="auth-login-from-register" type="button">Уже есть аккаунт? Войти</button>
+        </div>
 
       <div id="auth-view-recovery" class="card auth-card" hidden>
         <h3 id="auth-recovery-heading" tabindex="-1">Восстановление аккаунта</h3>
@@ -145,6 +255,7 @@
         </div>
         <button id="auth-login-from-recovery" type="button">Вернуться ко входу</button>
       </div>
+      </div>
     </section>
 
     <dialog id="recovery-codes-dialog" aria-labelledby="recovery-codes-title">
@@ -185,7 +296,43 @@
         <option value="be">Беларуская</option>
       </select>
       <p>Совет: сохраните резервные коды восстановления в безопасном месте.</p>
-      <button id="bulbam-welcome-close" type="button">Начать общение</button>
+      <div class="welcome-dialog-actions">
+        <button id="welcome-open-guide" type="button" class="button-with-icon" data-icon="compass">Пошаговое знакомство</button>
+        <button id="bulbam-welcome-close" type="button" class="primary-action">Начать общение</button>
+      </div>
+    </dialog>
+
+    <dialog id="registration-guide-dialog" class="guide-dialog" aria-labelledby="registration-guide-title">
+      <div class="guide-dialog-header">
+        <div>
+          <p id="registration-guide-phase" class="guide-phase">Регистрация</p>
+          <h2 id="registration-guide-title">Как начать в Бульбаме</h2>
+        </div>
+        <button id="registration-guide-close" class="icon-button" data-icon="close" type="button" aria-label="Закрыть пошаговый гид">Закрыть</button>
+      </div>
+
+      <div class="guide-progress-meta">
+        <span id="registration-guide-step-counter" class="guide-step-counter">Шаг 1 из 6</span>
+        <div id="registration-guide-dots" class="guide-step-dots" aria-label="Шаги гида"></div>
+      </div>
+      <div class="guide-progress-track" aria-hidden="true">
+        <span id="registration-guide-progress-fill" class="guide-progress-fill"></span>
+      </div>
+
+      <div id="registration-guide-visual" class="guide-visual-stage" aria-hidden="true"></div>
+
+      <div class="guide-step-body">
+        <h3 id="registration-guide-step-title" tabindex="-1">Получите код приглашения</h3>
+        <p id="registration-guide-step-summary"></p>
+        <p id="registration-guide-step-tip" class="hint"></p>
+        <p id="registration-guide-step-status" class="guide-step-status" role="status" aria-live="polite"></p>
+      </div>
+
+      <div class="guide-dialog-actions">
+        <button id="registration-guide-prev" type="button">Назад</button>
+        <button id="registration-guide-action" type="button" class="secondary-glass-button">Перейти к полю кода</button>
+        <button id="registration-guide-next" type="button" class="primary-action">Дальше</button>
+      </div>
     </dialog>
 
     <dialog id="admin-recovery-help" aria-labelledby="admin-recovery-help-title">
@@ -249,8 +396,34 @@
 
           <div id="conversation-empty" class="conversation-empty">
             <div class="empty-mark" aria-hidden="true">Б</div>
-            <p>Выберите переписку или начните новую.</p>
-            <button id="chat-start-empty" type="button" class="button-with-icon" data-icon="compose">Новый чат</button>
+            <p class="empty-headline">Выберите переписку или начните новую.</p>
+            <div class="empty-capabilities" aria-hidden="true">
+              <div class="empty-cap-card">
+                <span class="empty-cap-icon is-call" data-icon="phone"></span>
+                <div>
+                  <strong>Звонки</strong>
+                  <span>Зелёная кнопка сверху в чате</span>
+                </div>
+              </div>
+              <div class="empty-cap-card">
+                <span class="empty-cap-icon is-voice" data-icon="mic"></span>
+                <div>
+                  <strong>Голосовые 48 кГц</strong>
+                  <span>Кнопка микрофона справа внизу</span>
+                </div>
+              </div>
+              <div class="empty-cap-card">
+                <span class="empty-cap-icon is-file" data-icon="attach"></span>
+                <div>
+                  <strong>Файлы и медиа</strong>
+                  <span>Скрепка слева — до 512 МБ</span>
+                </div>
+              </div>
+            </div>
+            <div class="empty-actions">
+              <button id="chat-start-empty" type="button" class="button-with-icon primary-action" data-icon="compose">Новый чат</button>
+              <button id="open-acquaintance-guide" type="button" class="button-with-icon guide-secondary-button" data-icon="compass">Пошаговое знакомство</button>
+            </div>
           </div>
 
           <ol id="message-list" class="message-list" aria-label="Сообщения" aria-live="off"></ol>
@@ -273,6 +446,7 @@
               <div class="voice-recording-panel-header">
                 <span class="voice-recording-led" aria-hidden="true"></span>
                 <strong id="voice-recording-visual-label">Идёт запись голосового</strong>
+                <span class="voice-recording-waves" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
                 <span id="voice-recording-visual-timer" class="voice-recording-clock">0:00</span>
               </div>
               <p id="voice-recording-visual-hint">Голосовое ещё не отправлено. Говорите в микрофон.</p>
@@ -297,6 +471,11 @@
       </div>
 
           <section id="call-panel" class="call-banner" role="dialog" aria-labelledby="call-title" hidden>
+            <div class="call-visual-stage" aria-hidden="true">
+              <span class="call-sonar call-sonar-outer"></span>
+              <span class="call-sonar call-sonar-inner"></span>
+              <span class="call-visual-core" data-icon="phone"></span>
+            </div>
             <div class="call-copy">
               <h2 id="call-title" tabindex="-1">Звонок</h2>
               <p id="call-peer"></p>
@@ -638,7 +817,7 @@
   </script>
   <script type="module">
     try {
-      await import("/boot.0d218e6cad22.js");
+      await import("/boot.d0fb92a6f7f7.js");
       window.bulbamBootReady();
     } catch (error) {
       window.bulbamBootFailed(error);

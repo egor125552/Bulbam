@@ -4,6 +4,7 @@ import { setupDetailedDiagnostics } from "./js/diagnostics-runtime.js";
 import { setupDetailedHelp } from "./js/accessibility-help.js";
 import { setupSettingsScreens } from "./js/settings-screens.js";
 import { setupWelcome } from "./js/welcome.js";
+import { setupRegistrationGuide } from "./js/registration-guide.js";
 import { setupAdminRecovery } from "./js/admin-recovery.js";
 import { loadCurrentAccount, setupAuth } from "./js/auth.js";
 import { setupAudioProfiles } from "./js/audio-profiles.js";
@@ -36,6 +37,7 @@ export function startApp() {
   setupAuth();
   setupAdminRecovery();
   setupWelcome();
+  setupRegistrationGuide();
   setupSessions();
   setupInvites();
   setupMessenger();

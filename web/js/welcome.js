@@ -1,4 +1,5 @@
 import { announce, getCurrentAccount } from "./ui.js";
+import { isRegistrationGuideContinuing } from "./registration-guide.js";
 
 const KEY="bulbam.welcome.v1.";
 let queuedFor=null;
@@ -12,6 +13,7 @@ function markSeen(userId) {
 function showWhenReady(userId){
   const account=getCurrentAccount();
   if(account?.userId!==userId || seen(userId))return;
+  if(isRegistrationGuideContinuing()){markSeen(userId);return;}
   // This introduction is for recently registered members, not every
   // long-standing account opening a different browser.
   if(!Number.isFinite(account.createdAt) || Date.now()-account.createdAt > 24*60*60_000)return;
