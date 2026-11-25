@@ -442,6 +442,16 @@ export class D1IdentityRepository implements IdentityRepository {
     }
     await this.db.batch(statements);
   }
+
+  async findDeletedAccountNotice(usernameHash: string): Promise<{ reason: string; deletedAt: number } | null> {
+    await this.initialize();
+    const row = await this.db
+      .prepare("SELECT reason, deleted_at FROM deleted_account_notices WHERE username_hash = ? LIMIT 1")
+      .bind(usernameHash)
+      .first<Row>();
+    if (!row) return null;
+    return { reason: String(row.reason), deletedAt: Number(row.deleted_at) };
+  }
 }
 
 function mapPublicAccount(row: Row): PublicAccount {

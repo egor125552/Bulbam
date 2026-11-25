@@ -140,7 +140,27 @@ const migrations = [
   {
     version: 6,
     statements: [
-      "UPDATE sessions SET revoked_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE revoked_at IS NULL"
+      "UPDATE sessions SET revoked_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE revoked_at IS NULL AND user_id NOT IN (SELECT user_id FROM accounts WHERE role = 'owner')"
+    ]
+  },
+  {
+    version: 7,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS owner_login_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        created_by_user_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at INTEGER,
+        FOREIGN KEY (user_id) REFERENCES accounts(user_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_owner_login_tokens_user ON owner_login_tokens(user_id, expires_at)",
+      `CREATE TABLE IF NOT EXISTS deleted_account_notices (
+        username_hash TEXT PRIMARY KEY,
+        reason TEXT NOT NULL,
+        deleted_at INTEGER NOT NULL
+      )`
     ]
   }
 ] as const;

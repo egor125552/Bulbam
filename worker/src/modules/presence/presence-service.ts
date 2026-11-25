@@ -83,6 +83,43 @@ export class PresenceService {
       hidden:row.share_presence===0
     }));
   }
+
+  async listAllActivity(): Promise<Map<string, { online: boolean; lastActiveAt: number | null; hidden: boolean }>> {
+    await this.initialize();
+    const now = Date.now();
+    const result = await this.db.prepare(`
+      SELECT
+        s.user_id,
+        MAX(s.last_active_at) AS last_active_at,
+        MAX(CASE WHEN s.visible_until > ? THEN 1 ELSE 0 END) AS online,
+        COALESCE(st.share_presence, 1) AS share_presence
+      FROM account_presence_sessions s
+      LEFT JOIN account_presence_settings st ON st.user_id = s.user_id
+      GROUP BY s.user_id
+    `).bind(now).all<{
+      user_id: string;
+      last_active_at: number | null;
+      online: number;
+      share_presence: number;
+    }>();
+    const map = new Map<string, { online: boolean; lastActiveAt: number | null; hidden: boolean }>();
+    for (const row of result.results ?? []) {
+      map.set(String(row.user_id), {
+        online: Number(row.online) === 1,
+        lastActiveAt: row.last_active_at === null ? null : Number(row.last_active_at),
+        hidden: Number(row.share_presence) === 0
+      });
+    }
+    return map;
+  }
+
+  async removeForUser(userId: string): Promise<void> {
+    await this.initialize();
+    await this.db.batch([
+      this.db.prepare("DELETE FROM account_presence_sessions WHERE user_id = ?").bind(userId),
+      this.db.prepare("DELETE FROM account_presence_settings WHERE user_id = ?").bind(userId)
+    ]);
+  }
 }
 
 export async function handlePresenceHttp(

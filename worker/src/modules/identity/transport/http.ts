@@ -33,7 +33,7 @@ export async function handleIdentityHttp(
     const result=await recovery.complete(String(body.requestId??""),String(body.secret??""),
       validatePassword(String(body.newPassword??"")),
       validateDeviceName(typeof body.deviceName==="string"?body.deviceName:undefined));
-    return withSessionCookie(json({ok:true,account:result.account,session:result.session,
+    return withSessionCookie(request, json({ok:true,account:result.account,session:result.session,
       recoveryCodes:result.recoveryCodes}),result.token,result.session.expiresAt);
   }
   if (recovery && url.pathname === "/api/v1/admin/recovery-requests") {
@@ -86,7 +86,7 @@ export async function handleIdentityHttp(
     const result=await passkeys.authenticationFinish(url.origin,{
       challengeId:body.challengeId,response:body.response as AuthenticationResponseJSON,deviceName
     });
-    return withSessionCookie(json({ok:true,account:result.account,session:result.session}),
+    return withSessionCookie(request, json({ok:true,account:result.account,session:result.session}),
       result.token,result.session.expiresAt);
   }
   const passkeyDelete = passkeys && url.pathname.match(/^\/api\/v1\/passkeys\/([A-Za-z0-9_-]{8,1024})$/);
@@ -103,6 +103,7 @@ export async function handleIdentityHttp(
     const input = registrationInput(await readJsonObject(request));
     const result = await service.register(input);
     return withSessionCookie(
+      request,
       json({ ok: true, account: result.account, session: result.session, recoveryCodes: result.recoveryCodes }, { status: 201 }),
       result.token,
       result.session.expiresAt
@@ -114,6 +115,7 @@ export async function handleIdentityHttp(
     const input = loginInput(await readJsonObject(request));
     const result = await service.login(input);
     return withSessionCookie(
+      request,
       json({ ok: true, account: result.account, session: result.session }),
       result.token,
       result.session.expiresAt
@@ -134,6 +136,7 @@ export async function handleIdentityHttp(
       username, code: rawCode, newPassword, deviceName
     });
     return withSessionCookie(
+      request,
       json({ ok: true, account: result.account, session: result.session, recoveryCodes: result.recoveryCodes }),
       result.token, result.session.expiresAt
     );
@@ -172,7 +175,7 @@ export async function handleIdentityHttp(
     const response = json({ ok: true, account: authenticated.account, session: authenticated.session });
     const hasBearer = (request.headers.get("authorization")?.trim() ?? "").toLowerCase().startsWith("bearer ");
     return token && !hasBearer
-      ? withSessionCookie(response, token, authenticated.session.expiresAt)
+      ? withSessionCookie(request, response, token, authenticated.session.expiresAt)
       : response;
   }
 
@@ -180,7 +183,7 @@ export async function handleIdentityHttp(
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const authenticated = await service.authenticate(sessionToken(request));
     await service.logout(authenticated);
-    return clearSessionCookie(json({ ok: true }));
+    return clearSessionCookie(request, json({ ok: true }));
   }
 
   if (url.pathname === "/api/v1/users/search") {
@@ -210,7 +213,7 @@ export async function handleIdentityHttp(
     await service.revokeSession(authenticated, sessionMatch[1]);
     const response = json({ ok: true });
     return sessionMatch[1] === authenticated.session.sessionId
-      ? clearSessionCookie(response)
+      ? clearSessionCookie(request, response)
       : response;
   }
 
@@ -250,21 +253,42 @@ export function sessionToken(request: Request): string | null {
   return null;
 }
 
-function withSessionCookie(response: Response, token: string, expiresAt: number): Response {
+function cookieFlags(request: Request): string {
+  const url = new URL(request.url);
+  const forwardedProto = (request.headers.get("x-forwarded-proto") ?? "").split(",")[0]?.trim().toLowerCase();
+  const isHttps = url.protocol === "https:" || forwardedProto === "https";
+  const isEmbedded =
+    request.headers.get("sec-fetch-dest") === "iframe" ||
+    request.headers.get("sec-fetch-site") === "cross-site";
+  if (isHttps && isEmbedded) {
+    return "Path=/; HttpOnly; Secure; SameSite=None; Partitioned";
+  }
+  if (isHttps) {
+    return "Path=/; HttpOnly; Secure; SameSite=Lax";
+  }
+  return "Path=/; HttpOnly; SameSite=Lax";
+}
+
+export function withSessionCookie(
+  request: Request,
+  response: Response,
+  token: string,
+  expiresAt: number
+): Response {
   const headers = new Headers(response.headers);
   const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
   headers.append(
     "set-cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Max-Age=${maxAge}; ${cookieFlags(request)}`
   );
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-function clearSessionCookie(response: Response): Response {
+export function clearSessionCookie(request: Request, response: Response): Response {
   const headers = new Headers(response.headers);
   headers.append(
     "set-cookie",
-    `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`
+    `${SESSION_COOKIE}=; Max-Age=0; ${cookieFlags(request)}`
   );
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

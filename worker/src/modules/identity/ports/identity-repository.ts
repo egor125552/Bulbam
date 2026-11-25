@@ -71,4 +71,5 @@ export interface IdentityRepository {
 
   findUserIdsByUsernamePrefix(prefix: string): Promise<string[]>;
   deleteAccountsByUserIds(userIds: string[]): Promise<void>;
+  findDeletedAccountNotice(usernameHash: string): Promise<{ reason: string; deletedAt: number } | null>;
 }

@@ -54,4 +54,14 @@ export interface MessagingRepository {
   getVoiceListeningShare(userId: string): Promise<boolean>;
   setVoiceListeningShare(userId: string, share: boolean, now: number): Promise<void>;
   deleteDataForUsers(userIds: string[]): Promise<void>;
+  purgeDeletedUserData(input: {
+    targetUserId: string;
+    groupNoticeSenderFallbackUserId: string;
+    groupNoticeBody: string;
+    now: number;
+  }): Promise<{
+    removedDirectConversations: Array<{ conversationId: string; peerUserId: string }>;
+    removedEmptyGroupIds: string[];
+    updatedGroups: Array<{ conversationId: string; remainingMemberIds: string[]; noticeMessage?: StoredMessage }>;
+  }>;
 }

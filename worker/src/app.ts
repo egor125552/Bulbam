@@ -20,6 +20,9 @@ import { D1PushRepository } from "./modules/notifications/infrastructure/d1-push
 import { handlePushHttp } from "./modules/notifications/transport/http";
 import { DurableObjectRealtime } from "./modules/realtime/public";
 import { PresenceService, handlePresenceHttp } from "./modules/presence/presence-service";
+import { OwnerControlService } from "./modules/owner/application/owner-control-service";
+import { D1OwnerRepository } from "./modules/owner/infrastructure/d1-owner-repository";
+import { handleOwnerHttp } from "./modules/owner/transport/http";
 import type { Env, ExecutionContextLike } from "./platform/cloudflare";
 import { handleSmokeHttp } from "./smoke";
 
@@ -102,6 +105,19 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
           ctx ? (promise) => ctx.waitUntil(promise) : undefined
         )
       : null;
+    const presenceService = env.DB ? new PresenceService(env.DB) : null;
+    const ownerRepository = env.DB ? new D1OwnerRepository(env.DB) : null;
+    const ownerControl = ownerRepository && identity && messaging && presenceService && pushRepository
+      ? new OwnerControlService(
+          ownerRepository,
+          identity,
+          messaging,
+          presenceService,
+          pushRepository,
+          realtime,
+          ctx ? (promise) => ctx.waitUntil(promise) : undefined
+        )
+      : null;
     const voiceStorage = env.VOICE_UPLOAD ? new DurableObjectVoiceStorage(env.VOICE_UPLOAD) : null;
     const voiceReferences = env.DB ? new D1VoiceMediaReferences(env.DB) : null;
     const voice = voiceStorage && messagingRepository && messaging
@@ -157,6 +173,10 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
       const smokeResponse = await handleSmokeHttp(request, url, env, identity, messaging, voice ?? undefined);
       if (smokeResponse) return smokeResponse;
     }
+    if (identity && ownerControl) {
+      const ownerResponse = await handleOwnerHttp(request, url, identity, ownerControl);
+      if (ownerResponse) return ownerResponse;
+    }
     if (identity) {
       const identityResponse = await handleIdentityHttp(request, url, identity, passkeys, adminRecovery);
       if (identityResponse) return identityResponse;
@@ -173,8 +193,8 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
       const pushResponse = await handlePushHttp(request, url, push, authenticate);
       if (pushResponse) return pushResponse;
     }
-    if (env.DB && authenticate) {
-      const presenceResponse=await handlePresenceHttp(request,url,new PresenceService(env.DB),authenticate);
+    if (presenceService && authenticate) {
+      const presenceResponse=await handlePresenceHttp(request,url,presenceService,authenticate);
       if(presenceResponse)return presenceResponse;
     }
     if (identity && calls && authenticate) {

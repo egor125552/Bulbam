@@ -299,6 +299,62 @@ export class MessagingService {
     await this.repository.deleteDataForUsers(userIds);
   }
 
+  async purgeDeletedUserAccount(input: {
+    targetUserId: string;
+    targetDisplayName: string;
+    targetUsername: string;
+    ownerUserId: string;
+  }): Promise<{ removedDirectChats: number; updatedGroups: number }> {
+    const now = Date.now();
+    const groupNoticeBody = `Участник ${input.targetDisplayName} (@${input.targetUsername}) исключён: аккаунт удалён владельцем.`;
+    const result = await this.repository.purgeDeletedUserData({
+      targetUserId: input.targetUserId,
+      groupNoticeSenderFallbackUserId: input.ownerUserId,
+      groupNoticeBody,
+      now
+    });
+
+    const notifications: Promise<unknown>[] = [];
+    for (const direct of result.removedDirectConversations) {
+      if (direct.peerUserId && direct.peerUserId !== input.targetUserId) {
+        notifications.push(
+          this.realtime.publishToUsers([direct.peerUserId], {
+            type: "chat.removed",
+            conversationId: direct.conversationId
+          })
+        );
+      }
+    }
+    for (const group of result.updatedGroups) {
+      if (group.noticeMessage) {
+        notifications.push(
+          this.realtime.publishToUsers(group.remainingMemberIds, {
+            type: "message.created",
+            conversationId: group.conversationId,
+            message: group.noticeMessage
+          })
+        );
+      }
+      notifications.push(
+        this.realtime.publishToUsers(group.remainingMemberIds, {
+          type: "chat.updated",
+          conversationId: group.conversationId
+        })
+      );
+    }
+
+    const notifyAll = Promise.all(notifications).catch((error) =>
+      console.warn("[MessagingService] purge notifications failed", error)
+    );
+    if (this.defer) this.defer(notifyAll);
+    else await notifyAll;
+
+    return {
+      removedDirectChats: result.removedDirectConversations.length,
+      updatedGroups: result.updatedGroups.length
+    };
+  }
+
   private async persistAndPublish(
     actor: MessagingActor,
     conversation: Conversation,

@@ -65,6 +65,14 @@ export class D1PushRepository {
     await this.db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(endpoint).run();
   }
 
+  async removeAllForUser(userId: string): Promise<void> {
+    await this.initialize();
+    await this.db.batch([
+      this.db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").bind(userId),
+      this.db.prepare("DELETE FROM push_foreground_presence WHERE user_id = ?").bind(userId)
+    ]);
+  }
+
   async listForUser(userId: string): Promise<PushSubscriptionRecord[]> {
     await this.initialize();
     const rows = await this.db

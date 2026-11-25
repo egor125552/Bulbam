@@ -2216,6 +2216,155 @@ html[data-message-view="compact"] .message-visual-body {
   .message-table thead th:nth-child(3) { width: 28%; }
 }
 
+.owner-control-panel {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  padding: 0.95rem;
+  border-radius: 1.05rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 32%, var(--glass-border));
+  background: var(--glass-surface-soft);
+  box-shadow: inset 0 1px 0 var(--glass-specular);
+}
+
+.owner-control-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.owner-control-header h3 {
+  margin: 0;
+}
+
+.owner-users-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.owner-user-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+}
+
+.owner-user-card[data-online="true"] {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--glass-border));
+}
+
+.owner-user-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.6rem;
+}
+
+.owner-user-name {
+  margin: 0;
+  font-size: 0.96rem;
+  font-weight: 800;
+  color: CanvasText;
+}
+
+.owner-role-tag,
+.owner-presence-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.55rem;
+  border-radius: 0.5rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface-soft);
+  color: CanvasText;
+}
+
+.owner-presence-badge[data-online="true"] {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--glass-border));
+  background: color-mix(in srgb, var(--success) 16%, var(--glass-bg-strong));
+  color: CanvasText;
+}
+
+.owner-presence-badge[data-online="false"] {
+  color: var(--muted);
+}
+
+.owner-user-status {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.owner-user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.owner-user-actions button {
+  font-size: 0.84rem;
+  padding: 0.46rem 0.78rem;
+}
+
+.owner-link-box,
+.owner-delete-panel {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  padding: 0.75rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface-soft);
+}
+
+.owner-delete-panel {
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--glass-border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--glass-bg-strong));
+}
+
+.owner-delete-confirm-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.owner-delete-confirm-label input[type="checkbox"] {
+  margin-top: 0.18rem;
+  flex-shrink: 0;
+}
+
+.owner-delete-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.danger-button {
+  border-color: color-mix(in srgb, var(--danger) 62%, var(--glass-border));
+  background: color-mix(in srgb, var(--danger) 16%, var(--glass-bg-strong));
+  color: CanvasText;
+  font-weight: 700;
+}
+
+.danger-button:hover:not(:disabled),
+.danger-button:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 28%, var(--glass-bg-strong));
+  border-color: var(--danger);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -586,6 +586,18 @@ async function handleCallEvent(event) {
     window.dispatchEvent(new Event("bulbam:admin-recovery-updated"));
     return;
   }
+  if (event.type === "owner.users.updated") {
+    window.dispatchEvent(new Event("bulbam:owner-users-updated"));
+    return;
+  }
+  if (event.type === "session.revoked") {
+    window.dispatchEvent(new Event("bulbam:session-revoked"));
+    return;
+  }
+  if (event.type === "account.deleted") {
+    window.dispatchEvent(new CustomEvent("bulbam:account-deleted", { detail: { reason: event.reason || "" } }));
+    return;
+  }
 
   if (event.type === "call.active" && event.call) {
     if (currentCall) return;

@@ -7,6 +7,7 @@ import { setupMessageReadingSettings } from "./js/message-reading.js";
 import { setupWelcome } from "./js/welcome.js";
 import { setupRegistrationGuide } from "./js/registration-guide.js";
 import { setupAdminRecovery } from "./js/admin-recovery.js";
+import { setupOwnerControl } from "./js/owner-control.js";
 import { loadCurrentAccount, setupAuth } from "./js/auth.js";
 import { setupAudioProfiles } from "./js/audio-profiles.js";
 import { setupFinishedCallPanelCleanup } from "./js/call-finished-panel.js";
@@ -38,6 +39,7 @@ export function startApp() {
   setupHealth();
   setupAuth();
   setupAdminRecovery();
+  setupOwnerControl();
   setupWelcome();
   setupRegistrationGuide();
   setupSessions();

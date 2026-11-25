@@ -602,6 +602,139 @@ export class D1MessagingRepository implements MessagingRepository {
     await this.db.batch(statements);
   }
 
+  async purgeDeletedUserData(input: {
+    targetUserId: string;
+    groupNoticeSenderFallbackUserId: string;
+    groupNoticeBody: string;
+    now: number;
+  }): Promise<{
+    removedDirectConversations: Array<{ conversationId: string; peerUserId: string }>;
+    removedEmptyGroupIds: string[];
+    updatedGroups: Array<{ conversationId: string; remainingMemberIds: string[]; noticeMessage?: StoredMessage }>;
+  }> {
+    await this.initialize();
+    const { targetUserId, groupNoticeSenderFallbackUserId, groupNoticeBody, now } = input;
+
+    // 1. Collect all direct conversations involving the deleted user
+    const directRows = await this.db
+      .prepare(`
+        SELECT conversation_id, participant_a_id, participant_b_id
+        FROM conversations
+        WHERE kind = 'direct' AND (participant_a_id = ? OR participant_b_id = ?)
+      `)
+      .bind(targetUserId, targetUserId)
+      .all<Row>();
+    const removedDirectConversations = (directRows.results ?? []).map((row) => ({
+      conversationId: String(row.conversation_id),
+      peerUserId: String(row.participant_a_id) === targetUserId
+        ? String(row.participant_b_id)
+        : String(row.participant_a_id)
+    }));
+
+    // 2. Collect all group conversations where the user is a member or owner
+    const groupRows = await this.db
+      .prepare(`
+        SELECT DISTINCT c.conversation_id, c.owner_user_id
+        FROM conversations c
+        LEFT JOIN group_members gm ON gm.conversation_id = c.conversation_id
+        WHERE c.kind = 'group' AND (gm.user_id = ? OR c.owner_user_id = ?)
+      `)
+      .bind(targetUserId, targetUserId)
+      .all<Row>();
+
+    // 3. Remove personal voice settings/receipts and delete all messages sent by user + all direct chats
+    const cleanupStatements = [
+      this.db.prepare("DELETE FROM voice_privacy_settings WHERE user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM voice_listen_receipts WHERE listener_user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM message_receipts WHERE recipient_user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM voice_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM file_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM messages WHERE sender_user_id = ?").bind(targetUserId)
+    ];
+
+    for (const direct of removedDirectConversations) {
+      cleanupStatements.push(
+        this.db.prepare("DELETE FROM voice_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM file_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM conversations WHERE conversation_id = ?").bind(direct.conversationId)
+      );
+    }
+    await this.db.batch(cleanupStatements);
+
+    // 4. For each affected group: preserve active groups, transfer ownership if needed, and post an exclusion notice
+    const removedEmptyGroupIds: string[] = [];
+    const updatedGroups: Array<{ conversationId: string; remainingMemberIds: string[]; noticeMessage?: StoredMessage }> = [];
+
+    for (const group of groupRows.results ?? []) {
+      const conversationId = String(group.conversation_id);
+      const currentOwner = String(group.owner_user_id ?? "");
+      const membersResult = await this.db
+        .prepare("SELECT user_id FROM group_members WHERE conversation_id = ? ORDER BY joined_at ASC")
+        .bind(conversationId)
+        .all<Row>();
+      const remainingMemberIds = (membersResult.results ?? []).map((m) => String(m.user_id));
+
+      if (!remainingMemberIds.length) {
+        removedEmptyGroupIds.push(conversationId);
+        await this.db.batch([
+          this.db.prepare("DELETE FROM voice_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+          this.db.prepare("DELETE FROM file_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+          this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+          this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+          this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId),
+          this.db.prepare("DELETE FROM conversations WHERE conversation_id = ?").bind(conversationId)
+        ]);
+        continue;
+      }
+
+      const nextOwner = currentOwner === targetUserId ? remainingMemberIds[0] : currentOwner;
+      const noticeSenderId = remainingMemberIds.includes(groupNoticeSenderFallbackUserId)
+        ? groupNoticeSenderFallbackUserId
+        : nextOwner;
+      const messageId = crypto.randomUUID();
+      const clientMessageId = `system-removed-${targetUserId.slice(0, 8)}-${now}`;
+      const noticeMessage: StoredMessage = {
+        messageId,
+        conversationId,
+        senderUserId: noticeSenderId,
+        clientMessageId,
+        kind: "text",
+        text: groupNoticeBody,
+        voice: null,
+        file: null,
+        createdAt: now,
+        deliveredAt: null,
+        readAt: null
+      };
+
+      const groupOps = [];
+      if (nextOwner !== currentOwner) {
+        groupOps.push(
+          this.db.prepare("UPDATE conversations SET owner_user_id = ? WHERE conversation_id = ?").bind(nextOwner, conversationId)
+        );
+      }
+      groupOps.push(
+        this.db.prepare(`
+          INSERT INTO messages (message_id, conversation_id, sender_user_id, client_message_id, message_type, body, created_at)
+          VALUES (?, ?, ?, ?, 'text', ?, ?)
+        `).bind(messageId, conversationId, noticeSenderId, clientMessageId, groupNoticeBody, now),
+        this.db.prepare("UPDATE conversations SET last_message_at = MAX(COALESCE(last_message_at, 0), ?) WHERE conversation_id = ?")
+          .bind(now, conversationId)
+      );
+      await this.db.batch(groupOps);
+
+      updatedGroups.push({ conversationId, remainingMemberIds, noticeMessage });
+    }
+
+    return { removedDirectConversations, removedEmptyGroupIds, updatedGroups };
+  }
+
   private async findByClientMessageId(senderUserId: string, clientMessageId: string): Promise<StoredMessage | null> {
     return this.runWithSchemaRepair(async () => {
       const row = await this.db

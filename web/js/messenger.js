@@ -826,6 +826,12 @@ function connectRealtime() {
       window.dispatchEvent(new Event("bulbam:admin-recovery-request"));
     } else if (payload?.type === "admin.recovery.updated") {
       window.dispatchEvent(new Event("bulbam:admin-recovery-updated"));
+    } else if (payload?.type === "owner.users.updated") {
+      window.dispatchEvent(new Event("bulbam:owner-users-updated"));
+    } else if (payload?.type === "session.revoked") {
+      window.dispatchEvent(new Event("bulbam:session-revoked"));
+    } else if (payload?.type === "account.deleted") {
+      window.dispatchEvent(new CustomEvent("bulbam:account-deleted", { detail: { reason: payload.reason || "" } }));
     }
   });
 

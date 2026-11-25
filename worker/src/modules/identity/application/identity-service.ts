@@ -74,7 +74,16 @@ export class IdentityService {
       credentials?.passwordHash ?? DUMMY_PASSWORD_HASH
     );
 
-    if (!credentials || !passwordMatches) {
+    if (!credentials) {
+      const notice = await this.repository.findDeletedAccountNotice(
+        await sha256Hex(input.username.toLowerCase())
+      );
+      if (notice) {
+        forbidden("account_deleted", `Аккаунт удалён владельцем. Причина: ${notice.reason}`);
+      }
+      unauthorized("invalid_credentials", "Неверный username или пароль.");
+    }
+    if (!passwordMatches) {
       unauthorized("invalid_credentials", "Неверный username или пароль.");
     }
 

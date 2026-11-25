@@ -136,15 +136,49 @@ export function setupAuth() {
     const field = document.querySelector("#recovery-codes-text");
     if (field) field.value = "";
   });
+  let verifyingSession = false;
+  async function verifySessionStillValid() {
+    if (verifyingSession || !getCurrentAccount()) return;
+    verifyingSession = true;
+    try {
+      await api("/api/v1/auth/me");
+    } catch (error) {
+      if (error.status === 401 && getCurrentAccount()) {
+        clearAuthCheckProblem();
+        showSignedOut();
+        restoreUsernameHint();
+        showAuthView("login");
+        const hint = document.querySelector("#auth-session-note");
+        if (hint) {
+          hint.textContent = translateText("Сеанс завершён или обновлён. Войдите в аккаунт ещё раз.");
+          hint.hidden = false;
+        }
+        announce("Сеанс завершён или обновлён. Войдите в аккаунт ещё раз.");
+      }
+    } finally {
+      verifyingSession = false;
+    }
+  }
   window.addEventListener("bulbam:session-expired", () => {
-    if (!getCurrentAccount()) return;
+    void verifySessionStillValid();
+  });
+  window.addEventListener("bulbam:session-revoked", () => {
+    void verifySessionStillValid();
+  });
+  window.addEventListener("bulbam:account-deleted", (event) => {
+    const reason = String(event?.detail?.reason ?? "").trim();
+    const message = reason
+      ? `${translateText("Ваш аккаунт удалён владельцем.")} ${translateText("Причина")}: ${reason}`
+      : translateText("Ваш аккаунт удалён владельцем.");
     clearAuthCheckProblem();
     showSignedOut();
-    restoreUsernameHint();
     showAuthView("login");
     const hint = document.querySelector("#auth-session-note");
-    if (hint) hint.hidden = false;
-    announce("Сеанс завершён или обновлён. Войдите в аккаунт ещё раз.");
+    if (hint) {
+      hint.textContent = message;
+      hint.hidden = false;
+    }
+    announce(message);
   });
   window.addEventListener("bulbam:show-auth-view", (event) => {
     if (getCurrentAccount()) return;
@@ -164,10 +198,48 @@ function clearAuthCheckProblem() {
   if (container) container.hidden = true;
 }
 
+async function redeemOwnerLoginTokenIfPresent() {
+  let token = "";
+  try {
+    const url = new URL(location.href);
+    token = (url.searchParams.get("loginToken") || "").trim();
+    if (!token) return false;
+    url.searchParams.delete("loginToken");
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+  } catch {
+    return false;
+  }
+  try {
+    const result = await api("/api/v1/auth/owner-login-token", {
+      method: "POST",
+      body: JSON.stringify({ token, deviceName: deviceName() })
+    });
+    clearAuthCheckProblem();
+    showSignedIn(result.account, result.session);
+    rememberUsername(result.account);
+    const hint = document.querySelector("#auth-session-note");
+    if (hint) hint.hidden = true;
+    announce(`Вы вошли как ${result.account.displayName}.`);
+    await loadSessions({ quiet: true });
+    return true;
+  } catch (error) {
+    showSignedOut();
+    showAuthView("login");
+    const hint = document.querySelector("#auth-session-note");
+    if (hint) {
+      hint.textContent = error.message;
+      hint.hidden = false;
+    }
+    announce(error.message);
+    return true;
+  }
+}
+
 export async function loadCurrentAccount({ quiet = false } = {}) {
   const retry = document.querySelector("#auth-retry");
   if (retry) retry.disabled = true;
   try {
+    if (await redeemOwnerLoginTokenIfPresent()) return;
     const result = await api("/api/v1/auth/me");
     clearAuthCheckProblem();
     showSignedIn(result.account, result.session);
