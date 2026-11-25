@@ -1,9 +1,11 @@
 import { logDiagnostic, logTraceEvent, diagnosticErrorName } from "./diagnostics-log.js";
-import { translateText } from "./i18n.js";
+import { language, translateText } from "./i18n.js";
 import { api } from "./api.js";
 import { chatAccessibleLabel, chatPreview, chatTimeLabel, dayKey, dayLabel, isNearBottom, messageDeliveryState, messageTime } from "./chat-presentation.js";
 import { filePreviewText } from "./file-format.js";
 import { renderFileMessage, resetFileMedia } from "./file-message.js";
+import { buildMessageReadingText, deliveryStatusSummary, formatDurationSpoken } from "./message-reading-core.js";
+import { getMessageReadingMode } from "./message-reading.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import {
   applyRemoteVoiceProgress,
@@ -67,6 +69,10 @@ export function setupMessenger() {
     renderChats();
     if(selectedChat){renderMessages({preserveVoicePlayback:true});updatePeerPresence();}
     else renderConversation();
+  });
+  window.addEventListener("bulbam:reading-mode-changed", () => {
+    if (!account || !selectedChat) return;
+    renderMessages({ preserveVoicePlayback: true });
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !account) return;
@@ -378,6 +384,8 @@ function updatePeerPresence() {
 
 function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false } = {}) {
   const list = elements.messageList;
+  const readingMode = getMessageReadingMode();
+  const locale = language();
   const wasNearBottom = isNearBottom(list);
   const oldScrollTop = list.scrollTop;
   const previousIds = new Set([...list.querySelectorAll(".message[data-message-id]")]
@@ -386,6 +394,10 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
   const focusState = preserveVoicePlayback ? captureMessageFocus() : null;
   resetVoicePlayers();
   list.replaceChildren();
+  list.dataset.readingMode = readingMode;
+  if (readingMode === "table") list.setAttribute("role", "presentation");
+  else list.removeAttribute("role");
+
   if (!selectedChat) return;
 
   if (!messages.length) {
@@ -398,7 +410,90 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
   }
 
   messages.sort((left, right) => left.createdAt - right.createdAt);
+
+  if (readingMode === "table") {
+    renderMessagesAsTable(list, locale);
+  } else {
+    renderMessagesAsList(list, readingMode, locale);
+  }
+
+  setVoiceMessageSequence(messages);
+  const stickToBottom = scrollToBottom || !preserveVoicePlayback || wasNearBottom;
+  if (stickToBottom) {
+    list.scrollTop = list.scrollHeight;
+    if (jumpButton) jumpButton.hidden = true;
+  } else {
+    list.scrollTop = oldScrollTop;
+    const newMessage = messages.some((message) => !previousIds.has(message.messageId) &&
+      message.senderUserId !== account?.userId && !message.localState);
+    if (newMessage && jumpButton) jumpButton.hidden = false;
+  }
+  if (playbackState.length) void restoreVoicePlaybackState(playbackState);
+  if (focusState) restoreMessageFocus(focusState);
+}
+
+function resolveMessageAuthor(message, mine) {
+  if (mine) return "Вы";
+  if (selectedChat.kind === "group") {
+    return selectedChat.members?.find((member) => member.userId === message.senderUserId)?.displayName ?? "Участник";
+  }
+  return selectedChat.peer.displayName;
+}
+
+function buildMessageMetaNode(message, mine) {
+  const meta = document.createElement("span");
+  meta.className = "message-meta";
+  const time = document.createElement("time");
+  const validDate = new Date(message.createdAt);
+  if (Number.isFinite(validDate.getTime())) time.dateTime = validDate.toISOString();
+  time.textContent = messageTime(message.createdAt);
+  meta.append(time);
+
+  const state = message.localState === "pending"
+    ? "отправляется"
+    : message.localState === "failed"
+      ? "не отправлено"
+      : mine
+        ? message.readAt ? "прочитано" : message.deliveredAt ? "доставлено" : "отправлено"
+        : "";
+  if (state && !(mine && selectedChat.kind === "group")) {
+    const stateLabel = document.createElement("span");
+    stateLabel.textContent = ` · ${translateText(state)}`;
+    meta.append(stateLabel);
+  }
+  return meta;
+}
+
+function buildGroupReadersDetails(message, mine) {
+  if (!mine || selectedChat.kind !== "group" || message.localState) return null;
+  const readers = message.readBy ?? [];
+  const total = Math.max(readers.length, message.eligibleRecipientCount ?? (selectedChat.members?.length ?? 1) - 1);
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = `Прочитали: ${readers.length} из ${total}`;
+  const names = document.createElement("p");
+  names.textContent = readers.length
+    ? readers.map((reader) => selectedChat.members?.find((member) => member.userId === reader.userId)?.displayName ?? "Участник").join(", ")
+    : "Пока никто не прочитал";
+  details.append(summary, names);
+  return details;
+}
+
+function buildRetryButton(message) {
+  if (message.localState !== "failed" || message.kind === "voice") return null;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "retry-message";
+  retry.textContent = translateText("Повторить отправку");
+  retry.addEventListener("click", () => void transmitPending(message));
+  return retry;
+}
+
+function renderMessagesAsList(list, readingMode, locale) {
+  const isUnified = readingMode === "single" || readingMode === "telegram";
+  const isGroup = selectedChat.kind === "group";
   let lastDay = "";
+
   for (const message of messages) {
     const currentDay = dayKey(message.createdAt);
     if (currentDay !== lastDay) {
@@ -417,15 +512,69 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
     item.dataset.messageId = message.messageId;
     if (message.localState) item.classList.add(`message-${message.localState}`);
 
-    const authorName = mine ? "Вы" : selectedChat.kind==='group'
-      ? selectedChat.members?.find(member=>member.userId===message.senderUserId)?.displayName??'Участник'
-      : selectedChat.peer.displayName;
+    const authorName = resolveMessageAuthor(message, mine);
     const author = document.createElement("span");
     author.className = "message-author";
     author.textContent = authorName;
     if (!mine) author.dataset.userContent = "true";
-    item.append(author);
 
+    const meta = buildMessageMetaNode(message, mine);
+    const readersDetails = buildGroupReadersDetails(message, mine);
+    const retryButton = buildRetryButton(message);
+
+    if (isUnified) {
+      const spokenSummary = buildMessageReadingText(message, {
+        mode: readingMode,
+        mine,
+        authorName,
+        isGroup,
+        locale,
+        translate: translateText
+      });
+
+      if (message.kind === "voice" && message.voice) {
+        const voiceNode = renderVoiceMessage(message, mine);
+        const trigger = document.createElement("button");
+        trigger.type = "button";
+        trigger.className = "message-voice-summary-trigger";
+        trigger.setAttribute("aria-label", spokenSummary);
+        trigger.textContent = `${translateText("Воспроизвести голосовое")} · ${formatDurationSpoken(message.voice.durationMs, translateText)}`;
+        trigger.addEventListener("click", () => {
+          voiceNode.querySelector(".voice-actions button")?.click();
+        });
+        author.setAttribute("aria-hidden", "true");
+        meta.setAttribute("aria-hidden", "true");
+        item.append(trigger, author, voiceNode, meta);
+      } else if (message.kind === "file" && message.file) {
+        const summarySpan = document.createElement("span");
+        summarySpan.className = "visually-hidden";
+        summarySpan.textContent = spokenSummary;
+        author.setAttribute("aria-hidden", "true");
+        meta.setAttribute("aria-hidden", "true");
+        item.append(summarySpan, author, renderFileMessage(message, authorName), meta);
+      } else {
+        const surface = document.createElement("span");
+        surface.className = "message-reading-surface";
+        surface.textContent = spokenSummary;
+
+        const visualBody = document.createElement("div");
+        visualBody.className = "message-visual-body";
+        visualBody.setAttribute("aria-hidden", "true");
+
+        const body = document.createElement("p");
+        body.dataset.userContent = "true";
+        body.textContent = message.text;
+        visualBody.append(author, body, meta);
+        item.append(surface, visualBody);
+      }
+
+      if (readersDetails) item.append(readersDetails);
+      if (retryButton) item.append(retryButton);
+      list.append(item);
+      continue;
+    }
+
+    item.append(author);
     if (message.kind === "voice" && message.voice) {
       item.append(renderVoiceMessage(message, mine));
     } else if (message.kind === "file" && message.file) {
@@ -436,73 +585,109 @@ function renderMessages({ preserveVoicePlayback = false, scrollToBottom = false 
       body.textContent = message.text;
       item.append(body);
     }
+    item.append(meta);
+    if (readersDetails) item.append(readersDetails);
+    if (retryButton) item.append(retryButton);
+    list.append(item);
+  }
+}
 
-    const meta = document.createElement("span");
-    meta.className = "message-meta";
+function renderMessagesAsTable(list, locale) {
+  const isGroup = selectedChat.kind === "group";
+  const wrapper = document.createElement("li");
+  wrapper.className = "message-table-shell";
+  wrapper.setAttribute("role", "presentation");
+
+  const table = document.createElement("table");
+  table.className = "message-table";
+  table.setAttribute("aria-label", translateText("Сообщения"));
+
+  const thead = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const colTitle of ["Отправитель", "Сообщение", "Время и статус"]) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = translateText(colTitle);
+    headerRow.append(th);
+  }
+  thead.append(headerRow);
+
+  const tbody = document.createElement("tbody");
+  let lastDay = "";
+
+  for (const message of messages) {
+    const currentDay = dayKey(message.createdAt);
+    if (currentDay !== lastDay) {
+      const dayRow = document.createElement("tr");
+      dayRow.className = "message-table-day";
+      const dayHeader = document.createElement("th");
+      dayHeader.colSpan = 3;
+      dayHeader.scope = "colgroup";
+      dayHeader.textContent = dayLabel(message.createdAt);
+      dayRow.append(dayHeader);
+      tbody.append(dayRow);
+      lastDay = currentDay;
+    }
+
+    const mine = message.senderUserId === account?.userId;
+    const authorName = resolveMessageAuthor(message, mine);
+    const row = document.createElement("tr");
+    row.className = `message message-table-row ${mine ? "message-mine" : "message-theirs"}`;
+    row.dataset.messageId = message.messageId;
+    if (message.localState) row.classList.add(`message-${message.localState}`);
+
+    const authorCell = document.createElement("td");
+    authorCell.className = "message-cell-author";
+    authorCell.textContent = authorName;
+    if (!mine) authorCell.dataset.userContent = "true";
+
+    const contentCell = document.createElement("td");
+    contentCell.className = "message-cell-content";
+    if (message.kind === "voice" && message.voice) {
+      contentCell.append(renderVoiceMessage(message, mine));
+    } else if (message.kind === "file" && message.file) {
+      contentCell.append(renderFileMessage(message, authorName));
+    } else {
+      const body = document.createElement("p");
+      body.dataset.userContent = "true";
+      body.textContent = message.text;
+      contentCell.append(body);
+    }
+
+    const metaCell = document.createElement("td");
+    metaCell.className = "message-cell-meta";
     const time = document.createElement("time");
     const validDate = new Date(message.createdAt);
     if (Number.isFinite(validDate.getTime())) time.dateTime = validDate.toISOString();
     time.textContent = messageTime(message.createdAt);
-    meta.append(time);
+    metaCell.append(time);
 
-    const state = message.localState === "pending"
-      ? "отправляется"
-      : message.localState === "failed"
-        ? "не отправлено"
-        : mine
-          ? message.readAt ? "прочитано" : message.deliveredAt ? "доставлено" : "отправлено"
-          : "";
-    if (state && !(mine&&selectedChat.kind==='group')) {
-      const stateLabel = document.createElement("span");
-      stateLabel.textContent = ` · ${translateText(state)}`;
-      meta.append(stateLabel);
-    }
-    let readersDetails=null;
-    if(mine&&selectedChat.kind==='group'&&!message.localState){
-      const readers=message.readBy??[];
-      const total=Math.max(readers.length,message.eligibleRecipientCount??(selectedChat.members?.length??1)-1);
-      const details=document.createElement('details');
-      const summary=document.createElement('summary');
-      summary.textContent=`Прочитали: ${readers.length} из ${total}`;
-      const names=document.createElement('p');
-      names.textContent=readers.length?readers.map(reader=>selectedChat.members?.find(member=>member.userId===reader.userId)?.displayName??'Участник').join(', '):'Пока никто не прочитал';
-      details.append(summary,names);
-      readersDetails=details;
-    }
-    item.append(meta);
-    if(readersDetails)item.append(readersDetails);
-
-    if (message.localState === "failed" && message.kind !== "voice") {
-      const retry = document.createElement("button");
-      retry.type = "button";
-      retry.className = "retry-message";
-      retry.textContent = translateText("Повторить отправку");
-      retry.addEventListener("click", () => void transmitPending(message));
-      item.append(retry);
+    const statusSummary = deliveryStatusSummary(message, { mine, isGroup, verbose: false, translate: translateText });
+    if (statusSummary) {
+      const statusSpan = document.createElement("span");
+      statusSpan.textContent = ` · ${statusSummary}`;
+      metaCell.append(statusSpan);
     }
 
-    list.append(item);
+    const readersDetails = buildGroupReadersDetails(message, mine);
+    if (readersDetails) metaCell.append(readersDetails);
+    const retryButton = buildRetryButton(message);
+    if (retryButton) metaCell.append(retryButton);
+
+    row.append(authorCell, contentCell, metaCell);
+    tbody.append(row);
   }
 
-  setVoiceMessageSequence(messages);
-  const stickToBottom = scrollToBottom || !preserveVoicePlayback || wasNearBottom;
-  if (stickToBottom) {
-    list.scrollTop = list.scrollHeight;
-    if (jumpButton) jumpButton.hidden = true;
-  } else {
-    list.scrollTop = oldScrollTop;
-    const newMessage = messages.some((message) => !previousIds.has(message.messageId) &&
-      message.senderUserId !== account?.userId && !message.localState);
-    if (newMessage && jumpButton) jumpButton.hidden = false;
-  }
-  if (playbackState.length) void restoreVoicePlaybackState(playbackState);
-  if (focusState) restoreMessageFocus(focusState);
+  table.append(thead, tbody);
+  wrapper.append(table);
+  list.append(wrapper);
 }
 
 function jumpToLatest() {
   elements.messageList.scrollTop = elements.messageList.scrollHeight;
   if (jumpButton) jumpButton.hidden = true;
-  const latest = elements.messageList.querySelector(".message:last-child");
+  const allMessages = elements.messageList.querySelectorAll(".message");
+  const latest = allMessages[allMessages.length - 1];
   if (latest) {
     latest.tabIndex = -1;
     latest.focus({ preventScroll: true });

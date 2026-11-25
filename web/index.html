@@ -588,6 +588,7 @@
               <option value="compact">Компактный список</option>
             </select>
             <p class="hint">Компактный список показывает каждое сообщение отдельной строкой, по принципу вашего Telegram-клиента. Семантически это остаётся списком сообщений, а не таблицей данных.</p>
+            <button id="open-accessibility-reading" type="button" class="secondary-glass-button">Как читать сообщения (Специальные возможности)</button>
           </section>
 
           <section class="card" aria-labelledby="account-title">
@@ -660,6 +661,15 @@
 
           <section class="card" aria-labelledby="accessibility-title">
             <h3 id="accessibility-title">Специальные возможности</h3>
+            <label for="message-reading-mode">Как читать сообщения</label>
+            <select id="message-reading-mode" aria-describedby="message-reading-mode-description">
+              <option value="parts">По частям (как сейчас)</option>
+              <option value="single">Одним сообщением</option>
+              <option value="telegram">Как в Telegram (подробно)</option>
+              <option value="table">Таблицей (колонки)</option>
+            </select>
+            <p id="message-reading-mode-description" class="reading-mode-description"></p>
+            <div id="message-reading-preview" class="reading-preview-box" role="region" aria-label="Пример чтения сообщений"></div>
             <label class="switch-row">
               <input id="voice-detailed-help" type="checkbox" checked>
               Подробные подсказки для начинающих

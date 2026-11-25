@@ -3,6 +3,7 @@ import { setupDiagnostics } from "./js/diagnostics-ui.js";
 import { setupDetailedDiagnostics } from "./js/diagnostics-runtime.js";
 import { setupDetailedHelp } from "./js/accessibility-help.js";
 import { setupSettingsScreens } from "./js/settings-screens.js";
+import { setupMessageReadingSettings } from "./js/message-reading.js";
 import { setupWelcome } from "./js/welcome.js";
 import { setupRegistrationGuide } from "./js/registration-guide.js";
 import { setupAdminRecovery } from "./js/admin-recovery.js";
@@ -33,6 +34,7 @@ export function startApp() {
   setupDetailedDiagnostics();
   setupDetailedHelp();
   setupSettingsScreens();
+  setupMessageReadingSettings();
   setupHealth();
   setupAuth();
   setupAdminRecovery();
