@@ -41,6 +41,16 @@ export async function api(path, options = {}) {
     const error = new Error(translateText(payload?.error?.message || `Ошибка HTTP ${response.status}`));
     error.code = payload?.error?.code || "request_failed";
     error.status = response.status;
+    if (
+      response.status === 401 &&
+      error.code === "invalid_session" &&
+      path !== "/api/v1/auth/me" &&
+      path !== "/api/v1/auth/login" &&
+      path !== "/api/v1/auth/register" &&
+      typeof window !== "undefined"
+    ) {
+      window.dispatchEvent(new CustomEvent("bulbam:session-expired", { detail: { path } }));
+    }
     throw error;
   }
 

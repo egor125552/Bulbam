@@ -9,7 +9,8 @@ import { DurableObjectRealtime } from "../../realtime/public";
 
 const TTL = 24 * 60 * 60_000;
 const APPROVAL_TTL = 15 * 60_000;
-const MAX_REQUESTS_PER_DAY = 2;
+const MAX_REQUESTS_PER_DAY = 6;
+const MAX_REQUESTS_PER_IP_DAY = 20;
 type Row=Record<string,unknown>;
 function invalid(): never {throw new ApiError(400,"invalid_recovery_request","Запрос восстановления недействителен или срок его действия истёк.");}
 function isManager(auth:AuthenticatedSession):boolean {
@@ -44,23 +45,31 @@ export class AdminRecoveryService {
     const verificationCode=Array.from(crypto.getRandomValues(new Uint8Array(6))).map(n=>String(n%10)).join("").slice(0,6);
     // Manager accounts may NOT be recovered by a second manager's approval alone.
     // Unknown accounts and ineligible accounts return the same generic payload.
-    if(row?.role === "member" && Number(globalCount?.total??0)<8) {
+    if(row?.role === "member" && Number(globalCount?.total??0)<MAX_REQUESTS_PER_IP_DAY) {
       const recent=await this.db.prepare(
         "SELECT COUNT(*) AS total FROM admin_recovery_requests WHERE user_id=? AND created_at>?"
       ).bind(row.user_id,now-TTL).first<{total:number}>();
-      const active=await this.db.prepare(
-        "SELECT COUNT(*) AS total FROM admin_recovery_requests WHERE user_id=? AND status IN ('pending','approved') AND expires_at>?"
-      ).bind(row.user_id,now).first<{total:number}>();
-      if(Number(recent?.total??0)<MAX_REQUESTS_PER_DAY && Number(active?.total??0)===0){
-        await this.db.prepare(`INSERT INTO admin_recovery_requests
-          (request_id,user_id,secret_hash,device_name,requester_hash,verification_code,status,created_at,expires_at)
-          VALUES (?,?,?,?,?,?,'pending',?,?)`
-        ).bind(requestId,row.user_id,await sha256Hex(secret),deviceName,requesterHash,verificationCode,now,now+TTL).run();
-        const owners=await this.db.prepare("SELECT user_id FROM accounts WHERE role='owner' AND disabled_at IS NULL").all<{user_id:string}>();
-        const task=Promise.all((owners.results??[]).map(async owner=>{
+      if(Number(recent?.total??0)<MAX_REQUESTS_PER_DAY){
+        const secretHash=await sha256Hex(secret);
+        // Supersede any stale pending/approved request for this user (for instance
+        // if they closed or switched tabs) so a fresh request always reaches admins
+        // and two active approvals can never coexist.
+        await this.db.batch([
+          this.db.prepare(
+            "UPDATE admin_recovery_requests SET expires_at=? WHERE user_id=? AND status IN ('pending','approved') AND expires_at>?"
+          ).bind(now,row.user_id,now),
+          this.db.prepare(`INSERT INTO admin_recovery_requests
+            (request_id,user_id,secret_hash,device_name,requester_hash,verification_code,status,created_at,expires_at)
+            VALUES (?,?,?,?,?,?,'pending',?,?)`
+          ).bind(requestId,row.user_id,secretHash,deviceName,requesterHash,verificationCode,now,now+TTL)
+        ]);
+        const managers=await this.db.prepare(
+          "SELECT user_id FROM accounts WHERE role IN ('owner','admin') AND disabled_at IS NULL"
+        ).all<{user_id:string}>();
+        const task=Promise.all((managers.results??[]).map(async manager=>{
           await Promise.all([
-            this.realtime.publishToUsers([owner.user_id],{type:"admin.recovery.request"}),
-            this.push?.notifyAdminRecoveryRequest(owner.user_id) ?? Promise.resolve()
+            this.realtime.publishToUsers([manager.user_id],{type:"admin.recovery.request"}),
+            this.push?.notifyAdminRecoveryRequest(manager.user_id) ?? Promise.resolve()
           ]);
         })).catch(error=>console.warn("[AdminRecovery] notification failed",error));
         if(this.defer)this.defer(task);else await task;
@@ -111,6 +120,18 @@ export class AdminRecoveryService {
       AND user_id IN (SELECT user_id FROM accounts WHERE role='member' AND disabled_at IS NULL)`
     ).bind(approve?"approved":"denied",now,auth.account.userId,approve?now+APPROVAL_TTL:now+TTL,requestId,now).run();
     if(result.meta?.changes!==1)invalid();
+    const managers=await this.db.prepare(
+      "SELECT user_id FROM accounts WHERE role IN ('owner','admin') AND disabled_at IS NULL"
+    ).all<{user_id:string}>();
+    const managerIds=(managers.results??[]).map(manager=>manager.user_id);
+    if(managerIds.length){
+      const syncTask=this.realtime.publishToUsers(managerIds,{
+        type:"admin.recovery.updated",
+        requestId,
+        status:approve?"approved":"denied"
+      }).catch(error=>console.warn("[AdminRecovery] queue sync failed",error));
+      if(this.defer)this.defer(syncTask);else await syncTask;
+    }
     return {ok:true};
   }
 

@@ -102,4 +102,55 @@ describe("administrator-assisted account recovery",()=>{
       requestId,secret,newPassword:"another-new-password-2026"
     })).status).toBe(400);
   });
+  test("a second request supersedes a previously approved request and reaches admins",async()=>{
+    const {owner}=await users();
+    const first=await (await post("/api/v1/auth/admin-recovery/request",{
+      username:"recovery_member",deviceName:"Tab 1"
+    })).json();
+    expect((await post("/api/v1/admin/recovery-requests/"+first.requestId+"/decision",{
+      approve:true,verifiedIdentity:true
+    },owner)).status).toBe(200);
+
+    // User switched tabs and submits a second request while the first is still approved.
+    const second=await (await post("/api/v1/auth/admin-recovery/request",{
+      username:"recovery_member",deviceName:"Tab 2"
+    })).json();
+
+    const queue=await (await server.fetch("/api/v1/admin/recovery-requests",{headers:{cookie:owner}})).json();
+    expect(queue.requests.map(r=>r.requestId)).toEqual([second.requestId]);
+
+    // First approved request must no longer be usable once superseded.
+    const firstStatus=await (await post("/api/v1/auth/admin-recovery/status",{
+      requestId:first.requestId,secret:first.secret
+    })).json();
+    expect(firstStatus.status).toBe("expired");
+    expect((await post("/api/v1/auth/admin-recovery/complete",{
+      requestId:first.requestId,secret:first.secret,newPassword:"old-tab-password-2026"
+    })).status).toBe(400);
+
+    // Admin approves the second request and user completes recovery.
+    expect((await post("/api/v1/admin/recovery-requests/"+second.requestId+"/decision",{
+      approve:true,verifiedIdentity:true
+    },owner)).status).toBe(200);
+    const completed=await post("/api/v1/auth/admin-recovery/complete",{
+      requestId:second.requestId,secret:second.secret,newPassword:"second-tab-password-2026"
+    });
+    expect(completed.status).toBe(200);
+  });
+  test("auth/me refreshes the sliding session cookie and extends active sessions",async()=>{
+    const {owner,env}=await users();
+    const before=await env.DB.prepare("SELECT session_id,last_seen_at,expires_at FROM sessions LIMIT 1").first();
+    const staleLastSeen=Date.now()-10*60*1000;
+    const shorterExpiry=Date.now()+24*60*60*1000;
+    await env.DB.prepare("UPDATE sessions SET last_seen_at=?, expires_at=? WHERE session_id=?")
+      .bind(staleLastSeen,shorterExpiry,before.session_id).run();
+
+    const me=await server.fetch("/api/v1/auth/me",{headers:{cookie:owner}});
+    expect(me.status).toBe(200);
+    const setCookie=me.headers.get("set-cookie")||"";
+    expect(setCookie).toContain("bulbam_session=");
+    expect(setCookie).toContain("HttpOnly");
+    const after=await env.DB.prepare("SELECT expires_at FROM sessions WHERE session_id=?").bind(before.session_id).first();
+    expect(Number(after.expires_at)).toBeGreaterThan(shorterExpiry);
+  });
 });

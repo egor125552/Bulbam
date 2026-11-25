@@ -136,6 +136,21 @@ export function setupAuth() {
     const field = document.querySelector("#recovery-codes-text");
     if (field) field.value = "";
   });
+  window.addEventListener("bulbam:session-expired", () => {
+    if (!getCurrentAccount()) return;
+    clearAuthCheckProblem();
+    showSignedOut();
+    restoreUsernameHint();
+    showAuthView("login");
+    const hint = document.querySelector("#auth-session-note");
+    if (hint) hint.hidden = false;
+    announce("Сеанс завершён или обновлён. Войдите в аккаунт ещё раз.");
+  });
+  window.addEventListener("bulbam:show-auth-view", (event) => {
+    if (getCurrentAccount()) return;
+    const view = event?.detail?.view;
+    if (view) showAuthView(view);
+  });
   restoreUsernameHint();
 }
 

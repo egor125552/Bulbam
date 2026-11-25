@@ -279,8 +279,15 @@ export class D1IdentityRepository implements IdentityRepository {
     };
   }
 
-  async touchSession(sessionId: string, now: number): Promise<void> {
+  async touchSession(sessionId: string, now: number, expiresAt?: number): Promise<void> {
     await this.initialize();
+    if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
+      await this.db
+        .prepare("UPDATE sessions SET last_seen_at = ?, expires_at = MAX(expires_at, ?) WHERE session_id = ? AND revoked_at IS NULL")
+        .bind(now, expiresAt, sessionId)
+        .run();
+      return;
+    }
     await this.db
       .prepare("UPDATE sessions SET last_seen_at = ? WHERE session_id = ? AND revoked_at IS NULL")
       .bind(now, sessionId)

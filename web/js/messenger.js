@@ -822,6 +822,10 @@ function connectRealtime() {
       handleDeliveredReceipts(payload);
     } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {
       handleVoiceProgress(payload);
+    } else if (payload?.type === "admin.recovery.request") {
+      window.dispatchEvent(new Event("bulbam:admin-recovery-request"));
+    } else if (payload?.type === "admin.recovery.updated") {
+      window.dispatchEvent(new Event("bulbam:admin-recovery-updated"));
     }
   });
 

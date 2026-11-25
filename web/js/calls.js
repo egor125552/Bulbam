@@ -582,6 +582,10 @@ async function handleCallEvent(event) {
     window.dispatchEvent(new Event("bulbam:admin-recovery-request"));
     return;
   }
+  if (event.type === "admin.recovery.updated") {
+    window.dispatchEvent(new Event("bulbam:admin-recovery-updated"));
+    return;
+  }
 
   if (event.type === "call.active" && event.call) {
     if (currentCall) return;

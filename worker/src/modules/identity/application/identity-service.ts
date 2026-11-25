@@ -11,7 +11,7 @@ import type { AuthenticatedSession, PublicAccount, Session } from "../domain/mod
 import { validateDisplayName, validateUserSearchQuery } from "../domain/validation";
 import type { IdentityRepository } from "../ports/identity-repository";
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_INVITE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -156,8 +156,10 @@ export class IdentityService {
     }
 
     if (now - authenticated.session.lastSeenAt >= SESSION_TOUCH_INTERVAL_MS) {
-      await this.repository.touchSession(authenticated.session.sessionId, now);
+      const nextExpiresAt = Math.max(authenticated.session.expiresAt, now + SESSION_TTL_MS);
+      await this.repository.touchSession(authenticated.session.sessionId, now, nextExpiresAt);
       authenticated.session.lastSeenAt = now;
+      authenticated.session.expiresAt = nextExpiresAt;
     }
     return authenticated;
   }

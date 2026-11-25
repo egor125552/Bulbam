@@ -41,7 +41,7 @@ export interface IdentityRepository {
   }): Promise<Session>;
 
   findAuthenticatedSession(tokenHash: string, now: number): Promise<AuthenticatedSession | null>;
-  touchSession(sessionId: string, now: number): Promise<void>;
+  touchSession(sessionId: string, now: number, expiresAt?: number): Promise<void>;
   listSessions(userId: string, now: number): Promise<Session[]>;
   revokeSession(userId: string, sessionId: string, now: number): Promise<boolean>;
 

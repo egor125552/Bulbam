@@ -136,6 +136,12 @@ const migrations = [
       "CREATE INDEX IF NOT EXISTS idx_admin_recovery_requester ON admin_recovery_requests(requester_hash,created_at)",
       "CREATE INDEX IF NOT EXISTS idx_admin_recovery_pending ON admin_recovery_requests(status,created_at)"
     ]
+  },
+  {
+    version: 6,
+    statements: [
+      "UPDATE sessions SET revoked_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE revoked_at IS NULL"
+    ]
   }
 ] as const;
 

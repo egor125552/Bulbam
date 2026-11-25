@@ -167,8 +167,13 @@ export async function handleIdentityHttp(
 
   if (url.pathname === "/api/v1/auth/me") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
-    const authenticated = await service.authenticate(sessionToken(request));
-    return json({ ok: true, account: authenticated.account, session: authenticated.session });
+    const token = sessionToken(request);
+    const authenticated = await service.authenticate(token);
+    const response = json({ ok: true, account: authenticated.account, session: authenticated.session });
+    const hasBearer = (request.headers.get("authorization")?.trim() ?? "").toLowerCase().startsWith("bearer ");
+    return token && !hasBearer
+      ? withSessionCookie(response, token, authenticated.session.expiresAt)
+      : response;
   }
 
   if (url.pathname === "/api/v1/auth/logout") {
