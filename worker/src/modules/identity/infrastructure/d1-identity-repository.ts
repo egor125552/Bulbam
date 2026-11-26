@@ -321,6 +321,28 @@ export class D1IdentityRepository implements IdentityRepository {
     return (result.meta?.changes ?? 0) === 1;
   }
 
+  async revokeAllSessions(userId: string, now: number, exceptSessionId?: string): Promise<number> {
+    await this.initialize();
+    const result = exceptSessionId
+      ? await this.db
+          .prepare(`
+            UPDATE sessions
+            SET revoked_at = ?
+            WHERE user_id = ? AND revoked_at IS NULL AND session_id <> ?
+          `)
+          .bind(now, userId, exceptSessionId)
+          .run()
+      : await this.db
+          .prepare(`
+            UPDATE sessions
+            SET revoked_at = ?
+            WHERE user_id = ? AND revoked_at IS NULL
+          `)
+          .bind(now, userId)
+          .run();
+    return Number(result.meta?.changes ?? 0);
+  }
+
   async replaceRecoveryCodes(userId: string, codeHashes: string[], now: number): Promise<void> {
     await this.initialize();
     if (codeHashes.length !== 8 || new Set(codeHashes).size !== 8 ||

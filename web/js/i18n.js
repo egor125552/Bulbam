@@ -4,23 +4,40 @@ const KEY="bulbam.interface.language";
 const supported=new Set(["ru","be"]);
 const originalStrings=new WeakMap();
 const originalAttributes=new WeakMap();
-const inverse=new Map(Object.entries(be).map(([from,to])=>[to,from]));
-const prefixTranslations=Object.entries(be).filter(([key])=>key.trimEnd().endsWith(":"))
-  .sort((a,b)=>b[0].length-a[0].length);
+let inverseCache=null;
+let prefixTranslationsCache=null;
+let templateTranslationsCache=null;
+
+function getInverse(){
+  if(!inverseCache)inverseCache=new Map(Object.entries(be).map(([from,to])=>[to,from]));
+  return inverseCache;
+}
+function getPrefixTranslations(){
+  if(!prefixTranslationsCache){
+    prefixTranslationsCache=Object.entries(be).filter(([key])=>key.trimEnd().endsWith(":"))
+      .sort((a,b)=>b[0].length-a[0].length);
+  }
+  return prefixTranslationsCache;
+}
 // Recognize ONLY explicit, audited interface templates. Captured values (names,
 // message counts, errors) are preserved, never machine-translated or modified.
-const templateTranslations=Object.entries(be)
-  .filter(([source])=>/\{\{\d+\}\}/.test(source))
-  .map(([source,target])=>{
-    const pieces=source.split(/\{\{\d+\}\}/);
-    const indices=[...source.matchAll(/\{\{(\d+)\}\}/g)].map(match=>Number(match[1]));
-    const staticLength=pieces.reduce((sum,piece)=>sum+piece.length,0);
-    const escaped=pieces.map(piece=>piece.replace(/[.*+?^$\{\}()|[\]\\]/g,"\\$&"));
-    return {source,target,staticLength,indices,
-      regex:new RegExp("^"+escaped.join("([\\s\\S]*?)")+"$")};
-  })
-  .filter(item=>item.staticLength>=4)
-  .sort((a,b)=>b.staticLength-a.staticLength);
+function getTemplateTranslations(){
+  if(!templateTranslationsCache){
+    templateTranslationsCache=Object.entries(be)
+      .filter(([source])=>/\{\{\d+\}\}/.test(source))
+      .map(([source,target])=>{
+        const pieces=source.split(/\{\{\d+\}\}/);
+        const indices=[...source.matchAll(/\{\{(\d+)\}\}/g)].map(match=>Number(match[1]));
+        const staticLength=pieces.reduce((sum,piece)=>sum+piece.length,0);
+        const escaped=pieces.map(piece=>piece.replace(/[.*+?^$\{\}()|[\]\\]/g,"\\$&"));
+        return {source,target,staticLength,indices,
+          regex:new RegExp("^"+escaped.join("([\\s\\S]*?)")+"$")};
+      })
+      .filter(item=>item.staticLength>=4)
+      .sort((a,b)=>b.staticLength-a.staticLength);
+  }
+  return templateTranslationsCache;
+}
 
 const blocked="#message-list, #chat-list, #user-search-results, #account-display-name, #account-username, #account-id, #account-role, #conversation-title, #conversation-peer, textarea, code, pre";
 let current="ru",observer=null;
@@ -46,14 +63,14 @@ const patterns=[
 ];
 
 export function language(){return current;}
-export function originalText(value){return inverse.get(value)??value;}
+export function originalText(value){return current==="ru"?value:(getInverse().get(value)??value);}
 export function translateText(value) {
   if(current!=="be" || typeof value!=="string")return value;
   const trimmed=value.trim();
   if(!trimmed)return value;
   let translated=be[trimmed];
   if(!translated){
-    for(const template of templateTranslations) {
+    for(const template of getTemplateTranslations()) {
       const match=trimmed.match(template.regex);
       if(!match)continue;
       const variables={};
@@ -78,7 +95,7 @@ export function translateText(value) {
   if(!translated){
     // Dynamic errors include a runtime-supplied detail after a fixed prefix.
     // Translate only the interface prefix, never modify the detail itself.
-    for(const [prefix,translation] of prefixTranslations){
+    for(const [prefix,translation] of getPrefixTranslations()){
       if(trimmed.startsWith(prefix.trimEnd()+" ")){
         translated=translation.trimEnd()+" "+trimmed.slice(prefix.trimEnd().length+1);
         break;
@@ -138,8 +155,24 @@ function translateSubtree(root) {
     else updateAttributes(node);
   }
 }
+function syncObserver(){
+  observer?.disconnect();
+  if(current!=="be" || typeof MutationObserver==="undefined" || !document.body)return;
+  if(!observer){
+    observer=new MutationObserver(records=>{
+      if(current!=="be")return;
+      for(const record of records){
+        if(record.type==="characterData")updateText(record.target);
+        else if(record.type==="attributes")updateAttributes(record.target);
+        else for(const node of record.addedNodes)translateSubtree(node);
+      }
+    });
+  }
+  observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:attrs});
+}
 export function setLanguage(next){
   if(!supported.has(next))next="ru";
+  const previous=current;
   current=next;
   try{localStorage.setItem(KEY,next);}catch{}
   document.documentElement.lang=next;
@@ -149,7 +182,10 @@ export function setLanguage(next){
   for(const select of [document.querySelector("#settings-language"),document.querySelector("#welcome-language"),document.querySelector("#auth-language")]){
     if(select)select.value=next;
   }
-  translateSubtree(document.body);
+  if(next==="be" || previous==="be"){
+    translateSubtree(document.body);
+  }
+  syncObserver();
   window.dispatchEvent(new CustomEvent("bulbam:language-changed",{detail:{language:next}}));
 }
 function syncServiceWorkerLocale(locale){
@@ -165,13 +201,4 @@ export function setupI18n(){
     document.querySelector("#"+id)?.addEventListener("change",event=>setLanguage(event.target.value));
   }
   setLanguage(saved);
-  observer?.disconnect();
-  observer=new MutationObserver(records=>{
-    for(const record of records){
-      if(record.type==="characterData")updateText(record.target);
-      else if(record.type==="attributes")updateAttributes(record.target);
-      else for(const node of record.addedNodes)translateSubtree(node);
-    }
-  });
-  observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:attrs});
 }

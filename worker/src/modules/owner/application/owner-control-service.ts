@@ -159,7 +159,10 @@ export class OwnerControlService {
     }
 
     const revokedCount = await this.repository.revokeAllSessionsForUser(targetUserId, Date.now());
-    await this.presence.removeForUser(targetUserId);
+    await Promise.all([
+      this.pushRepository.removeAllForUser(targetUserId),
+      this.presence.removeSessionsForUser(targetUserId)
+    ]);
 
     const notify = Promise.all([
       this.realtime.publishToUsers([targetUserId], { type: "session.revoked" }),

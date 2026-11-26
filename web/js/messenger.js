@@ -7,6 +7,7 @@ import { renderFileMessage, resetFileMedia } from "./file-message.js";
 import { buildMessageReadingText, deliveryStatusSummary, formatDurationSpoken } from "./message-reading-core.js";
 import { getMessageReadingMode } from "./message-reading.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
+import { subscribeRealtime, reconnectRealtime, realtimeConnected } from "./shared-realtime.js";
 import {
   applyRemoteVoiceProgress,
   captureVoicePlaybackState,
@@ -21,10 +22,7 @@ let chats = [];
 let selectedChat = null;
 let messages = [];
 let searchTimer = null;
-let socket = null;
-let reconnectTimer = null;
-let reconnectDelay = 1000;
-let heartbeatTimer = null;
+let unsubscribeRealtime = null;
 let pollTimer = null;
 let generation = 0;
 let jumpButton = null;
@@ -77,7 +75,7 @@ export function setupMessenger() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !account) return;
     void refreshVisibleState();
-    if (!socket || socket.readyState > WebSocket.OPEN) connectRealtime();
+    if (!realtimeConnected()) reconnectRealtime({ resetBackoff: true });
   });
 }
 
@@ -785,61 +783,48 @@ async function acknowledgeIncomingMessages(conversationId, candidates) {
 }
 
 function connectRealtime() {
-  if (!account || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
-  clearTimeout(reconnectTimer);
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  logDiagnostic('Сеть','начало подключения сокета сообщений');
-  socket = new WebSocket(`${protocol}//${location.host}/api/v1/realtime`);
-
-  socket.addEventListener("open", () => {
-    logDiagnostic("Сеть", "сокет сообщений подключён");
-    reconnectDelay = 1000;
-    stopPolling();
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
-      if (socket?.readyState === WebSocket.OPEN) socket.send("ping");
-    }, 25000);
-  });
-
-  socket.addEventListener("message", (event) => {
-    let payload;
-    try {
-      payload = JSON.parse(String(event.data));
-    } catch {
-      return;
-    }
-    const known=['message.created','messages.delivered','messages.read','voice.progress','chat.created','chat.updated','chat.removed'];
-    logDiagnostic('Сеть','получено событие сокета',known.includes(payload?.type)?payload.type:'другое');
-    if (payload?.type === "message.created" && payload.message) {
-      logDiagnostic("Сервер", "событие новое сообщение");
-      handleRealtimeMessage(payload);
-    } else if(payload?.type==='chat.removed'){
-      if(selectedChat?.conversationId===payload.conversationId){selectedChat=null;messages=[];renderConversation();}
-      void loadChats({quiet:true});
-    } else if(payload?.type==='chat.created'||payload?.type==='chat.updated'){
-      void loadChats({quiet:true});
-    } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {
-      handleDeliveredReceipts(payload);
-    } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {
-      handleVoiceProgress(payload);
-    } else if (payload?.type === "admin.recovery.request") {
-      window.dispatchEvent(new Event("bulbam:admin-recovery-request"));
-    } else if (payload?.type === "admin.recovery.updated") {
-      window.dispatchEvent(new Event("bulbam:admin-recovery-updated"));
-    } else if (payload?.type === "owner.users.updated") {
-      window.dispatchEvent(new Event("bulbam:owner-users-updated"));
-    } else if (payload?.type === "session.revoked") {
-      window.dispatchEvent(new Event("bulbam:session-revoked"));
-    } else if (payload?.type === "account.deleted") {
-      window.dispatchEvent(new CustomEvent("bulbam:account-deleted", { detail: { reason: payload.reason || "" } }));
+  if (!account || unsubscribeRealtime) return;
+  logDiagnostic("Сеть", "начало подключения сокета сообщений");
+  unsubscribeRealtime = subscribeRealtime(account.userId, {
+    open: () => {
+      logDiagnostic("Сеть", "сокет сообщений подключён");
+      stopPolling();
+    },
+    message: (payload) => handleRealtimePayload(payload),
+    close: () => {
+      logDiagnostic("Сеть", "сокет сообщений отключён");
+      if (account) startPolling();
     }
   });
+}
 
-  socket.addEventListener("close", handleRealtimeDisconnect);
-  socket.addEventListener("error", () => {
-    logDiagnostic('Ошибки','ошибка сокета сообщений');
-    try { socket?.close(); } catch {}
-  });
+function handleRealtimePayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  const known = ["message.created", "messages.delivered", "messages.read", "voice.progress", "chat.created", "chat.updated", "chat.removed"];
+  logDiagnostic("Сеть", "получено событие сокета", known.includes(payload?.type) ? payload.type : "другое");
+  if (payload?.type === "message.created" && payload.message) {
+    logDiagnostic("Сервер", "событие новое сообщение");
+    handleRealtimeMessage(payload);
+  } else if (payload?.type === "chat.removed") {
+    if (selectedChat?.conversationId === payload.conversationId) { selectedChat = null; messages = []; renderConversation(); }
+    void loadChats({ quiet: true });
+  } else if (payload?.type === "chat.created" || payload?.type === "chat.updated") {
+    void loadChats({ quiet: true });
+  } else if ((payload?.type === "messages.delivered" || payload?.type === "messages.read") && Array.isArray(payload.receipts)) {
+    handleDeliveredReceipts(payload);
+  } else if (payload?.type === "voice.progress" && payload.messageId && payload.progress) {
+    handleVoiceProgress(payload);
+  } else if (payload?.type === "admin.recovery.request") {
+    window.dispatchEvent(new Event("bulbam:admin-recovery-request"));
+  } else if (payload?.type === "admin.recovery.updated") {
+    window.dispatchEvent(new Event("bulbam:admin-recovery-updated"));
+  } else if (payload?.type === "owner.users.updated") {
+    window.dispatchEvent(new Event("bulbam:owner-users-updated"));
+  } else if (payload?.type === "session.revoked") {
+    window.dispatchEvent(new Event("bulbam:session-revoked"));
+  } else if (payload?.type === "account.deleted") {
+    window.dispatchEvent(new CustomEvent("bulbam:account-deleted", { detail: { reason: payload.reason || "" } }));
+  }
 }
 
 function handleRealtimeMessage(payload) {
@@ -904,29 +889,11 @@ function handleDeliveredReceipts(payload) {
   }
 }
 
-function handleRealtimeDisconnect() {
-  logDiagnostic("Сеть", "сокет сообщений отключён");
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = null;
-  socket = null;
-  if (!account) return;
-  startPolling();
-  clearTimeout(reconnectTimer);
-  const delay = reconnectDelay;
-  reconnectDelay = Math.min(15000, reconnectDelay * 2);
-  logTraceEvent('Сеть','переподключение сокета назначено','',{retryMs:delay,step:reconnectDelay});
-  reconnectTimer = setTimeout(connectRealtime, delay);
-}
-
 function stopRealtime() {
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = null;
-  if (socket) {
-    try { socket.close(); } catch {}
+  if (unsubscribeRealtime) {
+    unsubscribeRealtime();
+    unsubscribeRealtime = null;
   }
-  socket = null;
 }
 
 function startPolling() {
@@ -942,6 +909,7 @@ function stopPolling() {
 }
 
 async function refreshVisibleState() {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   await loadChats({ quiet: true });
   await loadMessages({ quiet: true });
 }

@@ -64,7 +64,12 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     };
   }
 
-  async subscribe(userId: string, raw: Record<string, unknown>, userAgent: string | null): Promise<void> {
+  async subscribe(
+    userId: string,
+    raw: Record<string, unknown>,
+    userAgent: string | null,
+    sessionId: string | null = null
+  ): Promise<void> {
     if (!this.configured()) {
       badRequest(
         "push_not_configured",
@@ -75,6 +80,7 @@ implements MessageNotificationPublisher, IncomingCallNotificationPublisher {
     await this.repository.upsert({
       ...subscription,
       userId,
+      sessionId,
       userAgent
     });
   }

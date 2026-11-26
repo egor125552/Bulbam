@@ -2,25 +2,83 @@ import { logDiagnostic, describeApiOperation, logApiStart, logApiResult, logTrac
 import { language, translateText } from "./i18n.js";
 const responseObservers = new Set();
 
-export async function api(path, options = {}) {
-  const operation = describeApiOperation(path, String(options.method ?? "GET").toUpperCase());
-  const started = Date.now();
-  logApiStart(operation);
-  logTraceEvent('Сеть','API ожидание ответа','',{active:true});
-  let response;
+const RETRYABLE_STATUSES = new Set([408, 502, 503, 504]);
+const RETRY_DELAYS_MS = [450, 1100];
+
+function defaultTimeoutMs(method) {
+  return method === "GET" ? 12_000 : 20_000;
+}
+
+function canRetryRequest(path, method, options) {
+  if (options.signal?.aborted) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+  if (typeof options.retries === "number") return options.retries > 0;
+  if (method !== "GET") return false;
+  if (path === "/api/v1/presence" || path.startsWith("/api/v1/presence?")) return false;
+  return true;
+}
+
+async function fetchWithTimeout(path, fetchOptions, timeoutMs) {
+  if (!timeoutMs || timeoutMs <= 0 || fetchOptions.signal || typeof AbortController === "undefined") {
+    return fetch(path, fetchOptions);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetch(path, {
+    return await fetch(path, { ...fetchOptions, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function api(path, options = {}) {
+  const method = String(options.method ?? "GET").toUpperCase();
+  const operation = describeApiOperation(path, method);
+  const started = Date.now();
+  const timeoutMs = typeof options.timeoutMs === "number" ? options.timeoutMs : defaultTimeoutMs(method);
+  const maxRetries = canRetryRequest(path, method, options)
+    ? Math.max(0, Math.min(3, typeof options.retries === "number" ? options.retries : RETRY_DELAYS_MS.length))
+    : 0;
+
+  const { retries: _ignoredRetries, timeoutMs: _ignoredTimeout, ...rawFetchOptions } = options;
+  const fetchOptions = {
     cache: "no-store",
     credentials: "same-origin",
-    ...options,
+    ...rawFetchOptions,
     headers: {
       accept: "application/json",
       "accept-language": language() === "be" ? "be" : "ru",
-      ...(options.body ? { "content-type": "application/json" } : {}),
-      ...(options.headers || {})
+      ...(rawFetchOptions.body ? { "content-type": "application/json" } : {}),
+      ...(rawFetchOptions.headers || {})
     }
-    });
-  } catch (error) {
+  };
+
+  logApiStart(operation);
+  logTraceEvent('Сеть','API ожидание ответа','',{active:true});
+  let response = null;
+  let lastNetworkError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      response = await fetchWithTimeout(path, fetchOptions, timeoutMs);
+      if (attempt < maxRetries && RETRYABLE_STATUSES.has(response.status)) {
+        const waitMs = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+      lastNetworkError = null;
+      break;
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt >= maxRetries || options.signal?.aborted || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+        break;
+      }
+      const waitMs = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+
+  if (lastNetworkError || !response) {
+    const error = lastNetworkError || new Error("Сеть недоступна.");
     logDiagnostic("Сервер", "сбой сети", operation);
     logTraceEvent('Ошибки','API ошибка транспорта',diagnosticErrorName(error),{durationMs:Date.now()-started});
     throw error;
@@ -57,7 +115,7 @@ export async function api(path, options = {}) {
   logDiagnostic('Сервер','API данные обработаны',operation);
   notifyResponseObservers({
     path,
-    method: String(options.method || "GET").toUpperCase(),
+    method,
     payload
   });
   return payload;

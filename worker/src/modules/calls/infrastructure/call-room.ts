@@ -71,6 +71,7 @@ export class CallRoom {
       if (request.method === "POST" && url.pathname === "/transition") return this.transition(await readObject(request));
       if (request.method === "POST" && url.pathname === "/handoff") return this.handoff(await readObject(request));
       if (request.method === "POST" && url.pathname === "/signal") return this.signal(await readObject(request));
+      if (request.method === "POST" && url.pathname === "/signals-batch") return this.signalBatch(await readObject(request));
       if (request.method === "GET" && url.pathname === "/signals") {
         return this.signals(
           url.searchParams.get("callId") ?? "",
@@ -295,6 +296,65 @@ export class CallRoom {
       signal
     });
     return result({ ok: true, signal }, 201);
+  }
+
+  private async signalBatch(body: Record<string, unknown>): Promise<Response> {
+    const callId = stringValue(body.callId);
+    const actorUserId = stringValue(body.actorUserId);
+    const items = Array.isArray(body.signals) ? body.signals : null;
+    if (!items || !items.length || items.length > 32) {
+      return invalid("invalid_call_signal", "Некорректный пакет WebRTC-сигналов.");
+    }
+    const call = await this.current();
+    if (!call || call.callId !== callId || !participant(call, actorUserId)) return notFoundResponse();
+    if (call.status !== "accepted") return conflictResponse("call_not_accepted", "Сигналы разрешены только после ответа.");
+
+    const ownerSession = actorUserId === call.callerUserId ? call.callerSessionId : call.calleeSessionId;
+    if (ownerSession && ownerSession !== stringValue(body.actorSessionId)) {
+      return forbidden("call_moved", "Звонок перенесён на другое устройство.");
+    }
+
+    const validated: Array<{ kind: CallRoomSignal["kind"]; payload: unknown }> = [];
+    for (const rawItem of items) {
+      if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+        return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
+      }
+      const item = rawItem as Record<string, unknown>;
+      const kind = stringValue(item.kind);
+      if (kind !== "offer" && kind !== "answer" && kind !== "ice" && kind !== "resume") {
+        return invalid("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
+      }
+      if (kind === "offer" && actorUserId !== call.callerUserId) return forbidden("call_offer_forbidden", "Offer создаёт инициатор звонка.");
+      if (kind === "answer" && actorUserId !== call.calleeUserId) return forbidden("call_answer_signal_forbidden", "Answer создаёт получатель звонка.");
+      if (kind === "resume" && actorUserId !== call.calleeUserId) return forbidden("call_resume_forbidden", "Resume запрашивает получатель звонка.");
+      validated.push({ kind, payload: item.payload });
+    }
+
+    const currentSignals = await this.state.storage.get<CallRoomSignal[]>(SIGNALS_KEY) ?? [];
+    const now = Date.now();
+    let seq = currentSignals.at(-1)?.sequence ?? 0;
+    const created: CallRoomSignal[] = validated.map((entry) => ({
+      sequence: ++seq,
+      callId,
+      senderUserId: actorUserId,
+      kind: entry.kind,
+      payload: entry.payload,
+      createdAt: now
+    }));
+
+    await Promise.all([
+      this.state.storage.put(SIGNALS_KEY, [...currentSignals, ...created].slice(-MAX_SIGNALS)),
+      this.state.storage.put(CALL_KEY, { ...call, updatedAt: now })
+    ]);
+
+    const recipientUserId = actorUserId === call.callerUserId ? call.calleeUserId : call.callerUserId;
+    await this.realtime.publishToUsers([recipientUserId], {
+      type: "call.signals",
+      callId,
+      conversationId: call.conversationId,
+      signals: created
+    });
+    return result({ ok: true, signals: created }, 201);
   }
 
   private async signals(callId: string, viewerUserId: string, after: number): Promise<Response> {

@@ -716,7 +716,18 @@
             <h3 id="sessions-title">Устройства</h3>
             <p class="hint">Здесь можно завершить вход на любом устройстве.</p>
             <div id="sessions"></div>
-            <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить список устройств</button>
+            <div class="session-bulk-actions">
+              <button id="refresh-sessions" class="button-with-icon" data-icon="refresh" type="button">Обновить список устройств</button>
+              <button id="revoke-other-sessions" type="button" disabled>Завершить остальные устройства</button>
+              <button id="revoke-all-sessions" class="danger-button" type="button" aria-expanded="false" aria-controls="revoke-all-confirm">Выйти на всех устройствах…</button>
+            </div>
+            <div id="revoke-all-confirm" class="session-revoke-confirm" role="region" aria-label="Подтверждение выхода на всех устройствах" hidden>
+              <p class="hint">Все активные устройства, включая текущее, выйдут из аккаунта, а push-уведомления на них отключатся.</p>
+              <div class="session-revoke-confirm-actions">
+                <button id="revoke-all-confirm-yes" class="danger-button" type="button">Подтвердить выход везде</button>
+                <button id="revoke-all-confirm-cancel" type="button">Отмена</button>
+              </div>
+            </div>
           </section>
 
           <section id="invite-card" class="card" aria-labelledby="invite-title" hidden>

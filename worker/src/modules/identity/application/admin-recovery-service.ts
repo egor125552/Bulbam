@@ -4,6 +4,7 @@ import type { D1Database } from "../../../platform/cloudflare";
 import type { Account, AuthenticatedSession } from "../domain/models";
 import { ensureIdentitySchema } from "../infrastructure/schema";
 import type { IdentityService } from "./identity-service";
+import type { SessionRevocationHooks } from "../ports/identity-repository";
 import type { PushNotificationService } from "../../notifications/application/push-notification-service";
 import { DurableObjectRealtime } from "../../realtime/public";
 
@@ -29,7 +30,8 @@ export class AdminRecoveryService {
     private readonly identity:IdentityService,
     private readonly realtime:DurableObjectRealtime,
     private readonly push?:PushNotificationService,
-    private readonly defer?:(job:Promise<unknown>)=>void
+    private readonly defer?:(job:Promise<unknown>)=>void,
+    private readonly revocationHooks?:SessionRevocationHooks
   ){}
   async request(username:string,deviceName:string,requester:string) {
     await ensureIdentitySchema(this.db);
@@ -169,6 +171,7 @@ export class AdminRecoveryService {
     const account=await this.db.prepare(`SELECT user_id,username,display_name,role,created_at
       FROM accounts WHERE user_id=? AND disabled_at IS NULL`).bind(row.user_id).first<Row>();
     if(!account)invalid();
+    await this.revocationHooks?.onAllSessionsRevoked(row.user_id);
     // A new session is issued only after a successful one-time password reset.
     const issued=await this.identity.loginWithPasskey({
       userId:String(account.user_id),username:String(account.username),

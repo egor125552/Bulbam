@@ -158,6 +158,36 @@ export class CallService {
     return response.signal;
   }
 
+  async signalBatch(
+    actor: CallActor,
+    rawConversationId: string,
+    rawCallId: string,
+    rawSignals: unknown[]
+  ) {
+    const conversationId = validateUuid(rawConversationId, "conversationId");
+    const callId = validateUuid(rawCallId, "callId");
+    if (!Array.isArray(rawSignals) || rawSignals.length === 0 || rawSignals.length > 32) {
+      badRequest("invalid_call_signal", "Некорректный пакет WebRTC-сигналов.");
+    }
+    await this.requireConversation(conversationId, actor.userId);
+    const validated = rawSignals.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        badRequest("invalid_call_signal", "Неизвестный тип WebRTC-сигнала.");
+      }
+      return validateSignal(item as Record<string, unknown>);
+    });
+    const response = await this.roomRequest(conversationId, "/signals-batch", {
+      method: "POST",
+      body: JSON.stringify({
+        callId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId ?? null,
+        signals: validated
+      })
+    });
+    return Array.isArray(response.signals) ? response.signals : [];
+  }
+
   async signals(
     actor: CallActor,
     rawConversationId: string,

@@ -4,6 +4,7 @@ import { ensureNotificationSchema } from "./schema";
 export interface PushSubscriptionRecord {
   endpoint: string;
   userId: string;
+  sessionId?: string | null;
   expirationTime: number | null;
   keys: {
     p256dh: string;
@@ -25,13 +26,15 @@ export class D1PushRepository {
   async upsert(input: SavePushSubscriptionInput): Promise<void> {
     await this.initialize();
     const now = Date.now();
+    const sessionId = typeof input.sessionId === "string" && input.sessionId.trim() ? input.sessionId.trim() : null;
     const result = await this.db
       .prepare(
         `INSERT INTO push_subscriptions(
-          endpoint, user_id, expiration_time, p256dh, auth, user_agent, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          endpoint, user_id, session_id, expiration_time, p256dh, auth, user_agent, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(endpoint) DO UPDATE SET
           user_id = excluded.user_id,
+          session_id = excluded.session_id,
           expiration_time = excluded.expiration_time,
           p256dh = excluded.p256dh,
           auth = excluded.auth,
@@ -41,6 +44,7 @@ export class D1PushRepository {
       .bind(
         input.endpoint,
         input.userId,
+        sessionId,
         input.expirationTime,
         input.keys.p256dh,
         input.keys.auth,
@@ -57,6 +61,22 @@ export class D1PushRepository {
     await this.db
       .prepare("DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?")
       .bind(userId, endpoint)
+      .run();
+  }
+
+  async removeForSession(userId: string, sessionId: string): Promise<void> {
+    await this.initialize();
+    await this.db
+      .prepare("DELETE FROM push_subscriptions WHERE user_id = ? AND session_id = ?")
+      .bind(userId, sessionId)
+      .run();
+  }
+
+  async removeForUserExceptSession(userId: string, keepSessionId: string): Promise<void> {
+    await this.initialize();
+    await this.db
+      .prepare("DELETE FROM push_subscriptions WHERE user_id = ? AND (session_id IS NULL OR session_id <> ?)")
+      .bind(userId, keepSessionId)
       .run();
   }
 
@@ -77,7 +97,7 @@ export class D1PushRepository {
     await this.initialize();
     const rows = await this.db
       .prepare(
-        `SELECT endpoint, user_id, expiration_time, p256dh, auth
+        `SELECT endpoint, user_id, session_id, expiration_time, p256dh, auth
          FROM push_subscriptions
          WHERE user_id = ?
          ORDER BY updated_at DESC`
@@ -86,6 +106,7 @@ export class D1PushRepository {
       .all<{
         endpoint: string;
         user_id: string;
+        session_id: string | null;
         expiration_time: number | null;
         p256dh: string;
         auth: string;
@@ -94,6 +115,7 @@ export class D1PushRepository {
     return (rows.results ?? []).map((row) => ({
       endpoint: row.endpoint,
       userId: row.user_id,
+      sessionId: row.session_id === null || row.session_id === undefined ? null : String(row.session_id),
       expirationTime: row.expiration_time === null ? null : Number(row.expiration_time),
       keys: {
         p256dh: row.p256dh,

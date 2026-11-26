@@ -14,6 +14,12 @@ export type RegisterAccountResult =
   | { status: "username_taken" }
   | { status: "conflict" };
 
+export interface SessionRevocationHooks {
+  onSessionRevoked(userId: string, sessionId: string): Promise<void>;
+  onOtherSessionsRevoked(userId: string, keepSessionId: string): Promise<void>;
+  onAllSessionsRevoked(userId: string): Promise<void>;
+}
+
 export interface IdentityRepository {
   initialize(): Promise<void>;
 
@@ -44,6 +50,7 @@ export interface IdentityRepository {
   touchSession(sessionId: string, now: number, expiresAt?: number): Promise<void>;
   listSessions(userId: string, now: number): Promise<Session[]>;
   revokeSession(userId: string, sessionId: string, now: number): Promise<boolean>;
+  revokeAllSessions(userId: string, now: number, exceptSessionId?: string): Promise<number>;
 
   // Codes are cryptographically random; store only SHA-256 hashes.
   replaceRecoveryCodes(userId: string, codeHashes: string[], now: number): Promise<void>;

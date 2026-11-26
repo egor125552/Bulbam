@@ -89,3 +89,40 @@ test('recovery codes revoke all old device push subscriptions',async()=>{
  expect((await api('/api/v1/auth/me',session)).response.status).toBe(401);
  expect((await api('/api/v1/auth/me',other)).response.status).toBe(401);
 },25000);
+
+test('revoke-all revokes other sessions or all sessions including current with push and presence cleanup',async()=>{
+ const {env,session,data}=await register();
+ const second=await secondLogin();
+ const third=await secondLogin();
+ const me1=(await api('/api/v1/auth/me',session)).data.session.sessionId;
+ const me2=(await api('/api/v1/auth/me',second)).data.session.sessionId;
+ const me3=(await api('/api/v1/auth/me',third)).data.session.sessionId;
+ const repo=new D1PushRepository(env.DB),presence=new PresenceService(env.DB);
+ await subscribe(repo,data.account.userId,me1,'all-1');
+ await subscribe(repo,data.account.userId,me2,'all-2');
+ await subscribe(repo,data.account.userId,me3,'all-3');
+ await presence.heartbeat({userId:data.account.userId,sessionId:me1},true);
+ await presence.heartbeat({userId:data.account.userId,sessionId:me2},true);
+ await presence.heartbeat({userId:data.account.userId,sessionId:me3},true);
+
+ const keepCurrent=await api('/api/v1/sessions/revoke-all',second,'POST',{includeCurrent:false});
+ expect(keepCurrent.response.status).toBe(200);
+ expect(keepCurrent.data.revokedCount).toBe(2);
+ expect(keepCurrent.data.includeCurrent).toBe(false);
+ expect((await api('/api/v1/auth/me',session)).response.status).toBe(401);
+ expect((await api('/api/v1/auth/me',third)).response.status).toBe(401);
+ expect((await api('/api/v1/auth/me',second)).response.status).toBe(200);
+ expect((await repo.listForUser(data.account.userId)).map(sub=>sub.sessionId)).toEqual([me2]);
+ expect(await env.DB.prepare('SELECT session_id FROM account_presence_sessions WHERE session_id=?').bind(me1).first()).toBeNull();
+ expect(await env.DB.prepare('SELECT session_id FROM account_presence_sessions WHERE session_id=?').bind(me3).first()).toBeNull();
+ expect(await env.DB.prepare('SELECT session_id FROM account_presence_sessions WHERE session_id=?').bind(me2).first()).not.toBeNull();
+
+ const revokeEverything=await api('/api/v1/sessions/revoke-all',second,'POST',{includeCurrent:true});
+ expect(revokeEverything.response.status).toBe(200);
+ expect(revokeEverything.data.revokedCount).toBe(1);
+ expect(revokeEverything.data.includeCurrent).toBe(true);
+ expect(revokeEverything.response.headers.get('set-cookie')).toContain('Max-Age=0');
+ expect((await api('/api/v1/auth/me',second)).response.status).toBe(401);
+ expect(await repo.listForUser(data.account.userId)).toEqual([]);
+ expect(await env.DB.prepare('SELECT session_id FROM account_presence_sessions WHERE user_id=?').bind(data.account.userId).first()).toBeNull();
+},25000);

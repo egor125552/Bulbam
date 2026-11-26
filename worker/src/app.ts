@@ -86,14 +86,49 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
     if (storageRequired && !env.DB) return storageBindingMissing();
 
     const identityRepository = env.DB ? new D1IdentityRepository(env.DB) : null;
-    const identity = identityRepository ? new IdentityService(identityRepository) : null;
-    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const messagingRepository = env.DB ? new D1MessagingRepository(env.DB) : null;
     const pushRepository = env.DB ? new D1PushRepository(env.DB) : null;
+    const presenceService = env.DB ? new PresenceService(env.DB) : null;
     const realtime = new DurableObjectRealtime(env.REALTIME);
+    const defer = ctx ? (promise: Promise<unknown>) => ctx.waitUntil(promise) : undefined;
+    const notifySessionRevoked = (userId: string) => {
+      const task = realtime
+        .publishToUsers([userId], { type: "session.revoked" })
+        .catch((error) => console.warn("[Bulbam] session.revoked broadcast failed", error));
+      if (defer) defer(task);
+    };
+    const sessionRevocationHooks = pushRepository && presenceService
+      ? {
+          async onSessionRevoked(userId: string, sessionId: string) {
+            await Promise.all([
+              pushRepository.removeForSession(userId, sessionId),
+              presenceService.removeForSession(userId, sessionId)
+            ]);
+            notifySessionRevoked(userId);
+          },
+          async onOtherSessionsRevoked(userId: string, keepSessionId: string) {
+            await Promise.all([
+              pushRepository.removeForUserExceptSession(userId, keepSessionId),
+              presenceService.removeForUserExceptSession(userId, keepSessionId)
+            ]);
+            notifySessionRevoked(userId);
+          },
+          async onAllSessionsRevoked(userId: string) {
+            await Promise.all([
+              pushRepository.removeAllForUser(userId),
+              presenceService.removeSessionsForUser(userId)
+            ]);
+            notifySessionRevoked(userId);
+          }
+        }
+      : undefined;
+    const identity = identityRepository
+      ? new IdentityService(identityRepository, sessionRevocationHooks)
+      : null;
+    const passkeys = env.DB && identity ? new PasskeyService(env.DB, identity) : null;
     const push = pushRepository ? new PushNotificationService(pushRepository, env) : null;
     const adminRecovery = env.DB && identity ? new AdminRecoveryService(
-      env.DB,identity,realtime,push??undefined,ctx ? (promise)=>ctx.waitUntil(promise) : undefined
+      env.DB, identity, realtime, push ?? undefined, defer, sessionRevocationHooks
     ) : null;
     const directory = identity ? { findUser: (userId: string) => identity.findPublicAccountById(userId) } : null;
     const messaging = messagingRepository && directory
@@ -102,10 +137,9 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
           directory,
           realtime,
           push ?? undefined,
-          ctx ? (promise) => ctx.waitUntil(promise) : undefined
+          defer
         )
       : null;
-    const presenceService = env.DB ? new PresenceService(env.DB) : null;
     const ownerRepository = env.DB ? new D1OwnerRepository(env.DB) : null;
     const ownerControl = ownerRepository && identity && messaging && presenceService && pushRepository
       ? new OwnerControlService(
@@ -115,7 +149,7 @@ async function handleRequestInternal(request: Request, env: Env, ctx?: Execution
           presenceService,
           pushRepository,
           realtime,
-          ctx ? (promise) => ctx.waitUntil(promise) : undefined
+          defer
         )
       : null;
     const voiceStorage = env.VOICE_UPLOAD ? new DurableObjectVoiceStorage(env.VOICE_UPLOAD) : null;

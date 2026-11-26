@@ -73,4 +73,20 @@ async function initialize(db: D1Database): Promise<void> {
       .bind("notifications", 2, Date.now())
       .run();
   }
+
+  if (!appliedVersions.has(3)) {
+    const columns = await db.prepare("PRAGMA table_info(push_subscriptions)").all<{ name: string }>();
+    const hasSessionId = (columns.results ?? []).some((col) => col.name === "session_id");
+    if (!hasSessionId) {
+      await runStatement(db, "ALTER TABLE push_subscriptions ADD COLUMN session_id TEXT");
+    }
+    await runStatement(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_session ON push_subscriptions(user_id, session_id)"
+    );
+    await db
+      .prepare("INSERT OR IGNORE INTO schema_migrations(module, version, applied_at) VALUES (?, ?, ?)")
+      .bind("notifications", 3, Date.now())
+      .run();
+  }
 }

@@ -100,8 +100,8 @@ export async function applySelectedAudioProfileToTrack(track, profileId = select
   return updateAudioProfileStatus(track, profileId);
 }
 
-export function tuneAudioSender(sender, profileId = selectedProfileId) {
-  return configureAdaptiveBitrate(sender, getAudioProfile(profileId));
+export function tuneAudioSender(sender, profileId = selectedProfileId, options = {}) {
+  return configureAdaptiveBitrate(sender, getAudioProfile(profileId), options);
 }
 
 export function updateAudioProfileStatus(track, profileId = selectedProfileId) {

@@ -9,7 +9,7 @@ import {
 import { ApiError, conflict, forbidden, unauthorized } from "../../../core/errors";
 import type { AuthenticatedSession, PublicAccount, Session } from "../domain/models";
 import { validateDisplayName, validateUserSearchQuery } from "../domain/validation";
-import type { IdentityRepository } from "../ports/identity-repository";
+import type { IdentityRepository, SessionRevocationHooks } from "../ports/identity-repository";
 
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
@@ -20,7 +20,10 @@ const DUMMY_PASSWORD_HASH =
   "PBKDF2-SHA256$100000$00112233445566778899aabbccddeeff$7fade2cfb29dccfed77a3157d406da9087ffe3ebd4d722ed8657c1816197f326";
 
 export class IdentityService {
-  constructor(private readonly repository: IdentityRepository) {}
+  constructor(
+    private readonly repository: IdentityRepository,
+    private readonly revocationHooks?: SessionRevocationHooks
+  ) {}
 
   async register(input: {
     username: string;
@@ -122,6 +125,7 @@ export class IdentityService {
     const accountCredentials = await this.repository.findAccountCredentialsByUsername(input.username);
     if (!accountCredentials) throw new Error("Recovered account was not found.");
     const { passwordHash: _hash, ...account } = accountCredentials;
+    await this.revocationHooks?.onAllSessionsRevoked(account.userId);
     const issued = await this.issueSession(account.userId, input.deviceName, Date.now());
     let recoveryCodes: string[] = [];
     try {
@@ -149,6 +153,10 @@ export class IdentityService {
       sessionId: authenticated.session.sessionId,
       passwordHash, now: Date.now()
     });
+    await this.revocationHooks?.onOtherSessionsRevoked(
+      authenticated.account.userId,
+      authenticated.session.sessionId
+    );
   }
 
   async authenticate(token: string | null): Promise<AuthenticatedSession> {
@@ -179,6 +187,10 @@ export class IdentityService {
       authenticated.session.sessionId,
       Date.now()
     );
+    await this.revocationHooks?.onSessionRevoked(
+      authenticated.account.userId,
+      authenticated.session.sessionId
+    );
   }
 
   async listSessions(authenticated: AuthenticatedSession): Promise<Session[]> {
@@ -194,6 +206,27 @@ export class IdentityService {
     if (!revoked) {
       throw new ApiError(404, "session_not_found", "Сессия не найдена.");
     }
+    await this.revocationHooks?.onSessionRevoked(authenticated.account.userId, sessionId);
+  }
+
+  async revokeAllSessions(
+    authenticated: AuthenticatedSession,
+    includeCurrent: boolean
+  ): Promise<{ revokedCount: number }> {
+    const revokedCount = await this.repository.revokeAllSessions(
+      authenticated.account.userId,
+      Date.now(),
+      includeCurrent ? undefined : authenticated.session.sessionId
+    );
+    if (includeCurrent) {
+      await this.revocationHooks?.onAllSessionsRevoked(authenticated.account.userId);
+    } else {
+      await this.revocationHooks?.onOtherSessionsRevoked(
+        authenticated.account.userId,
+        authenticated.session.sessionId
+      );
+    }
+    return { revokedCount };
   }
 
   async searchUsers(authenticated: AuthenticatedSession, rawQuery: string): Promise<PublicAccount[]> {

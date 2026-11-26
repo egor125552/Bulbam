@@ -111,32 +111,52 @@ export function setupInterface() {
   elements.messageForm?.addEventListener("submit", () => queueMicrotask(syncComposer));
   syncComposer();
 
+  let decorateQueued = false;
+  const decorateMute = () => {
+    const muted = originalText(elements.callMuteButton?.textContent.trim() ?? "").startsWith("Включить");
+    if (elements.callMuteButton) {
+      const nextIcon = muted ? "mic-off" : "mic";
+      if (elements.callMuteButton.dataset.icon !== nextIcon) elements.callMuteButton.dataset.icon = nextIcon;
+    }
+  };
   const decorate = () => {
-    const muted = originalText(elements.callMuteButton?.textContent.trim()??"").startsWith("Включить");
-    if (elements.callMuteButton) elements.callMuteButton.dataset.icon = muted ? "mic-off" : "mic";
-    for (const button of document.querySelectorAll(".voice-actions button")) {
+    decorateQueued = false;
+    decorateMute();
+    const scope = elements.messageList || document;
+    for (const button of scope.querySelectorAll(".voice-actions button")) {
       const text = originalText(button.textContent.trim());
-      if (originalText(button.getAttribute("aria-label")??"").includes("Воспроизвести или поставить")) {
+      if (originalText(button.getAttribute("aria-label") ?? "").includes("Воспроизвести или поставить")) {
         button.classList.add("icon-button");
-        button.dataset.icon = text === "Пауза" ? "pause" : "play";
+        const nextIcon = text === "Пауза" ? "pause" : "play";
+        if (button.dataset.icon !== nextIcon) button.dataset.icon = nextIcon;
       } else if (text === "Назад на 15 секунд") {
         button.classList.add("icon-button");
-        button.dataset.icon = "rewind";
-        button.setAttribute("aria-label", text);
+        if (button.dataset.icon !== "rewind") button.dataset.icon = "rewind";
+        if (button.getAttribute("aria-label") !== text) button.setAttribute("aria-label", text);
       } else if (text === "Вперёд на 15 секунд") {
         button.classList.add("icon-button");
-        button.dataset.icon = "forward";
-        button.setAttribute("aria-label", text);
+        if (button.dataset.icon !== "forward") button.dataset.icon = "forward";
+        if (button.getAttribute("aria-label") !== text) button.setAttribute("aria-label", text);
       } else if ((/скорость$/i.test(text) || /хуткасць/i.test(text))) {
         button.classList.add("button-with-icon");
-        button.dataset.icon = "speed";
+        if (button.dataset.icon !== "speed") button.dataset.icon = "speed";
       }
     }
   };
+  const scheduleDecorate = () => {
+    if (decorateQueued) return;
+    decorateQueued = true;
+    queueMicrotask(decorate);
+  };
   decorate();
   interfaceObserver?.disconnect();
-  interfaceObserver = new MutationObserver(decorate);
-  interfaceObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+  interfaceObserver = new MutationObserver(scheduleDecorate);
+  if (elements.messageList) {
+    interfaceObserver.observe(elements.messageList, { subtree: true, childList: true });
+  }
+  if (elements.callMuteButton) {
+    interfaceObserver.observe(elements.callMuteButton, { childList: true, characterData: true, subtree: true });
+  }
 }
 
 export function announce(message) {
@@ -174,6 +194,8 @@ export function getCurrentSession() {
 export function showSignedOut() {
   currentAccount = null;
   currentSession = null;
+  const settingsDialog = document.querySelector("#settings-dialog");
+  if (settingsDialog?.open) settingsDialog.close();
   elements.signedOut.hidden = false;
   elements.signedIn.hidden = true;
   elements.inviteCard.hidden = true;

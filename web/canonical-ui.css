@@ -2365,6 +2365,33 @@ html[data-message-view="compact"] .message-visual-body {
   border-color: var(--danger);
 }
 
+.session-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.session-revoke-confirm {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding: 0.75rem;
+  border-radius: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--glass-border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--glass-bg-strong));
+}
+
+.session-revoke-confirm .hint {
+  margin: 0;
+}
+
+.session-revoke-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

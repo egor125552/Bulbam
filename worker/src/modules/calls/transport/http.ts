@@ -74,12 +74,12 @@ export async function handleCallHttp(
       });
     }
     if (request.method === "POST") {
-      const signal = await service.signal(
-        actor,
-        conversationId,
-        callId,
-        await readJsonObject(request)
-      );
+      const body = await readJsonObject(request);
+      if (Array.isArray(body.signals)) {
+        const signals = await service.signalBatch(actor, conversationId, callId, body.signals);
+        return json({ ok: true, signals }, { status: 201 });
+      }
+      const signal = await service.signal(actor, conversationId, callId, body);
       return json({ ok: true, signal }, { status: 201 });
     }
     return methodNotAllowed(["GET", "POST"]);

@@ -206,6 +206,16 @@ export async function handleIdentityHttp(
     });
   }
 
+  if (url.pathname === "/api/v1/sessions/revoke-all") {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const authenticated = await service.authenticate(sessionToken(request));
+    const body = await readJsonObject(request);
+    const includeCurrent = body.includeCurrent === true;
+    const result = await service.revokeAllSessions(authenticated, includeCurrent);
+    const response = json({ ok: true, revokedCount: result.revokedCount, includeCurrent });
+    return includeCurrent ? clearSessionCookie(request, response) : response;
+  }
+
   const sessionMatch = url.pathname.match(/^\/api\/v1\/sessions\/([0-9a-f-]{36})$/i);
   if (sessionMatch) {
     if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);

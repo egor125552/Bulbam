@@ -6,21 +6,36 @@ import { ensureMessagingSchema } from "../messaging/infrastructure/schema";
 interface Actor { userId: string; sessionId: string }
 type Authenticate = (request: Request) => Promise<Actor>;
 const ONLINE_LEASE_MS = 50_000;
+const initializedPresenceDbs = new WeakMap<D1Database, Promise<void>>();
 
 export class PresenceService {
   constructor(private readonly db: D1Database) {}
 
-  async initialize(): Promise<void> {
-    await this.db.prepare(`CREATE TABLE IF NOT EXISTS account_presence_sessions (
-      session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
-      last_active_at INTEGER NOT NULL, visible_until INTEGER NOT NULL
-    )`).run();
-    await this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_presence_user
-      ON account_presence_sessions(user_id, last_active_at)`).run();
-    await this.db.prepare(`CREATE TABLE IF NOT EXISTS account_presence_settings (
-      user_id TEXT PRIMARY KEY, share_presence INTEGER NOT NULL DEFAULT 1,
-      updated_at INTEGER NOT NULL
-    )`).run();
+  initialize(): Promise<void> {
+    let pending = initializedPresenceDbs.get(this.db);
+    if (!pending) {
+      pending = this.createTables().catch((error) => {
+        initializedPresenceDbs.delete(this.db);
+        throw error;
+      });
+      initializedPresenceDbs.set(this.db, pending);
+    }
+    return pending;
+  }
+
+  private async createTables(): Promise<void> {
+    await this.db.batch([
+      this.db.prepare(`CREATE TABLE IF NOT EXISTS account_presence_sessions (
+        session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+        last_active_at INTEGER NOT NULL, visible_until INTEGER NOT NULL
+      )`),
+      this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_presence_user
+        ON account_presence_sessions(user_id, last_active_at)`),
+      this.db.prepare(`CREATE TABLE IF NOT EXISTS account_presence_settings (
+        user_id TEXT PRIMARY KEY, share_presence INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      )`)
+    ]);
   }
 
   async settings(userId: string): Promise<boolean> {
@@ -111,6 +126,30 @@ export class PresenceService {
       });
     }
     return map;
+  }
+
+  async removeForSession(userId: string, sessionId: string): Promise<void> {
+    await this.initialize();
+    await this.db
+      .prepare("DELETE FROM account_presence_sessions WHERE user_id = ? AND session_id = ?")
+      .bind(userId, sessionId)
+      .run();
+  }
+
+  async removeForUserExceptSession(userId: string, keepSessionId: string): Promise<void> {
+    await this.initialize();
+    await this.db
+      .prepare("DELETE FROM account_presence_sessions WHERE user_id = ? AND session_id <> ?")
+      .bind(userId, keepSessionId)
+      .run();
+  }
+
+  async removeSessionsForUser(userId: string): Promise<void> {
+    await this.initialize();
+    await this.db
+      .prepare("DELETE FROM account_presence_sessions WHERE user_id = ?")
+      .bind(userId)
+      .run();
   }
 
   async removeForUser(userId: string): Promise<void> {

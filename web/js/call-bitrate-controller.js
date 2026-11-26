@@ -7,6 +7,19 @@ export function bitrateBounds(profile) {
   return { floorBitrate: Math.min(floorBitrate, maxBitrate), maxBitrate };
 }
 
+export function initialBitrateForNetwork(profile, connection = globalThis.navigator?.connection) {
+  const { floorBitrate, maxBitrate } = bitrateBounds(profile);
+  if (!connection || typeof connection !== "object") return maxBitrate;
+  const effectiveType = typeof connection.effectiveType === "string" ? connection.effectiveType.toLowerCase() : "";
+  const rtt = finiteOrNull(connection.rtt);
+  const downlink = finiteOrNull(connection.downlink);
+  const poorLink = effectiveType === "slow-2g" || effectiveType === "2g" ||
+    (rtt !== null && rtt >= 350) ||
+    (downlink !== null && downlink > 0 && downlink <= 0.35);
+  if (poorLink) return Math.max(floorBitrate, roundKbps(maxBitrate * 0.5));
+  return maxBitrate;
+}
+
 export function classifySenderNetwork(sample) {
   const loss = finiteOrNull(sample?.fractionLost);
   const rtt = finiteOrNull(sample?.roundTripTime);
@@ -26,6 +39,7 @@ export function nextAdaptiveBitrate(state, health) {
   if (health === "severe") {
     next.badSamples = (state.badSamples || 0) + 1;
     next.goodSamples = 0;
+    if ("recoveryBoost" in next) next.recoveryBoost = false;
     next.currentBitrate = Math.max(floor, roundKbps(current * 0.6));
     return next;
   }
@@ -33,6 +47,7 @@ export function nextAdaptiveBitrate(state, health) {
   if (health === "degraded") {
     next.badSamples = (state.badSamples || 0) + 1;
     next.goodSamples = 0;
+    if ("recoveryBoost" in next) next.recoveryBoost = false;
     if (next.badSamples >= 2) {
       next.currentBitrate = Math.max(floor, roundKbps(current * 0.82));
       next.badSamples = 0;
@@ -43,9 +58,13 @@ export function nextAdaptiveBitrate(state, health) {
   if (health === "good") {
     next.badSamples = 0;
     next.goodSamples = (state.goodSamples || 0) + 1;
-    if (next.goodSamples >= 5) {
-      next.currentBitrate = Math.min(max, Math.max(current + 4_000, roundKbps(current * 1.12)));
+    const requiredSamples = state.recoveryBoost ? 2 : 5;
+    if (next.goodSamples >= requiredSamples) {
+      next.currentBitrate = Math.min(max, Math.max(current + 4_000, roundKbps(current * 1.18)));
       next.goodSamples = 0;
+      if ("recoveryBoost" in next) {
+        next.recoveryBoost = next.currentBitrate < max;
+      }
     }
     return next;
   }
@@ -55,19 +74,23 @@ export function nextAdaptiveBitrate(state, health) {
   return next;
 }
 
-export async function configureAdaptiveBitrate(sender, profile) {
+export async function configureAdaptiveBitrate(sender, profile, options = {}) {
   if (!sender?.getParameters || !sender?.setParameters) return false;
+  const managedExternally = Boolean(options?.managedExternally);
   const bounds = bitrateBounds(profile);
   let state = controllers.get(sender);
   if (!state) {
+    const startBitrate = initialBitrateForNetwork(profile, options?.connection);
     state = {
       ...bounds,
-      currentBitrate: bounds.maxBitrate,
+      currentBitrate: startBitrate,
       badSamples: 0,
       goodSamples: 0,
+      recoveryBoost: startBitrate < bounds.maxBitrate,
       timer: null,
       failures: 0,
-      sampling: false
+      sampling: false,
+      managedExternally
     };
     controllers.set(sender, state);
   } else {
@@ -76,15 +99,74 @@ export async function configureAdaptiveBitrate(sender, profile) {
     state.currentBitrate = Math.min(state.maxBitrate, Math.max(state.floorBitrate, state.currentBitrate));
     state.badSamples = 0;
     state.goodSamples = 0;
+    state.managedExternally = managedExternally;
   }
 
   const applied = await applyBitrate(sender, state.currentBitrate);
   if (!applied) return false;
+  if (managedExternally) {
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    return true;
+  }
   if (typeof sender.getStats === "function" && !state.timer) {
     state.timer = setInterval(() => void sampleSender(sender, state), SAMPLE_INTERVAL_MS);
     void sampleSender(sender, state);
   }
   return true;
+}
+
+export async function stepAdaptiveBitrateWithStats(sender, profile, stats) {
+  if (!sender?.getParameters || !sender?.setParameters || !stats) return false;
+  let state = controllers.get(sender);
+  if (!state) {
+    const bounds = bitrateBounds(profile);
+    const startBitrate = initialBitrateForNetwork(profile);
+    state = {
+      ...bounds,
+      currentBitrate: startBitrate,
+      badSamples: 0,
+      goodSamples: 0,
+      recoveryBoost: startBitrate < bounds.maxBitrate,
+      timer: null,
+      failures: 0,
+      sampling: false,
+      managedExternally: true
+    };
+    controllers.set(sender, state);
+  }
+  if (state.sampling) return false;
+  if (sender.track?.readyState === "ended" || sender.transport?.state === "closed") {
+    stopController(sender, state);
+    return false;
+  }
+
+  state.sampling = true;
+  try {
+    return await applyNetworkStatsSample(sender, state, stats);
+  } catch {
+    state.failures += 1;
+    if (state.failures >= 5) stopController(sender, state);
+    return false;
+  } finally {
+    state.sampling = false;
+  }
+}
+
+export function markBitrateNetworkRecovered(sender) {
+  const state = sender ? controllers.get(sender) : null;
+  if (!state) return;
+  state.badSamples = 0;
+  state.goodSamples = 0;
+  state.recoveryBoost = state.currentBitrate < state.maxBitrate;
+}
+
+export function stopAdaptiveBitrate(sender) {
+  const state = sender ? controllers.get(sender) : null;
+  if (!state) return;
+  stopController(sender, state);
 }
 
 async function sampleSender(sender, state) {
@@ -97,24 +179,31 @@ async function sampleSender(sender, state) {
   state.sampling = true;
   try {
     const stats = await sender.getStats();
-    const sample = extractSenderNetworkSample(stats);
-    const health = classifySenderNetwork(sample);
-    const next = nextAdaptiveBitrate(state, health);
-    const bitrateChanged = next.currentBitrate !== state.currentBitrate;
-    state.floorBitrate = next.floorBitrate;
-    state.maxBitrate = next.maxBitrate;
-    state.badSamples = next.badSamples;
-    state.goodSamples = next.goodSamples;
-    state.failures = 0;
-    if (bitrateChanged && await applyBitrate(sender, next.currentBitrate)) {
-      state.currentBitrate = next.currentBitrate;
-    }
+    await applyNetworkStatsSample(sender, state, stats);
   } catch {
     state.failures += 1;
     if (state.failures >= 5) stopController(sender, state);
   } finally {
     state.sampling = false;
   }
+}
+
+async function applyNetworkStatsSample(sender, state, stats) {
+  const sample = extractSenderNetworkSample(stats);
+  const health = classifySenderNetwork(sample);
+  const next = nextAdaptiveBitrate(state, health);
+  const bitrateChanged = next.currentBitrate !== state.currentBitrate;
+  state.floorBitrate = next.floorBitrate;
+  state.maxBitrate = next.maxBitrate;
+  state.badSamples = next.badSamples;
+  state.goodSamples = next.goodSamples;
+  if ("recoveryBoost" in next) state.recoveryBoost = next.recoveryBoost;
+  state.failures = 0;
+  if (bitrateChanged && await applyBitrate(sender, next.currentBitrate)) {
+    state.currentBitrate = next.currentBitrate;
+    return true;
+  }
+  return false;
 }
 
 export function extractSenderNetworkSample(stats) {

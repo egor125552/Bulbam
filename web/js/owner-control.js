@@ -4,6 +4,7 @@ import { announce, getCurrentAccount } from "./ui.js";
 
 let refreshing = false;
 let refreshQueued = false;
+let lastRefreshCompletedAt = 0;
 let lastUsers = [];
 
 function isOwnerAccount() {
@@ -358,11 +359,15 @@ function renderOwnerUsers(users) {
   }
 }
 
-export async function refreshOwnerUsers({ announceSummary = false } = {}) {
+export async function refreshOwnerUsers({ announceSummary = false, fromRealtime = false } = {}) {
   const panel = document.querySelector("#owner-control-panel");
   const authorized = isOwnerAccount();
   if (panel) panel.hidden = !authorized;
   if (!authorized) return;
+
+  if (fromRealtime && (refreshing || Date.now() - lastRefreshCompletedAt < 1500)) {
+    return;
+  }
 
   if (refreshing) {
     refreshQueued = true;
@@ -375,6 +380,7 @@ export async function refreshOwnerUsers({ announceSummary = false } = {}) {
     const result = await api("/api/v1/owner/users");
     const users = Array.isArray(result.users) ? result.users : [];
     lastUsers = users;
+    lastRefreshCompletedAt = Date.now();
     renderOwnerUsers(users);
     const onlineCount = users.filter((u) => u.online).length;
     const summary = `${translateText("Пользователей")}: ${users.length} · ${translateText("в сети")}: ${onlineCount}.`;
@@ -409,12 +415,13 @@ export function setupOwnerControl() {
       void refreshOwnerUsers();
     } else {
       lastUsers = [];
+      lastRefreshCompletedAt = 0;
       document.querySelector("#owner-users-list")?.replaceChildren();
     }
   });
 
   window.addEventListener("bulbam:owner-users-updated", () => {
-    if (isOwnerAccount()) void refreshOwnerUsers();
+    if (isOwnerAccount()) void refreshOwnerUsers({ fromRealtime: true });
   });
 
   window.addEventListener("bulbam:language-changed", () => {

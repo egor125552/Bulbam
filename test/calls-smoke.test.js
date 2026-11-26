@@ -189,6 +189,45 @@ describe("one-to-one audio call signaling", () => {
     });
     await expectStatus(iceSignal, 201);
 
+    const batchedIceResponse = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({
+        signals: [
+          {
+            kind: "ice",
+            payload: {
+              candidate: "candidate:2 1 UDP 2122260222 192.0.2.2 50001 typ srflx",
+              sdpMid: "0",
+              sdpMLineIndex: 0
+            }
+          },
+          {
+            kind: "ice",
+            payload: {
+              candidate: "candidate:3 1 UDP 2122260221 192.0.2.3 50002 typ relay",
+              sdpMid: "0",
+              sdpMLineIndex: 0
+            }
+          }
+        ]
+      })
+    });
+    await expectStatus(batchedIceResponse, 201);
+    const batchedSignals = (await json(batchedIceResponse)).signals;
+    expect(batchedSignals).toHaveLength(2);
+    expect(batchedSignals[1].sequence).toBeGreaterThan(batchedSignals[0].sequence);
+
+    const oversizedBatch = await api(`${callRoot}/signals`, alpha.cookie, {
+      method: "POST",
+      body: JSON.stringify({
+        signals: Array.from({ length: 33 }, (_, index) => ({
+          kind: "ice",
+          payload: { candidate: `candidate:${index + 10} 1 UDP 1 192.0.2.10 ${51000 + index} typ host` }
+        }))
+      })
+    });
+    await expectStatus(oversizedBatch, 400);
+
     const callerCannotRequestResume = await api(`${callRoot}/signals`, alpha.cookie, {
       method: "POST",
       body: JSON.stringify({ kind: "resume", payload: { reason: "wrong-side" } })

@@ -82,9 +82,10 @@ export function setupPresence() {
 
 async function heartbeat(visible=document.visibilityState==="visible") {
   if (!accountId)return;
+  if (visible && typeof navigator !== "undefined" && navigator.onLine === false) return;
   try {
     await api("/api/v1/presence/heartbeat", {
-      method:"PUT",keepalive:!visible,body:JSON.stringify({visible})
+      method:"PUT",keepalive:!visible,body:JSON.stringify({visible}),retries:0
     });
   } catch {
     // Foreground lease expires automatically when the connection is lost.
@@ -105,11 +106,12 @@ async function loadSettings(currentGeneration) {
 
 async function refreshPresence() {
   if (!accountId || requestInFlight || document.visibilityState!=="visible")return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   requestInFlight=true;
   logDiagnostic('Сеть','проверка присутствия запущена');
   const currentGeneration=generation;
   try {
-    const result=await api("/api/v1/presence");
+    const result=await api("/api/v1/presence", { retries: 0 });
     if(currentGeneration!==generation)return;
     statusList=Array.isArray(result.users)?result.users:[];
     logTraceEvent('Сеть','проверка присутствия завершена','',{count:statusList.length});

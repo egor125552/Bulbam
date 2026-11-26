@@ -93,6 +93,16 @@ export function describeApiOperation(path, method = "GET") {
   else if (/\/messages\/[^/]+\/file$/.test(pathname)) label = "файл";
   else if (/\/messages(?:\/|$)/.test(pathname)) label = "сообщения";
   else if (/\/chats(?:\/|$)/.test(pathname)) label = "чаты";
+  else if (pathname === "/api/v1/owner/users") label = "пользователи (владелец)";
+  else if (/^\/api\/v1\/owner\/users\/[^/]+\/restore-session$/.test(pathname)) label = "восстановление сеанса";
+  else if (/^\/api\/v1\/owner\/users\/[^/]+\/login-link$/.test(pathname)) label = "одноразовая ссылка входа";
+  else if (/^\/api\/v1\/owner\/users\/[^/]+\/revoke-sessions$/.test(pathname)) label = "завершение сеансов (владелец)";
+  else if (/^\/api\/v1\/owner\/users\/[^/]+$/.test(pathname)) label = "удаление аккаунта (владелец)";
+  else if (/^\/api\/v1\/admin\/recovery-requests(?:\/|$)/.test(pathname)) label = "заявки восстановления";
+  else if (/^\/api\/v1\/passkeys(?:\/|$)/.test(pathname)) label = "ключи доступа";
+  else if (/^\/api\/v1\/invites(?:\/|$)/.test(pathname)) label = "приглашения";
+  else if (pathname === "/api/v1/users/search") label = "поиск пользователей";
+  else if (pathname === "/api/v1/sessions/revoke-all") label = "завершение всех сеансов";
   else if (/\/sessions/.test(pathname)) label = "сеансы";
   else if (/\/push/.test(pathname)) label = "уведомления";
   return `${verb} ${label}`;

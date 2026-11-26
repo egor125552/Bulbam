@@ -1,7 +1,7 @@
 import { json, methodNotAllowed, readJsonObject } from "../../../core/http";
 import type { PushNotificationService } from "../application/push-notification-service";
 
-export type AuthenticatePushRequest = (request: Request) => Promise<{ userId: string }>;
+export type AuthenticatePushRequest = (request: Request) => Promise<{ userId: string; sessionId?: string }>;
 
 export async function handlePushHttp(
   request: Request,
@@ -21,7 +21,8 @@ export async function handlePushHttp(
       await service.subscribe(
         actor.userId,
         await readJsonObject(request),
-        request.headers.get("user-agent")
+        request.headers.get("user-agent"),
+        actor.sessionId ?? null
       );
       return json({ ok: true }, { status: 201 });
     }
