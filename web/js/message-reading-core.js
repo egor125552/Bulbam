@@ -161,6 +161,30 @@ function capitalizeSentence(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function formatReplyPrefix(message, translate) {
+  if (!message?.replyTo) return "";
+  if (message.replyTo.deleted) {
+    return `${translate("В ответ на удалённое сообщение")}.`;
+  }
+  const author = message.replyTo.senderDisplayName || translate("Участник");
+  const excerpt = (message.replyTo.text || "").trim();
+  return excerpt
+    ? `${translate("В ответ на сообщение от")} ${author}: ${excerpt}.`
+    : `${translate("В ответ на сообщение от")} ${author}.`;
+}
+
+function formatForwardPrefix(message, translate) {
+  const fromName = message?.forwardedFrom?.fromDisplayName || message?.forwardedFrom?.displayName;
+  if (!fromName) return "";
+  return `${translate("Переслано от")} ${fromName}.`;
+}
+
+function formatReactionsSummary(message, translate) {
+  if (!Array.isArray(message?.reactions) || !message.reactions.length) return "";
+  const list = message.reactions.map((entry) => `${entry.emoji} ${entry.count}`).join(", ");
+  return `${translate("Реакции")}: ${list}.`;
+}
+
 export function buildMessageReadingText(message, {
   mode = DEFAULT_MESSAGE_READING_MODE,
   mine = false,
@@ -173,10 +197,16 @@ export function buildMessageReadingText(message, {
   const resolvedAuthor = mine ? "Вы" : (authorName || translate("Участник"));
   const shortClock = formatShortClock(message.createdAt);
   const fullTimestamp = formatFullTimestampSpoken(message.createdAt, locale, translate);
+  const forwardPrefix = formatForwardPrefix(message, translate);
+  const replyPrefix = formatReplyPrefix(message, translate);
+  const reactionsSuffix = formatReactionsSummary(message, translate);
+  const favoriteSuffix = message?.isFavorite ? `${translate("В избранном")}.` : "";
 
   if (normalizedMode === "telegram") {
     const status = deliveryStatusSummary(message, { mine, isGroup, verbose: true, translate });
     const chunks = [];
+    if (forwardPrefix) chunks.push(forwardPrefix);
+    if (replyPrefix) chunks.push(replyPrefix);
 
     if (message.kind === "voice" && message.voice) {
       const duration = formatDurationSpoken(message.voice.durationMs, translate);
@@ -197,6 +227,8 @@ export function buildMessageReadingText(message, {
       chunks.push(`${prefix} ${message.text || ""}`.trim());
     }
 
+    if (reactionsSuffix) chunks.push(reactionsSuffix);
+    if (favoriteSuffix) chunks.push(favoriteSuffix);
     if (fullTimestamp) chunks.push(`${fullTimestamp}.`);
     if (status) chunks.push(`${capitalizeSentence(status)}.`);
     return chunks.join(" ");
@@ -204,13 +236,15 @@ export function buildMessageReadingText(message, {
 
   const status = deliveryStatusSummary(message, { mine, isGroup, verbose: false, translate });
   const tail = [shortClock, status].filter(Boolean).join(", ");
+  const extras = [reactionsSuffix, favoriteSuffix].filter(Boolean).join(" ");
+  const contextPrefix = [forwardPrefix, replyPrefix].filter(Boolean).join(" ");
 
   if (message.kind === "voice" && message.voice) {
     const duration = formatDurationSpoken(message.voice.durationMs, translate);
     const head = mine
       ? translate("Ваше голосовое сообщение")
       : `${resolvedAuthor}, ${translate("голосовое сообщение")}`;
-    return [head, duration, tail].filter(Boolean).join(", ");
+    return [contextPrefix, [head, duration, tail].filter(Boolean).join(", "), extras].filter(Boolean).join(" ");
   }
 
   if (message.kind === "file" && message.file) {
@@ -218,11 +252,12 @@ export function buildMessageReadingText(message, {
     const size = formatCompactFileSize(message.file.sizeBytes, translate);
     const caption = message.text ? `. ${message.text}` : "";
     const head = `${resolvedAuthor}: ${label} ${message.file.fileName}, ${size}${caption}`;
-    return tail ? `${head}. ${tail}` : head;
+    return [contextPrefix, tail ? `${head}. ${tail}` : head, extras].filter(Boolean).join(" ");
   }
 
   const textBody = `${resolvedAuthor}: ${message.text || ""}`.trim();
-  return tail ? `${textBody}. ${tail}` : textBody;
+  const base = tail ? `${textBody}. ${tail}` : textBody;
+  return [contextPrefix, base, extras].filter(Boolean).join(" ");
 }
 
 export function readingModeDescription(mode) {

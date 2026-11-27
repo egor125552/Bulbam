@@ -3,8 +3,10 @@ import type {
   DeliveryReceiptUpdate,
   DirectConversation,
   Conversation,
+  FavoriteMessageEntry,
   GroupConversation,
   GroupMember,
+  MessageReactionSummary,
   StoredMessage,
   VoiceListenUpdate
 } from "../domain/models";
@@ -51,7 +53,10 @@ const MESSAGE_COLUMNS = `
   f.file_name AS file_name,
   f.mime_type AS file_mime_type,
   f.media_kind AS file_media_kind,
-  f.size_bytes AS file_size_bytes
+  f.size_bytes AS file_size_bytes,
+  m.reply_to_message_id,
+  m.forwarded_from_user_id,
+  m.forwarded_from_display_name
 `;
 
 const MESSAGE_JOINS = `
@@ -234,40 +239,81 @@ export class D1MessagingRepository implements MessagingRepository {
           JOIN conversations c ON c.conversation_id=m.conversation_id
           LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
           WHERE m.conversation_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM message_hidden_for_user mh
+            WHERE mh.message_id = m.message_id AND mh.user_id = ?
+          )
           AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
             (c.history_mode='all' OR m.created_at>=gm.joined_at)))
           ORDER BY m.created_at DESC, m.message_id DESC
           LIMIT ?
         `)
-        .bind(viewerUserId,viewerUserId,viewerUserId,viewerUserId,conversationId, limit)
+        .bind(viewerUserId, viewerUserId, viewerUserId, viewerUserId, conversationId, viewerUserId, limit)
         .all<Row>();
       return (result.results ?? []).map((row) => mapMessage(row, viewerUserId)).reverse();
     });
   }
 
-  async insertMessage(input: StoredMessage): Promise<InsertMessageResult> {
-    await this.initialize();
-
-    const existing = await this.findByClientMessageId(input.senderUserId, input.clientMessageId);
-    if (existing) return sameMessage(existing, input) ? { status: "duplicate", message: existing } : { status: "conflict" };
-
-    const statements = [
-      this.db
+  async listMessagesByIds(conversationId: string, messageIds: string[], viewerUserId: string): Promise<Map<string, StoredMessage>> {
+    return this.runWithSchemaRepair(async () => {
+      const output = new Map<string, StoredMessage>();
+      const uniqueIds = [...new Set(messageIds.filter(Boolean))];
+      if (!uniqueIds.length) return output;
+      const placeholders = uniqueIds.map(() => "?").join(", ");
+      const result = await this.db
         .prepare(`
-          INSERT OR IGNORE INTO messages (
-            message_id, conversation_id, sender_user_id, client_message_id, message_type, body, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
+            own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at
+          FROM messages m
+          ${MESSAGE_JOINS}
+          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+          JOIN conversations c ON c.conversation_id=m.conversation_id
+          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+          WHERE m.conversation_id = ?
+            AND m.message_id IN (${placeholders})
+            AND NOT EXISTS (
+              SELECT 1 FROM message_hidden_for_user mh
+              WHERE mh.message_id = m.message_id AND mh.user_id = ?
+            )
+            AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
+              (c.history_mode='all' OR m.created_at>=gm.joined_at)))
         `)
-        .bind(
-          input.messageId,
-          input.conversationId,
-          input.senderUserId,
-          input.clientMessageId,
-          input.kind === "voice" ? "voice" : "text",
-          input.text,
-          input.createdAt
-        )
-    ];
+        .bind(viewerUserId, viewerUserId, viewerUserId, viewerUserId, conversationId, ...uniqueIds, viewerUserId)
+        .all<Row>();
+      for (const row of result.results ?? []) {
+        const message = mapMessage(row, viewerUserId);
+        output.set(message.messageId, message);
+      }
+      return output;
+    });
+  }
+
+  async insertMessage(input: StoredMessage): Promise<InsertMessageResult> {
+    return this.runWithSchemaRepair(async () => {
+      const existing = await this.findByClientMessageId(input.senderUserId, input.clientMessageId);
+      if (existing) return sameMessage(existing, input) ? { status: "duplicate", message: existing } : { status: "conflict" };
+
+      const statements = [
+        this.db
+          .prepare(`
+            INSERT OR IGNORE INTO messages (
+              message_id, conversation_id, sender_user_id, client_message_id, message_type, body, created_at,
+              reply_to_message_id, forwarded_from_user_id, forwarded_from_display_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `)
+          .bind(
+            input.messageId,
+            input.conversationId,
+            input.senderUserId,
+            input.clientMessageId,
+            input.kind === "voice" ? "voice" : "text",
+            input.text,
+            input.createdAt,
+            input.replyToMessageId ?? null,
+            input.forwardedFrom?.fromUserId ?? null,
+            input.forwardedFrom?.fromDisplayName ?? null
+          )
+      ];
 
     if (input.kind === "voice" && input.voice) {
       statements.push(
@@ -336,11 +382,222 @@ export class D1MessagingRepository implements MessagingRepository {
       return { status: "created", message: input };
     }
 
-    const afterRace = await this.findByClientMessageId(input.senderUserId, input.clientMessageId);
-    if (afterRace && sameMessage(afterRace, input)) {
-      return { status: "duplicate", message: afterRace };
-    }
-    return { status: "conflict" };
+      const afterRace = await this.findByClientMessageId(input.senderUserId, input.clientMessageId);
+      if (afterRace && sameMessage(afterRace, input)) {
+        return { status: "duplicate", message: afterRace };
+      }
+      return { status: "conflict" };
+    });
+  }
+
+  async hideMessageForUser(conversationId: string, messageId: string, userId: string, now: number): Promise<boolean> {
+    return this.runWithSchemaRepair(async () => {
+      const exists = await this.db
+        .prepare("SELECT message_id FROM messages WHERE conversation_id = ? AND message_id = ? LIMIT 1")
+        .bind(conversationId, messageId)
+        .first<Row>();
+      if (!exists) return false;
+      await this.db.batch([
+        this.db
+          .prepare(`
+            INSERT OR IGNORE INTO message_hidden_for_user (message_id, user_id, hidden_at)
+            VALUES (?, ?, ?)
+          `)
+          .bind(messageId, userId, now),
+        this.db
+          .prepare("DELETE FROM favorite_messages WHERE user_id = ? AND message_id = ?")
+          .bind(userId, messageId)
+      ]);
+      return true;
+    });
+  }
+
+  async deleteMessageForEveryone(conversationId: string, messageId: string): Promise<boolean> {
+    return this.runWithSchemaRepair(async () => {
+      const exists = await this.db
+        .prepare("SELECT message_id FROM messages WHERE conversation_id = ? AND message_id = ? LIMIT 1")
+        .bind(conversationId, messageId)
+        .first<Row>();
+      if (!exists) return false;
+
+      await this.db.batch([
+        this.db.prepare("DELETE FROM message_receipts WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM message_hidden_for_user WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM message_reactions WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM favorite_messages WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM voice_message_attachments WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM file_message_attachments WHERE message_id = ?").bind(messageId),
+        this.db.prepare("DELETE FROM messages WHERE conversation_id = ? AND message_id = ?").bind(conversationId, messageId),
+        this.db
+          .prepare(`
+            UPDATE conversations
+            SET last_message_at = (
+              SELECT MAX(created_at) FROM messages WHERE conversation_id = ?
+            )
+            WHERE conversation_id = ?
+          `)
+          .bind(conversationId, conversationId)
+      ]);
+      return true;
+    });
+  }
+
+  async toggleReaction(
+    messageId: string,
+    userId: string,
+    emoji: string,
+    now: number
+  ): Promise<{ added: boolean; reactions: MessageReactionSummary[] }> {
+    return this.runWithSchemaRepair(async () => {
+      const existing = await this.db
+        .prepare("SELECT 1 AS present FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ? LIMIT 1")
+        .bind(messageId, userId, emoji)
+        .first<Row>();
+      let added = false;
+      if (existing) {
+        await this.db
+          .prepare("DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?")
+          .bind(messageId, userId, emoji)
+          .run();
+      } else {
+        await this.db
+          .prepare("INSERT OR IGNORE INTO message_reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)")
+          .bind(messageId, userId, emoji, now)
+          .run();
+        added = true;
+      }
+      const map = await this.listReactionsForMessages([messageId], userId);
+      return { added, reactions: map.get(messageId) ?? [] };
+    });
+  }
+
+  async listReactionsForMessages(
+    messageIds: string[],
+    viewerUserId: string
+  ): Promise<Map<string, MessageReactionSummary[]>> {
+    return this.runWithSchemaRepair(async () => {
+      const output = new Map<string, MessageReactionSummary[]>();
+      const uniqueIds = [...new Set(messageIds.filter(Boolean))];
+      if (!uniqueIds.length) return output;
+      const placeholders = uniqueIds.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(`
+          SELECT message_id, user_id, emoji, created_at
+          FROM message_reactions
+          WHERE message_id IN (${placeholders})
+          ORDER BY created_at ASC, emoji ASC, user_id ASC
+        `)
+        .bind(...uniqueIds)
+        .all<Row>();
+
+      const grouped = new Map<string, Map<string, string[]>>();
+      for (const row of result.results ?? []) {
+        const messageId = String(row.message_id);
+        const emoji = String(row.emoji);
+        const userId = String(row.user_id);
+        let byEmoji = grouped.get(messageId);
+        if (!byEmoji) {
+          byEmoji = new Map();
+          grouped.set(messageId, byEmoji);
+        }
+        const users = byEmoji.get(emoji) ?? [];
+        users.push(userId);
+        byEmoji.set(emoji, users);
+      }
+
+      for (const [messageId, byEmoji] of grouped.entries()) {
+        const list: MessageReactionSummary[] = [];
+        for (const [emoji, userIds] of byEmoji.entries()) {
+          list.push({
+            emoji,
+            count: userIds.length,
+            userIds,
+            reactedByMe: userIds.includes(viewerUserId)
+          });
+        }
+        output.set(messageId, list);
+      }
+      return output;
+    });
+  }
+
+  async addFavorite(userId: string, conversationId: string, messageId: string, now: number): Promise<void> {
+    return this.runWithSchemaRepair(async () => {
+      await this.db
+        .prepare(`
+          INSERT OR REPLACE INTO favorite_messages (user_id, message_id, conversation_id, created_at)
+          VALUES (?, ?, ?, ?)
+        `)
+        .bind(userId, messageId, conversationId, now)
+        .run();
+    });
+  }
+
+  async removeFavorite(userId: string, messageId: string): Promise<void> {
+    return this.runWithSchemaRepair(async () => {
+      await this.db
+        .prepare("DELETE FROM favorite_messages WHERE user_id = ? AND message_id = ?")
+        .bind(userId, messageId)
+        .run();
+    });
+  }
+
+  async listFavoriteIds(userId: string, messageIds: string[]): Promise<Set<string>> {
+    return this.runWithSchemaRepair(async () => {
+      const output = new Set<string>();
+      const uniqueIds = [...new Set(messageIds.filter(Boolean))];
+      if (!uniqueIds.length) return output;
+      const placeholders = uniqueIds.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(`
+          SELECT message_id
+          FROM favorite_messages
+          WHERE user_id = ? AND message_id IN (${placeholders})
+        `)
+        .bind(userId, ...uniqueIds)
+        .all<Row>();
+      for (const row of result.results ?? []) {
+        output.add(String(row.message_id));
+      }
+      return output;
+    });
+  }
+
+  async listFavorites(userId: string, limit: number): Promise<FavoriteMessageEntry[]> {
+    return this.runWithSchemaRepair(async () => {
+      const result = await this.db
+        .prepare(`
+          SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
+            own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at,
+            fav.created_at AS saved_at
+          FROM favorite_messages fav
+          JOIN messages m ON m.message_id = fav.message_id
+          ${MESSAGE_JOINS}
+          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+          JOIN conversations c ON c.conversation_id=m.conversation_id
+          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+          WHERE fav.user_id = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM message_hidden_for_user mh
+              WHERE mh.message_id = m.message_id AND mh.user_id = ?
+            )
+            AND ((c.kind='direct' AND (c.participant_a_id = ? OR c.participant_b_id = ?))
+              OR (c.kind='group' AND gm.user_id IS NOT NULL AND
+                (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+          ORDER BY fav.created_at DESC, m.created_at DESC
+          LIMIT ?
+        `)
+        .bind(userId, userId, userId, userId, userId, userId, userId, userId, limit)
+        .all<Row>();
+
+      return (result.results ?? []).map((row) => ({
+        messageId: String(row.message_id),
+        conversationId: String(row.conversation_id),
+        savedAt: Number(row.saved_at),
+        message: { ...mapMessage(row, userId), isFavorite: true }
+      }));
+    });
   }
 
   async markMessagesDelivered(
@@ -453,20 +710,36 @@ export class D1MessagingRepository implements MessagingRepository {
     });
   }
 
-  async findLatestMessage(conversationId: string): Promise<StoredMessage | null> {
+  async findLatestMessage(conversationId: string, viewerUserId?: string): Promise<StoredMessage | null> {
     return this.runWithSchemaRepair(async () => {
-      const row = await this.db
-        .prepare(`
-          SELECT ${MESSAGE_COLUMNS}
-          FROM messages m
-          ${MESSAGE_JOINS}
-          WHERE m.conversation_id = ?
-          ORDER BY m.created_at DESC, m.message_id DESC
-          LIMIT 1
-        `)
-        .bind(null,null,conversationId)
-        .first<Row>();
-      return row ? mapMessage(row) : null;
+      const row = viewerUserId
+        ? await this.db
+            .prepare(`
+              SELECT ${MESSAGE_COLUMNS}
+              FROM messages m
+              ${MESSAGE_JOINS}
+              WHERE m.conversation_id = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM message_hidden_for_user mh
+                  WHERE mh.message_id = m.message_id AND mh.user_id = ?
+                )
+              ORDER BY m.created_at DESC, m.message_id DESC
+              LIMIT 1
+            `)
+            .bind(viewerUserId, viewerUserId, conversationId, viewerUserId)
+            .first<Row>()
+        : await this.db
+            .prepare(`
+              SELECT ${MESSAGE_COLUMNS}
+              FROM messages m
+              ${MESSAGE_JOINS}
+              WHERE m.conversation_id = ?
+              ORDER BY m.created_at DESC, m.message_id DESC
+              LIMIT 1
+            `)
+            .bind(null, null, conversationId)
+            .first<Row>();
+      return row ? mapMessage(row, viewerUserId) : null;
     });
   }
 
@@ -481,12 +754,16 @@ export class D1MessagingRepository implements MessagingRepository {
           LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
           WHERE m.conversation_id = ?
             AND m.message_id = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM message_hidden_for_user mh
+              WHERE mh.message_id = m.message_id AND mh.user_id = ?
+            )
             AND ((c.kind='direct' AND (c.participant_a_id = ? OR c.participant_b_id = ?))
               OR (c.kind='group' AND gm.user_id IS NOT NULL AND
                 (c.history_mode='all' OR m.created_at>=gm.joined_at)))
           LIMIT 1
         `)
-        .bind(userId,userId,userId, conversationId, messageId, userId, userId)
+        .bind(userId, userId, userId, conversationId, messageId, userId, userId, userId)
         .first<Row>();
       return row ? mapMessage(row, userId) : null;
     });
@@ -572,6 +849,9 @@ export class D1MessagingRepository implements MessagingRepository {
       await this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_privacy_settings WHERE user_id = ?").bind(userId).run();
       await this.db.prepare("DELETE FROM voice_listen_receipts WHERE listener_user_id = ?").bind(userId).run();
+      await this.db.prepare("DELETE FROM message_hidden_for_user WHERE user_id = ?").bind(userId).run();
+      await this.db.prepare("DELETE FROM message_reactions WHERE user_id = ?").bind(userId).run();
+      await this.db.prepare("DELETE FROM favorite_messages WHERE user_id = ?").bind(userId).run();
     }
 
     const conversationIds = new Set<string>();
@@ -592,12 +872,13 @@ export class D1MessagingRepository implements MessagingRepository {
     const statements = [];
     for (const conversationId of conversationIds) {
       statements.push(
-        this.db
-          .prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)")
-          .bind(conversationId)
+        this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+        this.db.prepare("DELETE FROM message_hidden_for_user WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+        this.db.prepare("DELETE FROM message_reactions WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+        this.db.prepare("DELETE FROM favorite_messages WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(conversationId),
+        this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId),
+        this.db.prepare("DELETE FROM conversations WHERE conversation_id = ?").bind(conversationId)
       );
-      statements.push(this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conversationId));
-      statements.push(this.db.prepare("DELETE FROM conversations WHERE conversation_id = ?").bind(conversationId));
     }
     await this.db.batch(statements);
   }
@@ -647,10 +928,16 @@ export class D1MessagingRepository implements MessagingRepository {
       this.db.prepare("DELETE FROM voice_privacy_settings WHERE user_id = ?").bind(targetUserId),
       this.db.prepare("DELETE FROM voice_listen_receipts WHERE listener_user_id = ?").bind(targetUserId),
       this.db.prepare("DELETE FROM message_receipts WHERE recipient_user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM message_hidden_for_user WHERE user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM message_reactions WHERE user_id = ?").bind(targetUserId),
+      this.db.prepare("DELETE FROM favorite_messages WHERE user_id = ?").bind(targetUserId),
       this.db.prepare("DELETE FROM group_members WHERE user_id = ?").bind(targetUserId),
       this.db.prepare("DELETE FROM voice_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
       this.db.prepare("DELETE FROM file_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
       this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM message_hidden_for_user WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM message_reactions WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
+      this.db.prepare("DELETE FROM favorite_messages WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
       this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE sender_user_id = ?)").bind(targetUserId),
       this.db.prepare("DELETE FROM messages WHERE sender_user_id = ?").bind(targetUserId)
     ];
@@ -661,6 +948,9 @@ export class D1MessagingRepository implements MessagingRepository {
         this.db.prepare("DELETE FROM file_message_attachments WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
         this.db.prepare("DELETE FROM voice_listen_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
         this.db.prepare("DELETE FROM message_receipts WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM message_hidden_for_user WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM message_reactions WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
+        this.db.prepare("DELETE FROM favorite_messages WHERE message_id IN (SELECT message_id FROM messages WHERE conversation_id = ?)").bind(direct.conversationId),
         this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(direct.conversationId),
         this.db.prepare("DELETE FROM conversations WHERE conversation_id = ?").bind(direct.conversationId)
       );
@@ -819,6 +1109,13 @@ function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
           mimeType: String(row.file_mime_type),
           mediaKind,
           sizeBytes: Number(row.file_size_bytes)
+        }
+      : null,
+    replyToMessageId: row.reply_to_message_id == null ? null : String(row.reply_to_message_id),
+    forwardedFrom: row.forwarded_from_user_id != null
+      ? {
+          fromUserId: String(row.forwarded_from_user_id),
+          fromDisplayName: String(row.forwarded_from_display_name ?? "")
         }
       : null,
     createdAt: Number(row.created_at),

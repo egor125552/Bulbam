@@ -115,6 +115,40 @@ const migrations = [
   {
     version: 6,
     statements: FILE_ATTACHMENTS_STATEMENTS
+  },
+  {
+    version: 7,
+    statements: [
+      "ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT",
+      "ALTER TABLE messages ADD COLUMN forwarded_from_user_id TEXT",
+      "ALTER TABLE messages ADD COLUMN forwarded_from_display_name TEXT",
+      `CREATE TABLE IF NOT EXISTS message_hidden_for_user (
+        message_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        hidden_at INTEGER NOT NULL,
+        PRIMARY KEY (message_id, user_id),
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_message_hidden_user ON message_hidden_for_user(user_id, message_id)",
+      `CREATE TABLE IF NOT EXISTS message_reactions (
+        message_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (message_id, user_id, emoji),
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id)",
+      `CREATE TABLE IF NOT EXISTS favorite_messages (
+        user_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, message_id),
+        FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_favorite_messages_user ON favorite_messages(user_id, created_at)"
+    ]
   }
 ] as const;
 
@@ -169,9 +203,26 @@ async function initialize(db: D1Database): Promise<void> {
       .run();
   }
 
-  // Defensive invariant: even if an older deployment already wrote version 5/6
-  // into schema_migrations, guarantee file_message_attachments actually exists.
+  // Defensive invariants: guarantee optional tables/columns exist even after partial deploys.
   await ensureFileAttachmentsTable(db);
+  await ensureMessageActionsSchema(db);
+}
+
+async function ensureMessageActionsSchema(db: D1Database): Promise<void> {
+  const info = await db.prepare("PRAGMA table_info(messages)").all<{ name: string }>();
+  const columns = new Set((info.results ?? []).map((item) => String(item.name ?? "")));
+  if (!columns.has("reply_to_message_id")) {
+    await runStatement(db, "ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT");
+  }
+  if (!columns.has("forwarded_from_user_id")) {
+    await runStatement(db, "ALTER TABLE messages ADD COLUMN forwarded_from_user_id TEXT");
+  }
+  if (!columns.has("forwarded_from_display_name")) {
+    await runStatement(db, "ALTER TABLE messages ADD COLUMN forwarded_from_display_name TEXT");
+  }
+  for (const statement of migrations[6].statements.slice(3)) {
+    await runStatement(db, statement);
+  }
 }
 
 async function ensureFileAttachmentsTable(db: D1Database): Promise<void> {
@@ -204,7 +255,7 @@ async function ensureFileAttachmentsTable(db: D1Database): Promise<void> {
 }
 
 // D1 migration batches are not guaranteed to be atomic. A transient Worker
-// failure after the rename must allow the next request to finish v4 safely.
+// failure after the rename must allow the next request to finish v4/v7 safely.
 async function runMigrationStatement(db:D1Database,version:number,sql:string):Promise<void>{
   if(version===4){
     if(sql.startsWith('ALTER TABLE direct_conversations RENAME')){
@@ -216,6 +267,13 @@ async function runMigrationStatement(db:D1Database,version:number,sql:string):Pr
     if(column){
       const info=await db.prepare('PRAGMA table_info(conversations)').all<{name:string}>();
       if((info.results??[]).some(item=>item.name===column[1]))return;
+    }
+  }
+  if (version === 7) {
+    const column = sql.match(/^ALTER TABLE messages ADD COLUMN ([a-z_]+)/);
+    if (column) {
+      const info = await db.prepare("PRAGMA table_info(messages)").all<{ name: string }>();
+      if ((info.results ?? []).some((item) => item.name === column[1])) return;
     }
   }
   await runStatement(db,sql);

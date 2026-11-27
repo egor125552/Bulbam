@@ -32,6 +32,23 @@ let groupSelected=new Set();
 let groupEditorMode='create';
 let groupEditorConversation=null;
 let groupSearchTimer=null;
+let replyTarget = null;
+let actionMessage = null;
+let actionReturnFocus = null;
+let forwardSourceMessage = null;
+let favoritesItems = [];
+let highlightTimer = null;
+
+const REACTION_CHOICES = [
+  { emoji: "👍", label: "Нравится" },
+  { emoji: "❤️", label: "Сердце" },
+  { emoji: "🔥", label: "Огонь" },
+  { emoji: "😂", label: "Смех" },
+  { emoji: "😮", label: "Удивление" },
+  { emoji: "😢", label: "Грусть" },
+  { emoji: "👏", label: "Аплодисменты" },
+  { emoji: "🙏", label: "Спасибо" }
+];
 
 export function setupMessenger() {
   jumpButton = document.querySelector("#jump-to-latest");
@@ -41,12 +58,18 @@ export function setupMessenger() {
   });
   elements.newChatButton.addEventListener("click", toggleSearchPanel);
   setupGroupEditor();
+  setupMessageActions();
   elements.userSearchInput.addEventListener("input", scheduleUserSearch);
   elements.userSearchInput.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeSearchPanel();
   });
   elements.messageForm.addEventListener("submit", sendCurrentMessage);
   elements.messageInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && replyTarget) {
+      event.preventDefault();
+      clearReplyTarget({ announceCancel: true });
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       elements.messageForm.requestSubmit();
@@ -105,8 +128,16 @@ async function switchAccount(nextAccount) {
   stopRealtime();
   stopPolling();
   closeSearchPanel();
+  clearReplyTarget();
+  actionMessage = null;
+  actionReturnFocus = null;
+  forwardSourceMessage = null;
+  favoritesItems = [];
   document.querySelector('#group-editor')?.close?.();
   document.querySelector('#group-members-dialog')?.close?.();
+  document.querySelector('#message-actions-dialog')?.close?.();
+  document.querySelector('#forward-dialog')?.close?.();
+  document.querySelector('#favorites-dialog')?.close?.();
   groupCandidates.clear();groupSelected.clear();
   renderChats();
   renderConversation();
@@ -285,6 +316,7 @@ function renderChats() {
 
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
+  clearReplyTarget();
   if (jumpButton) jumpButton.hidden = true;
   messages = [];
   resetVoicePlayers();
@@ -459,7 +491,115 @@ function buildMessageMetaNode(message, mine) {
     stateLabel.textContent = ` · ${translateText(state)}`;
     meta.append(stateLabel);
   }
+  if (message.isFavorite && !message.localState) {
+    const fav = document.createElement("span");
+    fav.className = "message-favorite-badge";
+    fav.textContent = `★ ${translateText("В избранном")}`;
+    meta.append(fav);
+  }
   return meta;
+}
+
+function messageSnippetText(message) {
+  if (!message) return "";
+  if (typeof message.text === "string" && message.text.trim()) {
+    return message.text.trim();
+  }
+  if (message.kind === "voice") {
+    return translateText("Голосовое сообщение");
+  }
+  if (message.kind === "file" && message.file) {
+    return filePreviewText(message.file, message.text);
+  }
+  return translateText("Сообщение");
+}
+
+function buildForwardedNode(message) {
+  const fromName = message?.forwardedFrom?.fromDisplayName || message?.forwardedFrom?.displayName;
+  if (!fromName) return null;
+  const badge = document.createElement("span");
+  badge.className = "message-forwarded-badge";
+  badge.dataset.userContent = "true";
+  badge.textContent = `${translateText("Переслано от")} ${fromName}`;
+  return badge;
+}
+
+function buildReplyQuoteNode(message) {
+  if (!message?.replyTo) return null;
+  const reply = message.replyTo;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `message-reply-quote${reply.deleted ? " is-deleted" : ""}`;
+  const author = document.createElement("strong");
+  author.dataset.userContent = "true";
+  author.textContent = reply.deleted
+    ? translateText("Ответ на сообщение")
+    : (reply.senderDisplayName || translateText("Участник"));
+  const excerpt = document.createElement("span");
+  excerpt.dataset.userContent = "true";
+  excerpt.textContent = reply.deleted
+    ? translateText("Сообщение удалено")
+    : (reply.text || translateText("Сообщение"));
+  button.append(author, excerpt);
+  button.setAttribute(
+    "aria-label",
+    reply.deleted
+      ? translateText("В ответ на удалённое сообщение")
+      : `${translateText("В ответ на сообщение от")} ${author.textContent}: ${excerpt.textContent}. ${translateText("Перейти к исходному сообщению")}`
+  );
+  button.addEventListener("click", () => jumpToMessageById(reply.messageId));
+  return button;
+}
+
+function buildReactionsNode(message) {
+  if (!Array.isArray(message?.reactions) || !message.reactions.length || message.localState) return null;
+  const bar = document.createElement("div");
+  bar.className = "message-reactions-bar";
+  bar.setAttribute("role", "group");
+  bar.setAttribute("aria-label", translateText("Реакции"));
+  for (const reaction of message.reactions) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `reaction-chip${reaction.reactedByMe ? " is-active" : ""}`;
+    chip.setAttribute("aria-pressed", String(Boolean(reaction.reactedByMe)));
+    const choice = REACTION_CHOICES.find((item) => item.emoji === reaction.emoji);
+    const labelName = choice ? translateText(choice.label) : reaction.emoji;
+    chip.setAttribute(
+      "aria-label",
+      `${labelName} ${reaction.emoji}, ${reaction.count}${reaction.reactedByMe ? `, ${translateText("вы поставили")}` : ""}`
+    );
+    chip.textContent = `${reaction.emoji} ${reaction.count}`;
+    chip.addEventListener("click", () => void toggleMessageReaction(message, reaction.emoji));
+    bar.append(chip);
+  }
+  return bar;
+}
+
+function buildMessageActionsTrigger(message) {
+  if (message.localState) return null;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-actions-trigger";
+  button.setAttribute("aria-label", translateText("Открыть меню действий с сообщением"));
+  button.title = translateText("Действия с сообщением");
+  const dots = document.createElement("span");
+  dots.setAttribute("aria-hidden", "true");
+  dots.textContent = "⋯";
+  button.append(dots);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openMessageActions(message, button);
+  });
+  return button;
+}
+
+function attachMessageContextMenu(container, message, trigger) {
+  if (message.localState) return;
+  container.addEventListener("contextmenu", (event) => {
+    if (event.target instanceof HTMLElement && event.target.closest("a, input, textarea")) return;
+    event.preventDefault();
+    openMessageActions(message, trigger ?? container);
+  });
 }
 
 function buildGroupReadersDetails(message, mine) {
@@ -517,8 +657,13 @@ function renderMessagesAsList(list, readingMode, locale) {
     if (!mine) author.dataset.userContent = "true";
 
     const meta = buildMessageMetaNode(message, mine);
+    const forwardedNode = buildForwardedNode(message);
+    const replyQuoteNode = buildReplyQuoteNode(message);
+    const reactionsNode = buildReactionsNode(message);
+    const actionsTrigger = buildMessageActionsTrigger(message);
     const readersDetails = buildGroupReadersDetails(message, mine);
     const retryButton = buildRetryButton(message);
+    attachMessageContextMenu(item, message, actionsTrigger);
 
     if (isUnified) {
       const spokenSummary = buildMessageReadingText(message, {
@@ -542,14 +687,34 @@ function renderMessagesAsList(list, readingMode, locale) {
         });
         author.setAttribute("aria-hidden", "true");
         meta.setAttribute("aria-hidden", "true");
-        item.append(trigger, author, voiceNode, meta);
+        if (forwardedNode) forwardedNode.setAttribute("aria-hidden", "true");
+        item.append(trigger);
+        if (forwardedNode) item.append(forwardedNode);
+        if (replyQuoteNode) item.append(replyQuoteNode);
+        item.append(author, voiceNode);
+        if (reactionsNode) item.append(reactionsNode);
+        const footer = document.createElement("div");
+        footer.className = "message-footer-row";
+        footer.append(meta);
+        if (actionsTrigger) footer.append(actionsTrigger);
+        item.append(footer);
       } else if (message.kind === "file" && message.file) {
         const summarySpan = document.createElement("span");
         summarySpan.className = "visually-hidden";
         summarySpan.textContent = spokenSummary;
         author.setAttribute("aria-hidden", "true");
         meta.setAttribute("aria-hidden", "true");
-        item.append(summarySpan, author, renderFileMessage(message, authorName), meta);
+        if (forwardedNode) forwardedNode.setAttribute("aria-hidden", "true");
+        item.append(summarySpan);
+        if (forwardedNode) item.append(forwardedNode);
+        if (replyQuoteNode) item.append(replyQuoteNode);
+        item.append(author, renderFileMessage(message, authorName));
+        if (reactionsNode) item.append(reactionsNode);
+        const footer = document.createElement("div");
+        footer.className = "message-footer-row";
+        footer.append(meta);
+        if (actionsTrigger) footer.append(actionsTrigger);
+        item.append(footer);
       } else {
         const surface = document.createElement("span");
         surface.className = "message-reading-surface";
@@ -559,11 +724,20 @@ function renderMessagesAsList(list, readingMode, locale) {
         visualBody.className = "message-visual-body";
         visualBody.setAttribute("aria-hidden", "true");
 
+        if (forwardedNode) visualBody.append(forwardedNode);
         const body = document.createElement("p");
         body.dataset.userContent = "true";
         body.textContent = message.text;
         visualBody.append(author, body, meta);
         item.append(surface, visualBody);
+        if (replyQuoteNode) item.append(replyQuoteNode);
+        if (reactionsNode) item.append(reactionsNode);
+        if (actionsTrigger) {
+          const footer = document.createElement("div");
+          footer.className = "message-footer-row";
+          footer.append(actionsTrigger);
+          item.append(footer);
+        }
       }
 
       if (readersDetails) item.append(readersDetails);
@@ -572,7 +746,9 @@ function renderMessagesAsList(list, readingMode, locale) {
       continue;
     }
 
+    if (forwardedNode) item.append(forwardedNode);
     item.append(author);
+    if (replyQuoteNode) item.append(replyQuoteNode);
     if (message.kind === "voice" && message.voice) {
       item.append(renderVoiceMessage(message, mine));
     } else if (message.kind === "file" && message.file) {
@@ -583,7 +759,12 @@ function renderMessagesAsList(list, readingMode, locale) {
       body.textContent = message.text;
       item.append(body);
     }
-    item.append(meta);
+    if (reactionsNode) item.append(reactionsNode);
+    const footer = document.createElement("div");
+    footer.className = "message-footer-row";
+    footer.append(meta);
+    if (actionsTrigger) footer.append(actionsTrigger);
+    item.append(footer);
     if (readersDetails) item.append(readersDetails);
     if (retryButton) item.append(retryButton);
     list.append(item);
@@ -641,6 +822,14 @@ function renderMessagesAsTable(list, locale) {
 
     const contentCell = document.createElement("td");
     contentCell.className = "message-cell-content";
+    const forwardedNode = buildForwardedNode(message);
+    const replyQuoteNode = buildReplyQuoteNode(message);
+    const reactionsNode = buildReactionsNode(message);
+    const actionsTrigger = buildMessageActionsTrigger(message);
+    attachMessageContextMenu(row, message, actionsTrigger);
+
+    if (forwardedNode) contentCell.append(forwardedNode);
+    if (replyQuoteNode) contentCell.append(replyQuoteNode);
     if (message.kind === "voice" && message.voice) {
       contentCell.append(renderVoiceMessage(message, mine));
     } else if (message.kind === "file" && message.file) {
@@ -651,6 +840,7 @@ function renderMessagesAsTable(list, locale) {
       body.textContent = message.text;
       contentCell.append(body);
     }
+    if (reactionsNode) contentCell.append(reactionsNode);
 
     const metaCell = document.createElement("td");
     metaCell.className = "message-cell-meta";
@@ -665,6 +855,19 @@ function renderMessagesAsTable(list, locale) {
       const statusSpan = document.createElement("span");
       statusSpan.textContent = ` · ${statusSummary}`;
       metaCell.append(statusSpan);
+    }
+    if (message.isFavorite && !message.localState) {
+      const fav = document.createElement("span");
+      fav.className = "message-favorite-badge";
+      fav.textContent = `★ ${translateText("В избранном")}`;
+      metaCell.append(fav);
+    }
+
+    if (actionsTrigger) {
+      const actionWrap = document.createElement("div");
+      actionWrap.className = "message-footer-row";
+      actionWrap.append(actionsTrigger);
+      metaCell.append(actionWrap);
     }
 
     const readersDetails = buildGroupReadersDetails(message, mine);
@@ -698,6 +901,7 @@ async function sendCurrentMessage(event) {
   const text = elements.messageInput.value.replace(/\r\n?/g, "\n").trim();
   if (!text) return;
 
+  const activeReply = replyTarget && replyTarget.conversationId === selectedChat.conversationId ? replyTarget : null;
   const pending = {
     messageId: `pending_${randomId()}`,
     conversationId: selectedChat.conversationId,
@@ -706,6 +910,20 @@ async function sendCurrentMessage(event) {
     kind: "text",
     text,
     voice: null,
+    replyToMessageId: activeReply?.messageId ?? null,
+    replyTo: activeReply
+      ? {
+          messageId: activeReply.messageId,
+          senderUserId: activeReply.senderUserId,
+          senderDisplayName: activeReply.authorName,
+          kind: activeReply.kind,
+          text: activeReply.snippet,
+          deleted: false
+        }
+      : null,
+    forwardedFrom: null,
+    reactions: [],
+    isFavorite: false,
     createdAt: Date.now(),
     deliveredAt: null,
     localState: "pending"
@@ -713,6 +931,7 @@ async function sendCurrentMessage(event) {
   messages.push(pending);
   logTraceEvent('Интерфейс','сообщение поставлено в очередь','',{count:messages.length});
   elements.messageInput.value = "";
+  clearReplyTarget();
   renderMessages({ preserveVoicePlayback: true, scrollToBottom: true });
   await transmitPending(pending);
 }
@@ -723,12 +942,14 @@ async function transmitPending(pending) {
   logDiagnostic('Сеть','повтор или начало отправки текста');
   renderMessages({ preserveVoicePlayback: true });
   try {
+    const body = {
+      clientMessageId: pending.clientMessageId,
+      text: pending.text
+    };
+    if (pending.replyToMessageId) body.replyToMessageId = pending.replyToMessageId;
     const result = await api(`/api/v1/chats/${pending.conversationId}/messages`, {
       method: "POST",
-      body: JSON.stringify({
-        clientMessageId: pending.clientMessageId,
-        text: pending.text
-      })
+      body: JSON.stringify(body)
     });
     upsertServerMessage(result.message);
     logDiagnostic('Сеть','сообщение подтверждено сервером');
@@ -800,13 +1021,22 @@ function connectRealtime() {
 
 function handleRealtimePayload(payload) {
   if (!payload || typeof payload !== "object") return;
-  const known = ["message.created", "messages.delivered", "messages.read", "voice.progress", "chat.created", "chat.updated", "chat.removed"];
+  const known = [
+    "message.created", "message.deleted", "message.reactions.updated", "favorites.updated",
+    "messages.delivered", "messages.read", "voice.progress", "chat.created", "chat.updated", "chat.removed"
+  ];
   logDiagnostic("Сеть", "получено событие сокета", known.includes(payload?.type) ? payload.type : "другое");
   if (payload?.type === "message.created" && payload.message) {
     logDiagnostic("Сервер", "событие новое сообщение");
     handleRealtimeMessage(payload);
+  } else if (payload?.type === "message.deleted" && payload.messageId) {
+    handleRealtimeMessageDeleted(payload);
+  } else if (payload?.type === "message.reactions.updated" && payload.messageId) {
+    handleRealtimeReactionsUpdated(payload);
+  } else if (payload?.type === "favorites.updated" && payload.messageId) {
+    handleRealtimeFavoritesUpdated(payload);
   } else if (payload?.type === "chat.removed") {
-    if (selectedChat?.conversationId === payload.conversationId) { selectedChat = null; messages = []; renderConversation(); }
+    if (selectedChat?.conversationId === payload.conversationId) { selectedChat = null; messages = []; clearReplyTarget(); renderConversation(); }
     void loadChats({ quiet: true });
   } else if (payload?.type === "chat.created" || payload?.type === "chat.updated") {
     void loadChats({ quiet: true });
@@ -1120,4 +1350,589 @@ async function removeGroupUser(member){
     await loadChats({quiet:true});
     announce(own?'Вы вышли из группы.':'Участник исключён из группы.');
   }catch(error){announce(`Не удалось изменить состав группы: ${error.message}`);}
+}
+
+/* ==========================================================================
+   Message actions, replies, reactions, copy, forward, delete & favorites
+   ========================================================================== */
+
+function setupMessageActions() {
+  const actionsDialog = document.querySelector("#message-actions-dialog");
+  const forwardDialog = document.querySelector("#forward-dialog");
+  const favoritesDialog = document.querySelector("#favorites-dialog");
+
+  document.querySelector("#reply-preview-cancel")?.addEventListener("click", () => {
+    clearReplyTarget({ announceCancel: true });
+    elements.messageInput?.focus();
+  });
+
+  document.querySelector("#msg-action-reply")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActionsDialog({ restoreFocus: false });
+    setReplyTarget(target);
+  });
+
+  document.querySelector("#msg-action-copy")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    void copyMessageText(actionMessage);
+  });
+
+  document.querySelector("#msg-action-forward")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActionsDialog({ restoreFocus: false });
+    openForwardDialog(target);
+  });
+
+  document.querySelector("#msg-action-favorite")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActionsDialog({ restoreFocus: true });
+    void toggleFavoriteMessage(target);
+  });
+
+  document.querySelector("#msg-action-delete")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const choices = document.querySelector("#msg-action-delete-choices");
+    const deleteBtn = document.querySelector("#msg-action-delete");
+    const everyoneBtn = document.querySelector("#msg-action-delete-everyone");
+    if (!choices || !deleteBtn) return;
+    const willShow = choices.hidden;
+    choices.hidden = !willShow;
+    deleteBtn.setAttribute("aria-expanded", String(willShow));
+    if (everyoneBtn) {
+      everyoneBtn.hidden = !canDeleteForEveryone(actionMessage);
+    }
+    if (willShow) {
+      document.querySelector("#msg-action-delete-me")?.focus();
+    }
+  });
+
+  document.querySelector("#msg-action-delete-me")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActionsDialog({ restoreFocus: false });
+    void deleteMessageWithScope(target, "me");
+  });
+
+  document.querySelector("#msg-action-delete-everyone")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActionsDialog({ restoreFocus: false });
+    void deleteMessageWithScope(target, "everyone");
+  });
+
+  document.querySelector("#msg-action-delete-cancel")?.addEventListener("click", () => {
+    const choices = document.querySelector("#msg-action-delete-choices");
+    const deleteBtn = document.querySelector("#msg-action-delete");
+    if (choices) choices.hidden = true;
+    deleteBtn?.setAttribute("aria-expanded", "false");
+    deleteBtn?.focus();
+  });
+
+  document.querySelector("#msg-action-close")?.addEventListener("click", () => {
+    closeMessageActionsDialog({ restoreFocus: true });
+  });
+
+  actionsDialog?.addEventListener("cancel", () => {
+    actionMessage = null;
+    queueMicrotask(() => {
+      if (actionReturnFocus instanceof HTMLElement && actionReturnFocus.isConnected) {
+        actionReturnFocus.focus();
+      }
+      actionReturnFocus = null;
+    });
+  });
+
+  document.querySelector("#forward-chat-filter")?.addEventListener("input", () => {
+    renderForwardChatList();
+  });
+  document.querySelector("#forward-dialog-cancel")?.addEventListener("click", () => {
+    forwardSourceMessage = null;
+    forwardDialog?.close();
+    if (actionReturnFocus instanceof HTMLElement && actionReturnFocus.isConnected) {
+      actionReturnFocus.focus();
+    }
+  });
+
+  document.querySelector("#favorites-open")?.addEventListener("click", () => {
+    void openFavoritesDialog();
+  });
+  document.querySelector("#favorites-dialog-close")?.addEventListener("click", () => {
+    favoritesDialog?.close();
+    document.querySelector("#favorites-open")?.focus();
+  });
+}
+
+function canDeleteForEveryone(message) {
+  if (!message || message.localState || !account || !selectedChat) return false;
+  if (message.senderUserId === account.userId) return true;
+  return selectedChat.kind === "group" && selectedChat.ownerUserId === account.userId;
+}
+
+function setReplyTarget(message) {
+  if (!message || !selectedChat || message.localState) return;
+  const mine = message.senderUserId === account?.userId;
+  const authorName = resolveMessageAuthor(message, mine);
+  const snippet = messageSnippetText(message).slice(0, 140);
+  replyTarget = {
+    conversationId: selectedChat.conversationId,
+    messageId: message.messageId,
+    senderUserId: message.senderUserId,
+    kind: message.kind,
+    authorName,
+    snippet
+  };
+  const bar = document.querySelector("#reply-preview-bar");
+  const authorEl = document.querySelector("#reply-preview-author");
+  const textEl = document.querySelector("#reply-preview-text");
+  if (authorEl) authorEl.textContent = `${translateText("Ответ на")} ${authorName}`;
+  if (textEl) textEl.textContent = snippet;
+  if (bar) bar.hidden = false;
+  elements.messageForm.classList.add("composer-has-reply");
+  elements.messageInput.focus();
+  announce(`Ответ на сообщение от ${authorName}.`);
+}
+
+function clearReplyTarget({ announceCancel = false } = {}) {
+  const hadReply = Boolean(replyTarget);
+  replyTarget = null;
+  const bar = document.querySelector("#reply-preview-bar");
+  if (bar) bar.hidden = true;
+  elements.messageForm?.classList.remove("composer-has-reply");
+  if (announceCancel && hadReply) announce("Ответ отменён.");
+}
+
+function openMessageActions(message, returnFocusEl) {
+  const dialog = document.querySelector("#message-actions-dialog");
+  if (!dialog || !message || message.localState) return;
+  actionMessage = message;
+  actionReturnFocus = returnFocusEl ?? document.activeElement;
+
+  const mine = message.senderUserId === account?.userId;
+  const authorName = resolveMessageAuthor(message, mine);
+  const preview = document.querySelector("#message-actions-preview");
+  if (preview) {
+    preview.textContent = `${authorName}: ${messageSnippetText(message)}`;
+  }
+
+  renderDialogReactionButtons(message);
+
+  const copyBtn = document.querySelector("#msg-action-copy");
+  if (copyBtn) {
+    const hasCopyable = Boolean((message.text && message.text.trim()) || (message.kind === "file" && message.file?.fileName));
+    copyBtn.hidden = !hasCopyable;
+  }
+
+  const favBtn = document.querySelector("#msg-action-favorite");
+  if (favBtn) {
+    favBtn.textContent = translateText(message.isFavorite ? "Убрать из избранного" : "Добавить в избранное");
+  }
+
+  const deleteChoices = document.querySelector("#msg-action-delete-choices");
+  const deleteBtn = document.querySelector("#msg-action-delete");
+  const everyoneBtn = document.querySelector("#msg-action-delete-everyone");
+  if (deleteChoices) deleteChoices.hidden = true;
+  if (deleteBtn) deleteBtn.setAttribute("aria-expanded", "false");
+  if (everyoneBtn) everyoneBtn.hidden = !canDeleteForEveryone(message);
+
+  if (!dialog.open) dialog.showModal();
+  document.querySelector("#message-actions-title")?.focus();
+}
+
+function renderDialogReactionButtons(message) {
+  const row = document.querySelector("#message-actions-reactions");
+  if (!row) return;
+  row.replaceChildren();
+  const activeSet = new Set(
+    (message.reactions ?? []).filter((item) => item.reactedByMe).map((item) => item.emoji)
+  );
+  for (const choice of REACTION_CHOICES) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "reaction-picker-button";
+    const pressed = activeSet.has(choice.emoji);
+    btn.setAttribute("aria-pressed", String(pressed));
+    btn.setAttribute("aria-label", `${translateText(choice.label)} ${choice.emoji}`);
+    btn.textContent = choice.emoji;
+    btn.addEventListener("click", () => {
+      const target = actionMessage;
+      closeMessageActionsDialog({ restoreFocus: true });
+      if (target) void toggleMessageReaction(target, choice.emoji);
+    });
+    row.append(btn);
+  }
+}
+
+function closeMessageActionsDialog({ restoreFocus = true } = {}) {
+  const dialog = document.querySelector("#message-actions-dialog");
+  actionMessage = null;
+  if (dialog?.open) dialog.close();
+  if (restoreFocus && actionReturnFocus instanceof HTMLElement && actionReturnFocus.isConnected) {
+    actionReturnFocus.focus();
+  }
+  if (restoreFocus) actionReturnFocus = null;
+}
+
+async function copyMessageText(message) {
+  const textToCopy = (message.text && message.text.trim())
+    ? message.text
+    : (message.kind === "file" && message.file?.fileName ? message.file.fileName : "");
+  if (!textToCopy) {
+    closeMessageActionsDialog({ restoreFocus: true });
+    return;
+  }
+  let copied = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(textToCopy);
+      copied = true;
+    }
+  } catch { /* Fallback below. */ }
+  if (!copied) {
+    try {
+      const host = document.querySelector("#message-actions-dialog")?.open
+        ? document.querySelector("#message-actions-dialog")
+        : document.body;
+      const temp = document.createElement("textarea");
+      temp.value = textToCopy;
+      temp.setAttribute("readonly", "");
+      temp.style.position = "fixed";
+      temp.style.opacity = "0";
+      host.append(temp);
+      temp.select();
+      copied = document.execCommand("copy");
+      temp.remove();
+    } catch { copied = false; }
+  }
+  closeMessageActionsDialog({ restoreFocus: true });
+  announce(copied ? "Текст сообщения скопирован." : "Не удалось скопировать текст сообщения.");
+}
+
+async function toggleMessageReaction(message, emoji) {
+  if (!account || !selectedChat || !message || message.localState) return;
+  const conversationId = message.conversationId || selectedChat.conversationId;
+  try {
+    const result = await api(`/api/v1/chats/${conversationId}/messages/${message.messageId}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ emoji })
+    });
+    const local = messages.find((candidate) => candidate.messageId === message.messageId);
+    if (local && Array.isArray(result.reactions)) {
+      local.reactions = result.reactions;
+      renderMessages({ preserveVoicePlayback: true });
+    }
+    announce(result.added ? `Реакция ${emoji} поставлена.` : `Реакция ${emoji} убрана.`);
+  } catch (error) {
+    announce(`Не удалось обновить реакцию: ${error.message}`);
+  }
+}
+
+async function toggleFavoriteMessage(message) {
+  if (!account || !selectedChat || !message || message.localState) return;
+  const conversationId = message.conversationId || selectedChat.conversationId;
+  const adding = !message.isFavorite;
+  try {
+    await api(`/api/v1/chats/${conversationId}/messages/${message.messageId}/favorite`, {
+      method: adding ? "POST" : "DELETE"
+    });
+    const local = messages.find((candidate) => candidate.messageId === message.messageId);
+    if (local) {
+      local.isFavorite = adding;
+      renderMessages({ preserveVoicePlayback: true });
+    }
+    announce(adding ? "Сообщение добавлено в избранное." : "Сообщение убрано из избранного.");
+  } catch (error) {
+    announce(`Не удалось обновить избранное: ${error.message}`);
+  }
+}
+
+async function deleteMessageWithScope(message, scope) {
+  if (!account || !selectedChat || !message || message.localState) return;
+  const conversationId = message.conversationId || selectedChat.conversationId;
+  try {
+    await api(`/api/v1/chats/${conversationId}/messages/${message.messageId}?scope=${encodeURIComponent(scope)}`, {
+      method: "DELETE"
+    });
+    applyMessageRemovedLocally(conversationId, message.messageId);
+    announce(scope === "everyone" ? "Сообщение удалено у всех." : "Сообщение удалено у вас.");
+    await loadChats({ quiet: true });
+  } catch (error) {
+    announce(`Не удалось удалить сообщение: ${error.message}`);
+  }
+}
+
+function applyMessageRemovedLocally(conversationId, messageId) {
+  if (selectedChat?.conversationId === conversationId) {
+    messages = messages.filter((candidate) => candidate.messageId !== messageId);
+    for (const candidate of messages) {
+      if (candidate.replyToMessageId === messageId || candidate.replyTo?.messageId === messageId) {
+        candidate.replyTo = {
+          messageId,
+          senderUserId: null,
+          senderDisplayName: "",
+          kind: "text",
+          text: translateText("Сообщение удалено"),
+          deleted: true
+        };
+      }
+    }
+    if (replyTarget?.messageId === messageId) clearReplyTarget();
+    if (actionMessage?.messageId === messageId) closeMessageActionsDialog({ restoreFocus: false });
+    renderMessages({ preserveVoicePlayback: true });
+  }
+  const favDialog = document.querySelector("#favorites-dialog");
+  if (favDialog?.open) void loadFavoritesIntoDialog();
+}
+
+function openForwardDialog(message) {
+  const dialog = document.querySelector("#forward-dialog");
+  if (!dialog || !message) return;
+  forwardSourceMessage = message;
+  const preview = document.querySelector("#forward-dialog-preview");
+  if (preview) preview.textContent = messageSnippetText(message);
+  const filter = document.querySelector("#forward-chat-filter");
+  if (filter) filter.value = "";
+  const status = document.querySelector("#forward-dialog-status");
+  if (status) status.textContent = "";
+  renderForwardChatList();
+  dialog.showModal();
+  document.querySelector("#forward-dialog-title")?.focus();
+}
+
+function renderForwardChatList() {
+  const list = document.querySelector("#forward-chat-list");
+  if (!list) return;
+  list.replaceChildren();
+  const q = (document.querySelector("#forward-chat-filter")?.value ?? "").trim().toLocaleLowerCase();
+  const visibleChats = chats.filter((chat) => {
+    const title = chat.kind === "group" ? chat.title : `${chat.peer?.displayName ?? ""} @${chat.peer?.username ?? ""}`;
+    return !q || title.toLocaleLowerCase().includes(q);
+  });
+  if (!visibleChats.length) {
+    const li = document.createElement("li");
+    li.textContent = translateText("Чаты не найдены.");
+    list.append(li);
+    return;
+  }
+  for (const chat of visibleChats) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "user-result";
+    const title = chat.kind === "group" ? chat.title : chat.peer.displayName;
+    const sub = chat.kind === "group"
+      ? `${chat.members?.length ?? 0} ${translateText("участников")}`
+      : `@${chat.peer.username}`;
+    const strong = document.createElement("strong");
+    strong.dataset.userContent = "true";
+    strong.textContent = title;
+    const meta = document.createElement("span");
+    meta.className = "chat-username";
+    meta.dataset.userContent = "true";
+    meta.textContent = sub;
+    btn.append(strong, meta);
+    btn.setAttribute("aria-label", `${translateText("Переслать в чат")} ${title}`);
+    btn.addEventListener("click", () => void executeForwardToChat(chat));
+    li.append(btn);
+    list.append(li);
+  }
+}
+
+async function executeForwardToChat(targetChat) {
+  if (!forwardSourceMessage || !account) return;
+  const source = forwardSourceMessage;
+  const status = document.querySelector("#forward-dialog-status");
+  if (status) status.textContent = translateText("Пересылаем сообщение…");
+  try {
+    const result = await api(`/api/v1/chats/${targetChat.conversationId}/messages/forward`, {
+      method: "POST",
+      body: JSON.stringify({
+        sourceConversationId: source.conversationId || selectedChat?.conversationId,
+        sourceMessageId: source.messageId,
+        clientMessageId: randomId()
+      })
+    });
+    forwardSourceMessage = null;
+    document.querySelector("#forward-dialog")?.close();
+    if (selectedChat?.conversationId === targetChat.conversationId && result.message) {
+      upsertServerMessage(result.message);
+    }
+    const targetName = targetChat.kind === "group" ? targetChat.title : targetChat.peer.displayName;
+    announce(`Сообщение переслано в чат ${targetName}.`);
+    await loadChats({ quiet: true });
+  } catch (error) {
+    if (status) status.textContent = `${translateText("Не удалось переслать сообщение")}: ${error.message}`;
+  }
+}
+
+async function openFavoritesDialog() {
+  const dialog = document.querySelector("#favorites-dialog");
+  if (!dialog || !account) return;
+  dialog.showModal();
+  document.querySelector("#favorites-dialog-title")?.focus();
+  await loadFavoritesIntoDialog();
+}
+
+async function loadFavoritesIntoDialog() {
+  const list = document.querySelector("#favorites-list");
+  const status = document.querySelector("#favorites-dialog-status");
+  if (!list || !status) return;
+  status.textContent = translateText("Загружаю избранное…");
+  list.replaceChildren();
+  try {
+    const result = await api("/api/v1/favorites");
+    favoritesItems = result.favorites ?? [];
+    renderFavoritesList();
+  } catch (error) {
+    status.textContent = `${translateText("Не удалось загрузить избранное")}: ${error.message}`;
+  }
+}
+
+function renderFavoritesList() {
+  const list = document.querySelector("#favorites-list");
+  const status = document.querySelector("#favorites-dialog-status");
+  if (!list || !status) return;
+  list.replaceChildren();
+  if (!favoritesItems.length) {
+    status.textContent = translateText("В избранном пока нет сообщений. Откройте меню действий любого сообщения и выберите «Добавить в избранное».");
+    return;
+  }
+  status.textContent = `${translateText("Сохранено сообщений")}: ${favoritesItems.length}`;
+  for (const entry of favoritesItems) {
+    const li = document.createElement("li");
+    li.className = "favorite-item";
+
+    const head = document.createElement("div");
+    head.className = "favorite-item-head";
+    const title = document.createElement("strong");
+    title.dataset.userContent = "true";
+    const chatLabel = entry.chatTitle || translateText("Чат");
+    const senderLabel = entry.senderDisplayName || translateText("Участник");
+    title.textContent = chatLabel === senderLabel ? chatLabel : `${chatLabel} · ${senderLabel}`;
+    const time = document.createElement("time");
+    time.textContent = `${dayLabel(entry.createdAt)}, ${messageTime(entry.createdAt)}`;
+    head.append(title, time);
+
+    const body = document.createElement("p");
+    body.className = "favorite-item-text";
+    body.dataset.userContent = "true";
+    body.textContent = entry.text?.trim()
+      ? entry.text
+      : entry.kind === "voice"
+        ? translateText("Голосовое сообщение")
+        : entry.fileName
+          ? `${translateText("Файл")}: ${entry.fileName}`
+          : translateText("Сообщение");
+
+    const actions = document.createElement("div");
+    actions.className = "favorite-item-actions";
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.textContent = translateText("Открыть в чате");
+    openBtn.addEventListener("click", () => void openFavoriteInChat(entry));
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "danger-button";
+    removeBtn.textContent = translateText("Убрать из избранного");
+    removeBtn.addEventListener("click", () => void removeFavoriteEntry(entry));
+
+    actions.append(openBtn, removeBtn);
+    li.append(head, body, actions);
+    list.append(li);
+  }
+}
+
+async function openFavoriteInChat(entry) {
+  document.querySelector("#favorites-dialog")?.close();
+  let chat = chats.find((candidate) => candidate.conversationId === entry.conversationId);
+  if (!chat) {
+    await loadChats({ quiet: true });
+    chat = chats.find((candidate) => candidate.conversationId === entry.conversationId);
+  }
+  if (!chat) {
+    announce("Чат больше недоступен.");
+    return;
+  }
+  if (selectedChat?.conversationId !== chat.conversationId) {
+    await selectChat(chat, { focusHeading: false });
+  }
+  jumpToMessageById(entry.messageId);
+}
+
+async function removeFavoriteEntry(entry) {
+  try {
+    await api(`/api/v1/chats/${entry.conversationId}/messages/${entry.messageId}/favorite`, {
+      method: "DELETE"
+    });
+    favoritesItems = favoritesItems.filter((item) => item.messageId !== entry.messageId);
+    renderFavoritesList();
+    if (selectedChat?.conversationId === entry.conversationId) {
+      const local = messages.find((candidate) => candidate.messageId === entry.messageId);
+      if (local) {
+        local.isFavorite = false;
+        renderMessages({ preserveVoicePlayback: true });
+      }
+    }
+    announce("Сообщение убрано из избранного.");
+  } catch (error) {
+    announce(`Не удалось обновить избранное: ${error.message}`);
+  }
+}
+
+function jumpToMessageById(messageId) {
+  if (!messageId) return;
+  const targetEl = [...elements.messageList.querySelectorAll(".message[data-message-id]")]
+    .find((node) => node.dataset.messageId === messageId);
+  if (!targetEl) {
+    announce("Исходное сообщение недоступно.");
+    return;
+  }
+  targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  targetEl.classList.remove("message-highlight");
+  void targetEl.offsetWidth;
+  targetEl.classList.add("message-highlight");
+  clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(() => targetEl.classList.remove("message-highlight"), 1800);
+  targetEl.tabIndex = -1;
+  targetEl.focus({ preventScroll: true });
+  announce("Переход к исходному сообщению.");
+}
+
+function handleRealtimeMessageDeleted(payload) {
+  applyMessageRemovedLocally(payload.conversationId, payload.messageId);
+  void loadChats({ quiet: true });
+}
+
+function handleRealtimeReactionsUpdated(payload) {
+  if (selectedChat?.conversationId !== payload.conversationId) return;
+  const local = messages.find((candidate) => candidate.messageId === payload.messageId);
+  if (!local || !Array.isArray(payload.reactions)) return;
+  local.reactions = payload.reactions.map((entry) => ({
+    emoji: entry.emoji,
+    count: entry.count,
+    reactedByMe: Array.isArray(entry.userIds)
+      ? entry.userIds.includes(account?.userId)
+      : Boolean(entry.reactedByMe)
+  }));
+  renderMessages({ preserveVoicePlayback: true });
+  if (actionMessage?.messageId === payload.messageId && document.querySelector("#message-actions-dialog")?.open) {
+    renderDialogReactionButtons(local);
+  }
+}
+
+function handleRealtimeFavoritesUpdated(payload) {
+  if (selectedChat?.conversationId === payload.conversationId) {
+    const local = messages.find((candidate) => candidate.messageId === payload.messageId);
+    if (local) {
+      local.isFavorite = Boolean(payload.isFavorite);
+      renderMessages({ preserveVoicePlayback: true });
+    }
+  }
+  if (document.querySelector("#favorites-dialog")?.open) {
+    void loadFavoritesIntoDialog();
+  }
 }

@@ -51,6 +51,34 @@ export interface FileAttachment {
   sizeBytes: number;
 }
 
+export interface MessageReplyPreview {
+  messageId: string;
+  senderUserId: string;
+  senderDisplayName: string;
+  kind: "text" | "voice" | "file";
+  text: string;
+  deleted: boolean;
+}
+
+export interface MessageForwardInfo {
+  fromUserId: string;
+  fromDisplayName: string;
+}
+
+export interface MessageReactionSummary {
+  emoji: string;
+  count: number;
+  userIds: string[];
+  reactedByMe: boolean;
+}
+
+export interface FavoriteMessageEntry {
+  messageId: string;
+  conversationId: string;
+  savedAt: number;
+  message: StoredMessage;
+}
+
 export interface StoredMessage {
   messageId: string;
   conversationId: string;
@@ -60,10 +88,15 @@ export interface StoredMessage {
   text: string;
   voice: VoiceAttachment | null;
   file?: FileAttachment | null;
+  replyToMessageId?: string | null;
+  replyTo?: MessageReplyPreview | null;
+  forwardedFrom?: MessageForwardInfo | null;
+  reactions?: MessageReactionSummary[];
+  isFavorite?: boolean;
   createdAt: number;
   deliveredAt: number | null;
   readAt: number | null;
-  readBy?: Array<{userId:string;readAt:number}>;
+  readBy?: Array<{ userId: string; readAt: number }>;
   eligibleRecipientCount?: number;
 }
 

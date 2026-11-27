@@ -1,10 +1,23 @@
 import { ApiError, badRequest, conflict, notFound } from "../../../core/errors";
 import type { MessageNotificationPublisher } from "../../notifications/application/push-notification-service";
-import type { Conversation, DirectConversation, FileAttachment, GroupConversation, MessagingActor, StoredMessage, VoiceAttachment } from "../domain/models";
+import type {
+  Conversation,
+  DirectConversation,
+  FileAttachment,
+  GroupConversation,
+  MessageReplyPreview,
+  MessagingActor,
+  StoredMessage,
+  VoiceAttachment
+} from "../domain/models";
 import {
   validateConversationId,
+  validateDeleteScope,
   validateDeliveryReceiptInput,
+  validateForwardInput,
+  validateMessageId,
   validateMessageInput,
+  validateReactionEmoji,
   validateUserId
 } from "../domain/validation";
 import type { MessagingRepository } from "../ports/messaging-repository";
@@ -115,20 +128,21 @@ export class MessagingService {
 
   async listMessages(actor: MessagingActor, rawConversationId: string) {
     const conversationId = validateConversationId(rawConversationId);
-    const conversation=await this.requireConversation(conversationId, actor.userId);
-    const messages=await this.repository.listMessages(conversationId, 200, actor.userId);
-    if ('title' in conversation) {
-      const ownMessages=messages.filter(m=>m.senderUserId===actor.userId);
-      const readers=await this.repository.listMessageReaders(conversationId,ownMessages.map(m=>m.messageId));
-      const members=await this.repository.listGroupMembers(conversationId);
-      for(const message of ownMessages){
-        message.readBy=readers.get(message.messageId)??[];
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const messages = await this.repository.listMessages(conversationId, 200, actor.userId);
+    if ("title" in conversation) {
+      const ownMessages = messages.filter((m) => m.senderUserId === actor.userId);
+      const readers = await this.repository.listMessageReaders(conversationId, ownMessages.map((m) => m.messageId));
+      const members = await this.repository.listGroupMembers(conversationId);
+      for (const message of ownMessages) {
+        message.readBy = readers.get(message.messageId) ?? [];
         // Late joiners cannot read earlier messages when history was restricted.
-        message.eligibleRecipientCount=members.filter(member=>
-          member.userId!==actor.userId && (conversation.historyMode==='all'||member.joinedAt<=message.createdAt)
+        message.eligibleRecipientCount = members.filter((member) =>
+          member.userId !== actor.userId && (conversation.historyMode === "all" || member.joinedAt <= message.createdAt)
         ).length;
       }
     }
+    await this.enrichMessages(conversationId, messages, actor.userId);
     return messages;
   }
 
@@ -140,6 +154,14 @@ export class MessagingService {
     const conversationId = validateConversationId(rawConversationId);
     const conversation = await this.requireConversation(conversationId, actor.userId);
     const input = validateMessageInput(body);
+    let replyTo: MessageReplyPreview | null = null;
+    if (input.replyToMessageId) {
+      const target = await this.repository.findMessageForUser(conversationId, input.replyToMessageId, actor.userId);
+      if (!target) {
+        notFound("reply_target_not_found", "Сообщение для ответа не найдено в этом чате.");
+      }
+      replyTo = await this.buildReplyPreview(target);
+    }
     const message: StoredMessage = {
       messageId: crypto.randomUUID(),
       conversationId,
@@ -148,11 +170,211 @@ export class MessagingService {
       kind: "text",
       text: input.text,
       voice: null,
+      replyToMessageId: input.replyToMessageId,
+      replyTo,
+      forwardedFrom: null,
+      reactions: [],
+      isFavorite: false,
       createdAt: Date.now(),
       deliveredAt: null,
       readAt: null
     };
     return this.persistAndPublish(actor, conversation, message);
+  }
+
+  async forwardMessage(
+    actor: MessagingActor,
+    rawTargetConversationId: string,
+    body: Record<string, unknown>
+  ) {
+    const targetConversationId = validateConversationId(rawTargetConversationId);
+    const targetConversation = await this.requireConversation(targetConversationId, actor.userId);
+    const input = validateForwardInput(body);
+    await this.requireConversation(input.sourceConversationId, actor.userId);
+    const source = await this.repository.findMessageForUser(
+      input.sourceConversationId,
+      input.sourceMessageId,
+      actor.userId
+    );
+    if (!source) {
+      notFound("message_not_found", "Сообщение для пересылки не найдено.");
+    }
+
+    const fromUserId = source.forwardedFrom?.fromUserId || source.senderUserId;
+    const fromDisplayName = source.forwardedFrom?.fromDisplayName ||
+      (await this.users.findUser(source.senderUserId))?.displayName ||
+      "Удалённый аккаунт";
+
+    const forwardedText = formatForwardedMessageText(source);
+    const message: StoredMessage = {
+      messageId: crypto.randomUUID(),
+      conversationId: targetConversationId,
+      senderUserId: actor.userId,
+      clientMessageId: input.clientMessageId,
+      kind: "text",
+      text: forwardedText,
+      voice: null,
+      file: null,
+      replyToMessageId: null,
+      replyTo: null,
+      forwardedFrom: { fromUserId, fromDisplayName },
+      reactions: [],
+      isFavorite: false,
+      createdAt: Date.now(),
+      deliveredAt: null,
+      readAt: null
+    };
+    return this.persistAndPublish(actor, targetConversation, message);
+  }
+
+  async deleteMessage(
+    actor: MessagingActor,
+    rawConversationId: string,
+    rawMessageId: string,
+    rawScope: unknown
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    const messageId = validateMessageId(rawMessageId);
+    const scope = validateDeleteScope(rawScope);
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const message = await this.repository.findMessageForUser(conversationId, messageId, actor.userId);
+    if (!message) notFound("message_not_found", "Сообщение не найдено.");
+
+    if (scope === "me") {
+      await this.repository.hideMessageForUser(conversationId, messageId, actor.userId, Date.now());
+      await this.realtime.publishToUsers([actor.userId], {
+        type: "message.deleted",
+        conversationId,
+        messageId,
+        scope: "me"
+      });
+      return { deletedMessageId: messageId, scope: "me" as const };
+    }
+
+    const canDeleteForEveryone =
+      message.senderUserId === actor.userId ||
+      ("title" in conversation && conversation.ownerUserId === actor.userId);
+    if (!canDeleteForEveryone) {
+      throw new ApiError(403, "delete_forbidden", "Удалить чужое сообщение у всех нельзя.");
+    }
+
+    await this.repository.deleteMessageForEveryone(conversationId, messageId);
+    const recipients = await this.repository.listConversationRecipients(conversation);
+    await this.realtime.publishToUsers(recipients, {
+      type: "message.deleted",
+      conversationId,
+      messageId,
+      scope: "everyone"
+    });
+    return { deletedMessageId: messageId, scope: "everyone" as const };
+  }
+
+  async toggleReaction(
+    actor: MessagingActor,
+    rawConversationId: string,
+    rawMessageId: string,
+    body: Record<string, unknown>
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    const messageId = validateMessageId(rawMessageId);
+    const emoji = validateReactionEmoji(body.emoji);
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const message = await this.repository.findMessageForUser(conversationId, messageId, actor.userId);
+    if (!message) notFound("message_not_found", "Сообщение не найдено.");
+
+    const result = await this.repository.toggleReaction(messageId, actor.userId, emoji, Date.now());
+    const recipients = await this.repository.listConversationRecipients(conversation);
+    await this.realtime.publishToUsers(recipients, {
+      type: "message.reactions.updated",
+      conversationId,
+      messageId,
+      reactions: result.reactions.map(({ emoji: itemEmoji, count, userIds }) => ({
+        emoji: itemEmoji,
+        count,
+        userIds
+      }))
+    });
+    return { messageId, emoji, added: result.added, reactions: result.reactions };
+  }
+
+  async addFavorite(actor: MessagingActor, rawConversationId: string, rawMessageId: string) {
+    const conversationId = validateConversationId(rawConversationId);
+    const messageId = validateMessageId(rawMessageId);
+    await this.requireConversation(conversationId, actor.userId);
+    const message = await this.repository.findMessageForUser(conversationId, messageId, actor.userId);
+    if (!message) notFound("message_not_found", "Сообщение не найдено.");
+
+    await this.repository.addFavorite(actor.userId, conversationId, messageId, Date.now());
+    await this.realtime.publishToUsers([actor.userId], {
+      type: "favorites.updated",
+      conversationId,
+      messageId,
+      isFavorite: true
+    });
+    return { messageId, isFavorite: true };
+  }
+
+  async removeFavorite(actor: MessagingActor, rawConversationId: string, rawMessageId: string) {
+    const conversationId = validateConversationId(rawConversationId);
+    const messageId = validateMessageId(rawMessageId);
+    await this.requireConversation(conversationId, actor.userId);
+    await this.repository.removeFavorite(actor.userId, messageId);
+    await this.realtime.publishToUsers([actor.userId], {
+      type: "favorites.updated",
+      conversationId,
+      messageId,
+      isFavorite: false
+    });
+    return { messageId, isFavorite: false };
+  }
+
+  async listFavorites(actor: MessagingActor) {
+    const entries = await this.repository.listFavorites(actor.userId, 200);
+    const conversationCache = new Map<string, Conversation | null>();
+    const userCache = new Map<string, DirectoryUser>();
+    const resolveUser = async (userId: string): Promise<DirectoryUser> => {
+      const cached = userCache.get(userId);
+      if (cached) return cached;
+      const found = (await this.users.findUser(userId)) ?? deletedUser(userId);
+      userCache.set(userId, found);
+      return found;
+    };
+
+    const items = [];
+    for (const entry of entries) {
+      let conversation = conversationCache.get(entry.conversationId);
+      if (conversation === undefined) {
+        conversation = await this.repository.findAnyConversationForUser(entry.conversationId, actor.userId);
+        conversationCache.set(entry.conversationId, conversation);
+      }
+      if (!conversation) continue;
+      const sender = await resolveUser(entry.message.senderUserId);
+      let chatTitle = "Чат";
+      let chatKind: "direct" | "group" = "direct";
+      if ("title" in conversation) {
+        chatKind = "group";
+        chatTitle = conversation.title;
+      } else {
+        const peer = await resolveUser(peerUserId(conversation, actor.userId));
+        chatTitle = peer.displayName;
+      }
+      items.push({
+        messageId: entry.messageId,
+        conversationId: entry.conversationId,
+        savedAt: entry.savedAt,
+        chatKind,
+        chatTitle,
+        senderUserId: sender.userId,
+        senderDisplayName: sender.displayName,
+        senderUsername: sender.username,
+        kind: entry.message.kind,
+        text: entry.message.text,
+        fileName: entry.message.file?.fileName ?? null,
+        voiceDurationMs: entry.message.voice?.durationMs ?? null,
+        createdAt: entry.message.createdAt
+      });
+    }
+    return items;
   }
 
   async sendVoiceMessage(
@@ -409,27 +631,128 @@ export class MessagingService {
     return conversation;
   }
 
+  private async enrichMessages(
+    conversationId: string,
+    messages: StoredMessage[],
+    viewerUserId: string
+  ): Promise<void> {
+    if (!messages.length) return;
+    const messageIds = messages.map((message) => message.messageId);
+    const replyIds = messages
+      .map((message) => message.replyToMessageId)
+      .filter((id): id is string => Boolean(id));
+
+    const [reactionsMap, favoriteIds, replyTargets] = await Promise.all([
+      this.repository.listReactionsForMessages(messageIds, viewerUserId),
+      this.repository.listFavoriteIds(viewerUserId, messageIds),
+      replyIds.length
+        ? this.repository.listMessagesByIds(conversationId, replyIds, viewerUserId)
+        : Promise.resolve(new Map<string, StoredMessage>())
+    ]);
+
+    const userCache = new Map<string, DirectoryUser>();
+    const resolveName = async (userId: string) => {
+      const cached = userCache.get(userId);
+      if (cached) return cached.displayName;
+      const found = (await this.users.findUser(userId)) ?? deletedUser(userId);
+      userCache.set(userId, found);
+      return found.displayName;
+    };
+
+    for (const message of messages) {
+      message.reactions = reactionsMap.get(message.messageId) ?? [];
+      message.isFavorite = favoriteIds.has(message.messageId);
+      if (message.replyToMessageId) {
+        const target = replyTargets.get(message.replyToMessageId);
+        if (target) {
+          message.replyTo = {
+            messageId: target.messageId,
+            senderUserId: target.senderUserId,
+            senderDisplayName: await resolveName(target.senderUserId),
+            kind: target.kind,
+            text: replyPreviewText(target),
+            deleted: false
+          };
+        } else {
+          message.replyTo = {
+            messageId: message.replyToMessageId,
+            senderUserId: "",
+            senderDisplayName: "",
+            kind: "text",
+            text: "Сообщение удалено",
+            deleted: true
+          };
+        }
+      }
+    }
+  }
+
+  private async buildReplyPreview(target: StoredMessage): Promise<MessageReplyPreview> {
+    const sender = (await this.users.findUser(target.senderUserId)) ?? deletedUser(target.senderUserId);
+    return {
+      messageId: target.messageId,
+      senderUserId: target.senderUserId,
+      senderDisplayName: sender.displayName,
+      kind: target.kind,
+      text: replyPreviewText(target),
+      deleted: false
+    };
+  }
+
   private async chatSummary(userId: string, conversation: Conversation, knownPeer?: DirectoryUser) {
-    if ('title' in conversation) {
-      const members=await this.repository.listGroupMembers(conversation.conversationId);
-      const list=await this.repository.listMessages(conversation.conversationId,1,userId);
-      return {kind:'group',conversationId:conversation.conversationId,title:conversation.title,avatarIcon:conversation.avatarIcon,
-        historyMode:conversation.historyMode,ownerUserId:conversation.ownerUserId,
-        members:await Promise.all(members.map(async member=>({... (await this.users.findUser(member.userId)??deletedUser(member.userId)),userId:member.userId}))),
-        createdAt:conversation.createdAt,lastMessageAt:conversation.lastMessageAt,lastMessage:list.at(-1)??null};
+    if ("title" in conversation) {
+      const members = await this.repository.listGroupMembers(conversation.conversationId);
+      const list = await this.repository.listMessages(conversation.conversationId, 1, userId);
+      return {
+        kind: "group",
+        conversationId: conversation.conversationId,
+        title: conversation.title,
+        avatarIcon: conversation.avatarIcon,
+        historyMode: conversation.historyMode,
+        ownerUserId: conversation.ownerUserId,
+        members: await Promise.all(members.map(async (member) => ({
+          ...(await this.users.findUser(member.userId) ?? deletedUser(member.userId)),
+          userId: member.userId
+        }))),
+        createdAt: conversation.createdAt,
+        lastMessageAt: conversation.lastMessageAt,
+        lastMessage: list.at(-1) ?? null
+      };
     }
     const peerUser = peerUserId(conversation, userId);
     const peer = knownPeer ?? await this.users.findUser(peerUser) ?? deletedUser(peerUser);
-    const lastMessage = await this.repository.findLatestMessage(conversation.conversationId);
+    const lastMessage = await this.repository.findLatestMessage(conversation.conversationId, userId);
     return {
-      kind:'direct',
+      kind: "direct",
       conversationId: conversation.conversationId,
       peer,
       createdAt: conversation.createdAt,
-      lastMessageAt: conversation.lastMessageAt,
+      lastMessageAt: lastMessage?.createdAt ?? conversation.lastMessageAt,
       lastMessage
     };
   }
+}
+
+function replyPreviewText(message: StoredMessage): string {
+  if (message.kind === "voice") return "Голосовое сообщение";
+  if (message.kind === "file" && message.file) {
+    return messageNotificationText(message).slice(0, 140);
+  }
+  const compact = message.text.replace(/\s+/g, " ").trim();
+  return compact.length > 140 ? `${compact.slice(0, 137)}…` : compact;
+}
+
+function formatForwardedMessageText(message: StoredMessage): string {
+  if (message.kind === "voice") {
+    const seconds = Math.max(1, Math.round((message.voice?.durationMs ?? 0) / 1000));
+    const mins = Math.floor(seconds / 60);
+    const secs = String(seconds % 60).padStart(2, "0");
+    return `Голосовое сообщение (${mins}:${secs})`;
+  }
+  if (message.kind === "file" && message.file) {
+    return messageNotificationText(message);
+  }
+  return message.text;
 }
 
 function messageNotificationText(message: StoredMessage): string {

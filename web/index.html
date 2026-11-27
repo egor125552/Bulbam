@@ -348,6 +348,7 @@
           <div class="sidebar-heading">
             <h2 id="chats-title" tabindex="-1">Чаты</h2>
             <div class="sidebar-actions">
+              <button id="favorites-open" class="icon-button" data-icon="star" type="button" aria-label="Избранное">Избранное</button>
               <button id="new-chat-button" class="icon-button" data-icon="compose" type="button" aria-label="Новый чат" aria-expanded="false" aria-controls="user-search-panel">Новый чат</button>
               <button id="settings-button" class="icon-button" data-icon="settings" type="button" aria-label="Настройки">Настройки</button>
             </div>
@@ -430,6 +431,13 @@
           <button id="jump-to-latest" class="jump-to-latest" type="button" hidden>К последним сообщениям</button>
 
           <form id="message-form" class="composer" hidden>
+            <div id="reply-preview-bar" class="composer-reply-bar" role="region" aria-label="Ответ на сообщение" hidden>
+              <div class="composer-reply-copy">
+                <strong id="reply-preview-author" data-user-content="true"></strong>
+                <span id="reply-preview-text" data-user-content="true"></span>
+              </div>
+              <button id="reply-preview-cancel" class="icon-button composer-reply-cancel" data-icon="close" type="button" aria-label="Отменить ответ">Отменить ответ</button>
+            </div>
             <div id="voice-draft-panel" class="voice-draft-panel" hidden>
               <div>
                 <strong>Сохранённое голосовое</strong>
@@ -555,6 +563,48 @@
         <div class="media-lightbox-stage">
           <img id="media-lightbox-image" alt="">
         </div>
+      </dialog>
+      <dialog id="message-actions-dialog" class="message-actions-dialog" aria-labelledby="message-actions-title">
+        <div class="message-actions-header">
+          <h2 id="message-actions-title" tabindex="-1">Действия с сообщением</h2>
+        </div>
+        <p id="message-actions-preview" class="message-actions-preview hint" data-user-content="true"></p>
+        <div id="message-actions-reactions" class="reaction-picker-row" role="group" aria-label="Реакции"></div>
+        <div id="message-actions-main" class="message-actions-list">
+          <button id="msg-action-reply" type="button">Ответить</button>
+          <button id="msg-action-copy" type="button">Скопировать</button>
+          <button id="msg-action-forward" type="button">Переслать</button>
+          <button id="msg-action-favorite" type="button">Добавить в избранное</button>
+          <button id="msg-action-delete" type="button" class="danger-button" aria-expanded="false" aria-controls="msg-action-delete-choices">Удалить</button>
+        </div>
+        <div id="msg-action-delete-choices" class="message-delete-choices" role="group" aria-label="Способ удаления сообщения" hidden>
+          <p class="hint">Выберите, как удалить сообщение:</p>
+          <button id="msg-action-delete-me" type="button" class="danger-button">Удалить у меня</button>
+          <button id="msg-action-delete-everyone" type="button" class="danger-button" hidden>Удалить у всех</button>
+          <button id="msg-action-delete-cancel" type="button">Отмена</button>
+        </div>
+        <div class="message-actions-footer">
+          <button id="msg-action-close" type="button">Закрыть меню</button>
+        </div>
+      </dialog>
+      <dialog id="forward-dialog" class="group-dialog forward-dialog" aria-labelledby="forward-dialog-title">
+        <h2 id="forward-dialog-title" tabindex="-1">Переслать сообщение</h2>
+        <p id="forward-dialog-preview" class="message-actions-preview hint" data-user-content="true"></p>
+        <label for="forward-chat-filter">Выберите чат</label>
+        <input id="forward-chat-filter" type="search" autocomplete="off" placeholder="Поиск по чатам">
+        <ul id="forward-chat-list" class="user-results forward-chat-list" aria-label="Чаты для пересылки"></ul>
+        <p id="forward-dialog-status" class="hint" role="status" aria-live="polite"></p>
+        <div class="group-dialog-actions">
+          <button id="forward-dialog-cancel" type="button">Отмена</button>
+        </div>
+      </dialog>
+      <dialog id="favorites-dialog" class="group-dialog favorites-dialog" aria-labelledby="favorites-dialog-title">
+        <div class="message-actions-header">
+          <h2 id="favorites-dialog-title" tabindex="-1">Избранное</h2>
+          <button id="favorites-dialog-close" class="icon-button" data-icon="close" type="button" aria-label="Закрыть избранное">Закрыть</button>
+        </div>
+        <p id="favorites-dialog-status" class="hint" role="status" aria-live="polite"></p>
+        <ul id="favorites-list" class="favorites-list" aria-label="Избранные сообщения"></ul>
       </dialog>
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <div class="settings-header">

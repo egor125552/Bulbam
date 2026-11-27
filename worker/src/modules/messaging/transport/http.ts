@@ -10,6 +10,13 @@ export async function handleMessagingHttp(
   service: MessagingService,
   authenticate: AuthenticateMessagingRequest
 ): Promise<Response | null> {
+  if (url.pathname === "/api/v1/favorites") {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    const actor = await authenticate(request);
+    const favorites = await service.listFavorites(actor);
+    return json({ ok: true, favorites });
+  }
+
   if (url.pathname === "/api/v1/chats") {
     if (request.method !== "GET") return methodNotAllowed(["GET"]);
     const actor = await authenticate(request);
@@ -26,26 +33,26 @@ export async function handleMessagingHttp(
   }
 
   if (url.pathname === "/api/v1/chats/groups") {
-    if(request.method!=="POST")return methodNotAllowed(["POST"]);
-    const actor=await authenticate(request);
-    const chat=await service.createGroup(actor,await readJsonObject(request));
-    return json({ok:true,chat},{status:201});
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const actor = await authenticate(request);
+    const chat = await service.createGroup(actor, await readJsonObject(request));
+    return json({ ok: true, chat }, { status: 201 });
   }
 
-  const groupMembersMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/members$/i);
-  if(groupMembersMatch){
-    const actor=await authenticate(request);
-    if(request.method==='GET')return json({ok:true,...await service.groupMembers(actor,groupMembersMatch[1])});
-    if(request.method==='POST')return json({ok:true,...await service.addGroupMembers(actor,groupMembersMatch[1],await readJsonObject(request))});
-    return methodNotAllowed(['GET','POST']);
+  const groupMembersMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/members$/i);
+  if (groupMembersMatch) {
+    const actor = await authenticate(request);
+    if (request.method === "GET") return json({ ok: true, ...await service.groupMembers(actor, groupMembersMatch[1]) });
+    if (request.method === "POST") return json({ ok: true, ...await service.addGroupMembers(actor, groupMembersMatch[1], await readJsonObject(request)) });
+    return methodNotAllowed(["GET", "POST"]);
   }
 
-  const groupMemberMatch=url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/members\/([0-9a-f-]{36})$/i);
-  if(groupMemberMatch){
-    if(request.method!=='DELETE')return methodNotAllowed(['DELETE']);
-    const actor=await authenticate(request);
-    const result=await service.removeGroupMember(actor,groupMemberMatch[1],groupMemberMatch[2]);
-    return json({ok:true,...result});
+  const groupMemberMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/members\/([0-9a-f-]{36})$/i);
+  if (groupMemberMatch) {
+    if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);
+    const actor = await authenticate(request);
+    const result = await service.removeGroupMember(actor, groupMemberMatch[1], groupMemberMatch[2]);
+    return json({ ok: true, ...result });
   }
 
   const deliveredMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/receipts\/delivered$/i);
@@ -61,6 +68,57 @@ export async function handleMessagingHttp(
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const actor = await authenticate(request);
     const result = await service.markRead(actor, readMatch[1], await readJsonObject(request));
+    return json({ ok: true, ...result });
+  }
+
+  const forwardMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages\/forward$/i);
+  if (forwardMatch) {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const actor = await authenticate(request);
+    const result = await service.forwardMessage(actor, forwardMatch[1], await readJsonObject(request));
+    return json(
+      { ok: true, ...result },
+      { status: result.duplicate ? 200 : 201 }
+    );
+  }
+
+  const reactionMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})\/reactions$/i);
+  if (reactionMatch) {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const actor = await authenticate(request);
+    const result = await service.toggleReaction(actor, reactionMatch[1], reactionMatch[2], await readJsonObject(request));
+    return json({ ok: true, ...result });
+  }
+
+  const favoriteMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})\/favorite$/i);
+  if (favoriteMatch) {
+    const actor = await authenticate(request);
+    if (request.method === "POST") {
+      const result = await service.addFavorite(actor, favoriteMatch[1], favoriteMatch[2]);
+      return json({ ok: true, ...result });
+    }
+    if (request.method === "DELETE") {
+      const result = await service.removeFavorite(actor, favoriteMatch[1], favoriteMatch[2]);
+      return json({ ok: true, ...result });
+    }
+    return methodNotAllowed(["POST", "DELETE"]);
+  }
+
+  const messageDeleteMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})$/i);
+  if (messageDeleteMatch) {
+    if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);
+    const actor = await authenticate(request);
+    const queryScope = url.searchParams.get("scope");
+    let scope: unknown = queryScope;
+    if (!scope) {
+      try {
+        const body = await readJsonObject(request);
+        scope = body.scope;
+      } catch {
+        scope = null;
+      }
+    }
+    const result = await service.deleteMessage(actor, messageDeleteMatch[1], messageDeleteMatch[2], scope);
     return json({ ok: true, ...result });
   }
 
