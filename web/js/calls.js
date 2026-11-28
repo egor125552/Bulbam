@@ -113,6 +113,7 @@ let activeProfileSessionId = null;
 let firstAudioProbeTimer = null;
 let firstAudioProbeAttempts = 0;
 let profileLoggedForSessionId = null;
+let prewarmedIncoming = null;
 
 function setCallActivityFlag(active) {
   const next = Boolean(active);
@@ -772,11 +773,13 @@ async function answerCall() {
   const profileSessionId = activeProfileSessionId;
   let acquiredMic = null;
   let serverAccepted = false;
+  let answerFlowFailed = false;
   try {
     // Run microphone acquisition, TURN/ICE credential resolution, and POST /answer
-    // in parallel. On iOS/Safari, CoreAudio route switching takes 800-1900 ms;
-    // accepting on the server concurrently means the caller's pre-offer + pre-ICE
-    // are already waiting locally the instant the mic track resolves.
+    // concurrently, and do NOT block WebRTC SDP/ICE/DTLS on slow iOS CoreAudio
+    // microphone switching (which takes ~1000 ms). As soon as POST /answer returns
+    // with the caller's pre-offer + ICE candidates, start SDP answer + ICE + DTLS
+    // immediately and attach the real microphone track via replaceTrack once ready.
     logCallEvent("запрос микрофона");
     callProfiler.mark("mic_start", profileSessionId);
     const micPromise = requestMicrophone().then((stream) => {
@@ -793,26 +796,29 @@ async function answerCall() {
       serverAccepted = true;
       return response;
     };
-    const [micResult, iceResult, serverAnswer] = await Promise.allSettled([
-      micPromise,
+    const [iceResult, serverAnswer] = await Promise.allSettled([
       icePromise,
       sendAnswerRequest()
     ]);
 
     if (currentCall?.callId !== answeringCallId) {
-      if (acquiredMic) acquiredMic.getTracks().forEach((track) => track.stop());
+      answerFlowFailed = true;
+      void micPromise.then((stream) => {
+        stream.getTracks().forEach((track) => track.stop());
+      }).catch(() => {});
       return;
     }
-    if (micResult.status === "rejected") {
-      if (serverAccepted) void deliverCallTermination(endEndpoint);
-      throw micResult.reason;
-    }
     if (serverAnswer.status === "rejected") {
-      acquiredMic.getTracks().forEach((track) => track.stop());
+      answerFlowFailed = true;
+      void micPromise.then((stream) => {
+        stream.getTracks().forEach((track) => track.stop());
+      }).catch(() => {});
       throw serverAnswer.reason;
     }
 
-    localStream = micResult.value;
+    if (acquiredMic) {
+      localStream = acquiredMic;
+    }
     const resolvedIceServers = iceResult.status === "fulfilled" ? iceResult.value : null;
     logCallEvent("звонок принят");
     clearCallNotifications(answeringCallId);
@@ -820,9 +826,42 @@ async function answerCall() {
     currentCall = serverAnswer.value.call;
     recoveryPending = false;
 
+    // Attach deferred microphone track as soon as getUserMedia resolves (or cleanly
+    // abort the call if the user denies microphone permission). Serialize through
+    // signalProcessingQueue so track attachment never races setRemoteDescription/createAnswer.
+    void micPromise.then((stream) => {
+      if (answerFlowFailed || currentCall?.callId !== answeringCallId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      if (localStream !== stream) {
+        localStream = stream;
+      }
+      const attachJob = signalProcessingQueue.then(async () => {
+        if (answerFlowFailed || currentCall?.callId !== answeringCallId || !peerConnection) return;
+        await attachLocalStreamToPeerConnection(peerConnection, stream, profileSessionId);
+      });
+      signalProcessingQueue = attachJob.then(() => {}, () => {});
+    }).catch((micError) => {
+      if (answerFlowFailed || currentCall?.callId !== answeringCallId) return;
+      answerFlowFailed = true;
+      callProfiler.setMeta({ status: "failed" }, profileSessionId);
+      if (serverAccepted) void deliverCallTermination(endEndpoint);
+      answeredLocally = false;
+      cleanupPeerConnection();
+      stopLocalStream();
+      elements.callAnswerButton.hidden = false;
+      elements.callDeclineButton.hidden = false;
+      setCallStatus(`Не удалось ответить: ${friendlyMediaError(micError)}`);
+      announce(`Не удалось ответить: ${friendlyMediaError(micError)}`);
+    });
+
     let pc = null;
     try {
-      pc = await ensurePeerConnection({ iceServers: resolvedIceServers });
+      pc = await ensurePeerConnection({
+        iceServers: resolvedIceServers,
+        allowDeferredMic: !localStream
+      });
     } catch {
       if (currentCall?.callId !== answeringCallId) return;
       showConnectedControls("Ответ отправлен. Подключаю резервный аудиомаршрут…");
@@ -832,6 +871,11 @@ async function answerCall() {
     }
     if (currentCall?.callId !== answeringCallId || pc !== peerConnection) return;
 
+    // If the mic finished resolving while ensurePeerConnection was in flight, attach it now.
+    if (localStream) {
+      await attachLocalStreamToPeerConnection(pc, localStream, profileSessionId);
+    }
+
     showConnectedControls("Соединяем звонок…");
     const piggybackedSignals = Array.isArray(serverAnswer.value.signals) ? serverAnswer.value.signals : [];
     let hasPreOffer = false;
@@ -840,7 +884,7 @@ async function answerCall() {
     }
     if (piggybackedSignals.length) {
       for (const signal of piggybackedSignals) {
-        if (currentCall?.callId !== answeringCallId || recoveryPending) break;
+        if (currentCall?.callId !== answeringCallId || recoveryPending || answerFlowFailed) break;
         const processed = await enqueueSignal(signal);
         if (processed) {
           signalPollCursor = Math.max(signalPollCursor, Number(signal.sequence) || 0);
@@ -852,6 +896,7 @@ async function answerCall() {
     syncCallPollingCadence({ immediateSignals: !hasPreOffer, immediateState: false });
     announce(`Вы ответили ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
+    answerFlowFailed = true;
     if (currentCall?.callId !== answeringCallId) return;
     callProfiler.setMeta({ status: "failed" }, profileSessionId);
     answeredLocally = false;
@@ -1146,7 +1191,7 @@ async function handleCallEvent(event) {
     if (currentCall.status === "ringing" && currentCall.direction === "incoming") {
       recoveryPending = false;
       showIncoming(currentCall);
-      void prefetchIceServers();
+      void prefetchIceServers().then(() => prewarmIncomingPeerConnection(currentCall));
       startStatePolling();
       announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
     } else if (currentCall.status === "ringing" || currentCall.status === "accepted") {
@@ -1177,7 +1222,9 @@ async function handleCallEvent(event) {
       offerStarted = false;
       recoveryPending = false;
       showIncoming(currentCall);
-      void prefetchIceServers();
+      void prefetchIceServers().then(() => {
+        if (!isGroupCall(currentCall)) prewarmIncomingPeerConnection(currentCall);
+      });
       startStatePolling();
       if (isGroupCall(currentCall)) {
         announce(`Входящий групповой звонок в группе ${currentCall.groupTitle || currentCall.peer.displayName} от ${currentCall.caller?.displayName ?? "участника"}.`);
@@ -1451,29 +1498,134 @@ async function ensurePeerConnection(options = {}) {
   }
 }
 
-async function createPeerConnection({ iceServers: providedIceServers = null, refreshIce = false } = {}, epoch) {
+function disposePrewarmedIncoming() {
+  if (!prewarmedIncoming) return;
+  try { prewarmedIncoming.pc.close(); } catch {}
+  prewarmedIncoming = null;
+}
+
+function prewarmIncomingPeerConnection(call) {
+  if (!call || isGroupCall(call) || call.direction !== "incoming" || call.status !== "ringing") return;
+  if (!currentCall || currentCall.callId !== call.callId || peerConnection || peerConnectionPromise) return;
+  if (prewarmedIncoming?.callId === call.callId) return;
+  if (!lastIceServers?.length || typeof RTCPeerConnection === "undefined") return;
+  disposePrewarmedIncoming();
+  try {
+    const policy = callIcePolicy(lastIceServers, isTemporaryTurnOnly());
+    const pc = createPeerConnectionWithRoutePool(lastIceServers);
+    prewarmedIncoming = { callId: call.callId, pc, policy };
+  } catch {
+    prewarmedIncoming = null;
+  }
+}
+
+function ensureAudioTransceiverSendRecv(pc) {
+  if (!pc || typeof pc.getTransceivers !== "function") return null;
+  const audioTransceiver = pc.getTransceivers().find(
+    (item) => item?.receiver?.track?.kind === "audio" || item?.sender?.track?.kind === "audio"
+  );
+  if (audioTransceiver && audioTransceiver.direction !== "sendrecv") {
+    try {
+      audioTransceiver.direction = "sendrecv";
+    } catch {
+      // Some older implementations lock direction on closed/stopped transceivers.
+    }
+  }
+  return audioTransceiver ?? null;
+}
+
+async function attachLocalStreamToPeerConnection(pc, stream, profileSessionId = null) {
+  if (!pc || pc !== peerConnection || !stream || pc.signalingState === "closed") return false;
+  const audioTrack = stream.getAudioTracks()[0];
+  if (!audioTrack) return false;
+  audioTrack.enabled = !muted;
+
+  const transceivers = typeof pc.getTransceivers === "function" ? pc.getTransceivers() : [];
+  const audioTransceiver = transceivers.find(
+    (item) => item?.receiver?.track?.kind === "audio" || item?.sender?.track?.kind === "audio"
+  ) ?? null;
+  const existingSender = audioTransceiver?.sender
+    ?? (pc.getSenders?.() ?? []).find((candidate) => candidate.track?.kind === "audio" || !candidate.track)
+    ?? null;
+
+  if (existingSender?.track === audioTrack) return true;
+
+  let sender = existingSender;
+  if (sender && typeof sender.replaceTrack === "function") {
+    try {
+      await sender.replaceTrack(audioTrack);
+      try { sender.setStreams?.(stream); } catch {}
+      logDiagnostic("Звонки", "дорожка добавлена", "audio");
+    } catch {
+      sender = pc.addTrack(audioTrack, stream);
+      logDiagnostic("Звонки", "дорожка добавлена", "audio");
+    }
+  } else {
+    sender = pc.addTrack(audioTrack, stream);
+    logDiagnostic("Звонки", "дорожка добавлена", "audio");
+  }
+
+  if (sender) {
+    void tuneAudioSender(sender, undefined, { managedExternally: true }).catch(() => {});
+  }
+  if (profileSessionId) {
+    callProfiler.mark("mic_attached", profileSessionId);
+  }
+  // If iOS CoreAudio route switching momentarily paused remote playback while
+  // opening the microphone, immediately resume playback without user action.
+  if (elements.callRemoteAudio?.srcObject && elements.callRemoteAudio.paused) {
+    void elements.callRemoteAudio.play().catch(() => {});
+  }
+  // Safety check: if a browser failed to negotiate sendrecv before track attach,
+  // request a seamless non-rebuilding renegotiation so remote hears our voice.
+  if (audioTransceiver && audioTransceiver.currentDirection === "recvonly") {
+    try { audioTransceiver.direction = "sendrecv"; } catch {}
+    if (!recoveryPending) {
+      void recoverCallConnection({ hard: false, reason: "mic-direction-upgrade" });
+    }
+  }
+  return true;
+}
+
+async function createPeerConnection({ iceServers: providedIceServers = null, refreshIce = false, allowDeferredMic = false } = {}, epoch) {
   const profileSessionId = activeProfileSessionId;
-  if (!localStream) localStream = await requestMicrophone();
+  if (!localStream && !allowDeferredMic) localStream = await requestMicrophone();
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
   callProfiler.mark("pc_create_start", profileSessionId);
-  const pc = createPeerConnectionWithRoutePool(iceServers);
+  const desiredPolicy = callIcePolicy(iceServers, isTemporaryTurnOnly());
+  let pc = null;
+  if (
+    !refreshIce &&
+    prewarmedIncoming &&
+    prewarmedIncoming.callId === currentCall?.callId &&
+    prewarmedIncoming.policy === desiredPolicy &&
+    prewarmedIncoming.pc?.signalingState === "stable"
+  ) {
+    pc = prewarmedIncoming.pc;
+    prewarmedIncoming = null;
+  } else {
+    disposePrewarmedIncoming();
+    pc = createPeerConnectionWithRoutePool(iceServers);
+  }
   relayCandidateSeen = false;
   const discoveredCandidateTypes = new Set();
-  logCallEvent("новый WebRTC создан", `маршрут ${callIcePolicy(iceServers, isTemporaryTurnOnly())}`);
+  logCallEvent("новый WebRTC создан", `маршрут ${desiredPolicy}`);
   peerConnection = pc;
   setCallRouteAvailability(iceServers);
 
-  for (const track of localStream.getTracks()) {
-    if (epoch !== peerCreationEpoch) {
-      pc.close();
-      throw new Error("Создание устаревшего аудиосоединения отменено.");
-    }
-    const sender = pc.addTrack(track, localStream);
-    logDiagnostic('Звонки','дорожка добавлена',track.kind==='audio'?'audio':'другое');
-    if (track.kind === "audio") {
-      // Do not block SDP offer/answer creation waiting for sender encoder tuning.
-      void tuneAudioSender(sender, undefined, { managedExternally: true }).catch(() => {});
+  if (localStream) {
+    for (const track of localStream.getTracks()) {
+      if (epoch !== peerCreationEpoch) {
+        pc.close();
+        throw new Error("Создание устаревшего аудиосоединения отменено.");
+      }
+      const sender = pc.addTrack(track, localStream);
+      logDiagnostic('Звонки','дорожка добавлена',track.kind==='audio'?'audio':'другое');
+      if (track.kind === "audio") {
+        // Do not block SDP offer/answer creation waiting for sender encoder tuning.
+        void tuneAudioSender(sender, undefined, { managedExternally: true }).catch(() => {});
+      }
     }
   }
   callProfiler.mark("pc_created", profileSessionId);
@@ -2100,16 +2252,29 @@ async function processSignal(signal) {
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
       callProfiler.mark("offer_remote_set", profileSessionId);
       logCallEvent("SDP предложение", "принято");
-      await flushRemoteCandidates();
+      // Ensure bidirectional audio is negotiated even if iOS microphone capture is
+      // still initializing in parallel; replaceTrack attaches the mic seamlessly.
+      ensureAudioTransceiverSendRecv(pc);
+      if (localStream) {
+        await attachLocalStreamToPeerConnection(pc, localStream, profileSessionId);
+      }
       callProfiler.mark("answer_create_start", profileSessionId);
       const rawAnswer = await pc.createAnswer();
       const answer = await applyLocalDescriptionWithOpusTuning(pc, rawAnswer);
       callProfiler.mark("answer_local_set", profileSessionId);
       callProfiler.mark("answer_send_start", profileSessionId);
-      await sendSignal("answer", { type: answer.type, sdp: answer.sdp,
-        negotiationId: remoteNegotiationId });
+      // Do not stall SDP answer upload behind remote addIceCandidate calls:
+      // transmit SDP answer and inject queued remote ICE candidates concurrently.
+      const sendAnswerPromise = sendSignal("answer", {
+        type: answer.type,
+        sdp: answer.sdp,
+        negotiationId: remoteNegotiationId
+      });
+      const flushIcePromise = flushRemoteCandidates();
+      await sendAnswerPromise;
       callProfiler.mark("answer_sent", profileSessionId);
       logCallEvent("SDP ответ", "отправлен");
+      await flushIcePromise;
       showConnectedControls("Соединяю аудио…");
       processedSignalSequences.add(signal.sequence);
       return true;
@@ -2157,15 +2322,21 @@ async function processSignal(signal) {
 }
 
 async function flushRemoteCandidates() {
-  if (!peerConnection?.remoteDescription) return;
+  const pc = peerConnection;
+  if (!pc?.remoteDescription) return;
   const queued = remoteCandidates;
+  if (!queued.length) return;
   remoteCandidates = [];
   const expected = currentCall?.direction === "outgoing" ? localNegotiationId : remoteNegotiationId;
-  for (const candidate of queued) {
-    if (candidate.negotiationId && expected && candidate.negotiationId !== expected) continue;
-    try { await peerConnection.addIceCandidate(candidate); }
-    catch (error) { logCallEvent("ICE ошибка", String(error?.name || "candidate")); }
-  }
+  const relevant = queued.filter((candidate) => !candidate.negotiationId || !expected || candidate.negotiationId === expected);
+  if (!relevant.length) return;
+  await Promise.allSettled(
+    relevant.map((candidate) =>
+      pc.addIceCandidate(candidate).catch((error) => {
+        if (peerConnection === pc) logCallEvent("ICE ошибка", String(error?.name || "candidate"));
+      })
+    )
+  );
 }
 
 function syncCallPollingCadence({ immediateSignals = false, immediateState = false } = {}) {
@@ -3290,6 +3461,7 @@ function cleanupMedia() {
 
 function cleanupPeerConnection() {
   peerCreationEpoch += 1;
+  disposePrewarmedIncoming();
   stopFirstAudioFrameProbe();
   iceBatcher.clear();
   jitterController.reset();

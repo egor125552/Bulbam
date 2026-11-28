@@ -10,6 +10,7 @@ const STAGE_LABELS = {
   answer_clicked: "Нажатие «Ответить»",
   mic_start: "Запрос микрофона",
   mic_ready: "Микрофон готов",
+  mic_attached: "Микрофон подключён к звонку",
   ice_fetch_start: "Запрос TURN/ICE конфига",
   ice_fetch_done: "TURN/ICE конфиг получен",
   call_create_start: "HTTP создание звонка",
@@ -237,8 +238,19 @@ export function createCallProfiler({ now = () => (typeof performance !== "undefi
       ["firstAudioAfterConnectMs", "pc_connected", "first_audio_frame"]
     ];
 
+    const spanEndMarks = Object.fromEntries(derivedPairs.map(([key, , endKey]) => [key, endKey]));
+
     for (const [key, startKey, endKey] of derivedPairs) {
       if (computedSpans[key] == null) {
+        if (key === "waitForAnswerMs" && record.direction === "outgoing" && typeof marks.call_answered === "number" && typeof marks.offer_sent === "number" && typeof marks.answer_received === "number") {
+          // When caller sends a pre-offer during ringing, waiting for the SDP answer
+          // after the callee actually answers starts at max(offer_sent, call_answered).
+          const effectiveStart = Math.max(marks.offer_sent, marks.call_answered);
+          if (marks.answer_received >= effectiveStart) {
+            computedSpans[key] = roundMs(marks.answer_received - effectiveStart);
+          }
+          continue;
+        }
         const value = spanBetween(marks, startKey, endKey);
         if (value !== null) computedSpans[key] = value;
       }
@@ -254,13 +266,23 @@ export function createCallProfiler({ now = () => (typeof performance !== "undefi
       ? spanBetween(marks, "call_create_done", "call_answered")
       : null;
 
-    // Rank post-anchor contributors to highlight where time actually went.
+    // Rank post-anchor contributors to highlight where time actually went after
+    // the call was answered (excluding pre-offer/prewarm work completed during ringing).
     const postAnchorKeys = record.direction === "incoming"
       ? ["micMs", "answerHttpMs", "pcCreateMs", "iceFetchMs", "waitForOfferMs", "answerCreateMs", "answerSendHttpMs", "firstIceBatchHoldMs", "iceCheckMs", "dtlsHandshakeMs", "firstAudioAfterConnectMs"]
       : ["pcCreateMs", "iceFetchMs", "offerCreateMs", "offerSendHttpMs", "waitForAnswerMs", "firstIceBatchHoldMs", "iceCheckMs", "dtlsHandshakeMs", "firstAudioAfterConnectMs"];
 
     const bottlenecks = postAnchorKeys
-      .filter((key) => typeof computedSpans[key] === "number" && computedSpans[key] > 0)
+      .filter((key) => {
+        if (typeof computedSpans[key] !== "number" || computedSpans[key] <= 0) return false;
+        if (record.direction === "outgoing" && typeof anchor === "number") {
+          const endMark = spanEndMarks[key];
+          if (endMark && typeof marks[endMark] === "number" && marks[endMark] <= anchor) {
+            return false;
+          }
+        }
+        return true;
+      })
       .map((key) => ({
         key,
         label: SPAN_LABELS[key],

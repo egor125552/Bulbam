@@ -147,4 +147,45 @@ describe("call connection profiler", () => {
     const iceEvent = profiler.getLatest().timeline.find((e) => e.stage === "first_local_ice");
     expect(iceEvent.meta).toBeNull();
   });
+
+  test("excludes ringing wait from waitForAnswerMs and hides pre-ringing spans from post-answer bottlenecks", () => {
+    let clock = 10_000;
+    const profiler = createCallProfiler({ now: () => clock });
+    const sid = profiler.start("outgoing", { kind: "direct" });
+
+    // Caller creates and uploads pre-offer during ringing
+    profiler.mark("call_create_start", sid);
+    clock += 400;
+    profiler.mark("call_create_done", sid);
+    profiler.mark("offer_create_start", sid);
+    clock += 60;
+    profiler.mark("offer_local_set", sid);
+    profiler.mark("offer_send_start", sid);
+    clock += 500;
+    profiler.mark("offer_sent", sid);
+
+    // Callee rings for 7 seconds before answering
+    clock += 7_000;
+    profiler.mark("call_answered", sid, { meta: "ws" });
+
+    // Answer arrives 520 ms after callee pressed Answer
+    clock += 520;
+    profiler.mark("answer_received", sid);
+    clock += 10;
+    profiler.mark("answer_remote_set", sid);
+    profiler.mark("ice_checking", sid);
+    clock += 350;
+    profiler.mark("ice_connected", sid);
+    clock += 90;
+    profiler.mark("pc_connected", sid);
+
+    const profile = profiler.getLatest();
+    expect(profile.totalConnectMs).toBe(970);
+    // Must measure 520 ms from call_answered, NOT 7520 ms from pre-offer offer_sent!
+    expect(profile.spans.waitForAnswerMs).toBe(520);
+    // Pre-ringing offerSendHttpMs (500 ms) finished before call_answered and must not pollute bottlenecks.
+    const bottleneckKeys = profile.bottlenecks.map((item) => item.key);
+    expect(bottleneckKeys).not.toContain("offerSendHttpMs");
+    expect(bottleneckKeys[0]).toBe("waitForAnswerMs");
+  });
 });
