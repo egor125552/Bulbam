@@ -164,9 +164,9 @@ function buildStepVisualElement(visual) {
 
   if (visual === "controls") {
     const rows = [
-      ["is-call", "Позвонить", "Зелёная кнопка сверху — живой звонок"],
-      ["is-file", "Файл", "Скрепка слева — фото, видео, музыка"],
-      ["is-voice", "Записать", "Фиолетовый микрофон — голосовое"]
+      ["is-call", "Позвонить", "Личный или выборочный групповой звонок"],
+      ["is-file", "Файл", "Фото, видео, музыка и файлы до 512 МБ"],
+      ["is-voice", "Записать", "Голосовые 48 кГц с паузой и ускорением"]
     ];
     for (const [kind, badgeText, desc] of rows) {
       const row = el("div", "guide-legend-row");
@@ -183,7 +183,7 @@ function buildStepVisualElement(visual) {
   for (let i = 0; i < 7; i += 1) wave.append(document.createElement("span"));
   card.append(
     wave,
-    el("div", "guide-mini-caption", "Звонки · Голосовые 48 кГц · Файлы 512 МБ · Face ID")
+    el("div", "guide-mini-caption", "Групповые звонки · Редактирование и ссылки · Голосовые 48 кГц · Face ID")
   );
   return card;
 }

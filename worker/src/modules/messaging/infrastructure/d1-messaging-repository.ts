@@ -15,6 +15,18 @@ import { ensureMessagingSchema, resetMessagingSchemaCache } from "./schema";
 
 type Row = Record<string, unknown>;
 
+// Cloudflare D1 caps bound SQL parameters at 100 per statement.
+// Keep IN(...) clauses bounded at 80 IDs so surrounding bindings always fit.
+const MAX_IN_CLAUSE_IDS = 80;
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 const MESSAGE_COLUMNS = `
   m.message_id,
   m.conversation_id,
@@ -56,7 +68,8 @@ const MESSAGE_COLUMNS = `
   f.size_bytes AS file_size_bytes,
   m.reply_to_message_id,
   m.forwarded_from_user_id,
-  m.forwarded_from_display_name
+  m.forwarded_from_display_name,
+  m.edited_at
 `;
 
 const MESSAGE_JOINS = `
@@ -218,12 +231,15 @@ export class D1MessagingRepository implements MessagingRepository {
   async listMessageReaders(conversationId: string,messageIds: string[]):Promise<Map<string,Array<{userId:string;readAt:number}>>> {
     await this.initialize();
     const output=new Map<string,Array<{userId:string;readAt:number}>>();
-    if(!messageIds.length)return output;
-    const placeholders=messageIds.map(()=>'?').join(',');
-    const rows=await this.db.prepare(`SELECT message_id,recipient_user_id,read_at FROM message_receipts
-      WHERE message_id IN (${placeholders}) AND read_at IS NOT NULL`).bind(...messageIds).all<Row>();
-    for(const row of rows.results??[]){const key=String(row.message_id);const current=output.get(key)??[];
-      current.push({userId:String(row.recipient_user_id),readAt:Number(row.read_at)});output.set(key,current);}
+    const uniqueIds = [...new Set(messageIds.filter(Boolean))];
+    if(!uniqueIds.length)return output;
+    for (const chunk of chunkArray(uniqueIds, MAX_IN_CLAUSE_IDS)) {
+      const placeholders=chunk.map(()=>'?').join(',');
+      const rows=await this.db.prepare(`SELECT message_id,recipient_user_id,read_at FROM message_receipts
+        WHERE message_id IN (${placeholders}) AND read_at IS NOT NULL`).bind(...chunk).all<Row>();
+      for(const row of rows.results??[]){const key=String(row.message_id);const current=output.get(key)??[];
+        current.push({userId:String(row.recipient_user_id),readAt:Number(row.read_at)});output.set(key,current);}
+    }
     return output;
   }
 
@@ -259,30 +275,32 @@ export class D1MessagingRepository implements MessagingRepository {
       const output = new Map<string, StoredMessage>();
       const uniqueIds = [...new Set(messageIds.filter(Boolean))];
       if (!uniqueIds.length) return output;
-      const placeholders = uniqueIds.map(() => "?").join(", ");
-      const result = await this.db
-        .prepare(`
-          SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
-            own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at
-          FROM messages m
-          ${MESSAGE_JOINS}
-          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
-          JOIN conversations c ON c.conversation_id=m.conversation_id
-          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-          WHERE m.conversation_id = ?
-            AND m.message_id IN (${placeholders})
-            AND NOT EXISTS (
-              SELECT 1 FROM message_hidden_for_user mh
-              WHERE mh.message_id = m.message_id AND mh.user_id = ?
-            )
-            AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
-              (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-        `)
-        .bind(viewerUserId, viewerUserId, viewerUserId, viewerUserId, conversationId, ...uniqueIds, viewerUserId)
-        .all<Row>();
-      for (const row of result.results ?? []) {
-        const message = mapMessage(row, viewerUserId);
-        output.set(message.messageId, message);
+      for (const chunk of chunkArray(uniqueIds, MAX_IN_CLAUSE_IDS)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const result = await this.db
+          .prepare(`
+            SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind,
+              own_rc.read_at AS own_read_at, own_rc.delivered_at AS own_delivered_at
+            FROM messages m
+            ${MESSAGE_JOINS}
+            LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+            JOIN conversations c ON c.conversation_id=m.conversation_id
+            LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+            WHERE m.conversation_id = ?
+              AND m.message_id IN (${placeholders})
+              AND NOT EXISTS (
+                SELECT 1 FROM message_hidden_for_user mh
+                WHERE mh.message_id = m.message_id AND mh.user_id = ?
+              )
+              AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND
+                (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+          `)
+          .bind(viewerUserId, viewerUserId, viewerUserId, viewerUserId, conversationId, ...chunk, viewerUserId)
+          .all<Row>();
+        for (const row of result.results ?? []) {
+          const message = mapMessage(row, viewerUserId);
+          output.set(message.messageId, message);
+        }
       }
       return output;
     });
@@ -390,6 +408,25 @@ export class D1MessagingRepository implements MessagingRepository {
     });
   }
 
+  async editMessage(conversationId: string, messageId: string, text: string, editedAt: number): Promise<boolean> {
+    return this.runWithSchemaRepair(async () => {
+      const result = await this.db
+        .prepare(`
+          UPDATE messages
+          SET body = ?, edited_at = ?
+          WHERE conversation_id = ?
+            AND message_id = ?
+            AND message_type = 'text'
+            AND NOT EXISTS (
+              SELECT 1 FROM file_message_attachments f WHERE f.message_id = messages.message_id
+            )
+        `)
+        .bind(text, editedAt, conversationId, messageId)
+        .run();
+      return (result.meta?.changes ?? 0) === 1;
+    });
+  }
+
   async hideMessageForUser(conversationId: string, messageId: string, userId: string, now: number): Promise<boolean> {
     return this.runWithSchemaRepair(async () => {
       const exists = await this.db
@@ -480,30 +517,32 @@ export class D1MessagingRepository implements MessagingRepository {
       const output = new Map<string, MessageReactionSummary[]>();
       const uniqueIds = [...new Set(messageIds.filter(Boolean))];
       if (!uniqueIds.length) return output;
-      const placeholders = uniqueIds.map(() => "?").join(", ");
-      const result = await this.db
-        .prepare(`
-          SELECT message_id, user_id, emoji, created_at
-          FROM message_reactions
-          WHERE message_id IN (${placeholders})
-          ORDER BY created_at ASC, emoji ASC, user_id ASC
-        `)
-        .bind(...uniqueIds)
-        .all<Row>();
-
       const grouped = new Map<string, Map<string, string[]>>();
-      for (const row of result.results ?? []) {
-        const messageId = String(row.message_id);
-        const emoji = String(row.emoji);
-        const userId = String(row.user_id);
-        let byEmoji = grouped.get(messageId);
-        if (!byEmoji) {
-          byEmoji = new Map();
-          grouped.set(messageId, byEmoji);
+      for (const chunk of chunkArray(uniqueIds, MAX_IN_CLAUSE_IDS)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const result = await this.db
+          .prepare(`
+            SELECT message_id, user_id, emoji, created_at
+            FROM message_reactions
+            WHERE message_id IN (${placeholders})
+            ORDER BY created_at ASC, emoji ASC, user_id ASC
+          `)
+          .bind(...chunk)
+          .all<Row>();
+
+        for (const row of result.results ?? []) {
+          const messageId = String(row.message_id);
+          const emoji = String(row.emoji);
+          const userId = String(row.user_id);
+          let byEmoji = grouped.get(messageId);
+          if (!byEmoji) {
+            byEmoji = new Map();
+            grouped.set(messageId, byEmoji);
+          }
+          const users = byEmoji.get(emoji) ?? [];
+          users.push(userId);
+          byEmoji.set(emoji, users);
         }
-        const users = byEmoji.get(emoji) ?? [];
-        users.push(userId);
-        byEmoji.set(emoji, users);
       }
 
       for (const [messageId, byEmoji] of grouped.entries()) {
@@ -548,17 +587,19 @@ export class D1MessagingRepository implements MessagingRepository {
       const output = new Set<string>();
       const uniqueIds = [...new Set(messageIds.filter(Boolean))];
       if (!uniqueIds.length) return output;
-      const placeholders = uniqueIds.map(() => "?").join(", ");
-      const result = await this.db
-        .prepare(`
-          SELECT message_id
-          FROM favorite_messages
-          WHERE user_id = ? AND message_id IN (${placeholders})
-        `)
-        .bind(userId, ...uniqueIds)
-        .all<Row>();
-      for (const row of result.results ?? []) {
-        output.add(String(row.message_id));
+      for (const chunk of chunkArray(uniqueIds, MAX_IN_CLAUSE_IDS)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const result = await this.db
+          .prepare(`
+            SELECT message_id
+            FROM favorite_messages
+            WHERE user_id = ? AND message_id IN (${placeholders})
+          `)
+          .bind(userId, ...chunk)
+          .all<Row>();
+        for (const row of result.results ?? []) {
+          output.add(String(row.message_id));
+        }
       }
       return output;
     });
@@ -607,27 +648,33 @@ export class D1MessagingRepository implements MessagingRepository {
     now: number
   ): Promise<DeliveryReceiptUpdate[]> {
     return this.runWithSchemaRepair(async () => {
-      if (!messageIds.length) return [];
+      const uniqueIds = [...new Set(messageIds.filter(Boolean))];
+      if (!uniqueIds.length) return [];
 
-      const placeholders = messageIds.map(() => "?").join(", ");
-      const result = await this.db
-        .prepare(`
-          SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
-            own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
-          FROM messages m
-          ${MESSAGE_JOINS}
-          JOIN conversations c ON c.conversation_id=m.conversation_id
-          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
-          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-          WHERE m.conversation_id = ?
-            AND m.message_id IN (${placeholders})
-            AND m.sender_user_id <> ?
-            AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-        `)
-        .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
-        .all<Row>();
+      const messages: StoredMessage[] = [];
+      for (const chunk of chunkArray(uniqueIds, MAX_IN_CLAUSE_IDS)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const result = await this.db
+          .prepare(`
+            SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
+              own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
+            FROM messages m
+            ${MESSAGE_JOINS}
+            JOIN conversations c ON c.conversation_id=m.conversation_id
+            LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+            LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+            WHERE m.conversation_id = ?
+              AND m.message_id IN (${placeholders})
+              AND m.sender_user_id <> ?
+              AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+          `)
+          .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...chunk, recipientUserId)
+          .all<Row>();
+        for (const row of result.results ?? []) {
+          messages.push(mapMessage(row, recipientUserId));
+        }
+      }
 
-      const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
       const pending = messages.filter((message) => message.deliveredAt === null);
       if (pending.length) {
         await this.db.batch(
@@ -661,27 +708,33 @@ export class D1MessagingRepository implements MessagingRepository {
     now: number
   ): Promise<DeliveryReceiptUpdate[]> {
     return this.runWithSchemaRepair(async () => {
-      if (!messageIds.length) return [];
+      const uniqueIds = [...new Set(messageIds.filter(Boolean))];
+      if (!uniqueIds.length) return [];
 
-      const placeholders = messageIds.map(() => "?").join(", ");
-      const result = await this.db
-        .prepare(`
-          SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
-            own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
-          FROM messages m
-          ${MESSAGE_JOINS}
-          JOIN conversations c ON c.conversation_id=m.conversation_id
-          LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
-          LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
-          WHERE m.conversation_id = ?
-            AND m.message_id IN (${placeholders})
-            AND m.sender_user_id <> ?
-            AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
-        `)
-        .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...messageIds, recipientUserId)
-        .all<Row>();
+      const messages: StoredMessage[] = [];
+      for (const chunk of chunkArray(uniqueIds, MAX_IN_CLAUSE_IDS)) {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const result = await this.db
+          .prepare(`
+            SELECT ${MESSAGE_COLUMNS}, own_rc.read_at AS own_read_at,
+              own_rc.delivered_at AS own_delivered_at, c.kind AS conversation_kind
+            FROM messages m
+            ${MESSAGE_JOINS}
+            JOIN conversations c ON c.conversation_id=m.conversation_id
+            LEFT JOIN message_receipts own_rc ON own_rc.message_id=m.message_id AND own_rc.recipient_user_id=?
+            LEFT JOIN group_members gm ON gm.conversation_id=c.conversation_id AND gm.user_id=?
+            WHERE m.conversation_id = ?
+              AND m.message_id IN (${placeholders})
+              AND m.sender_user_id <> ?
+              AND (c.kind='direct' OR (gm.user_id IS NOT NULL AND (c.history_mode='all' OR m.created_at>=gm.joined_at)))
+          `)
+          .bind(recipientUserId,recipientUserId,recipientUserId,recipientUserId,conversationId, ...chunk, recipientUserId)
+          .all<Row>();
+        for (const row of result.results ?? []) {
+          messages.push(mapMessage(row, recipientUserId));
+        }
+      }
 
-      const messages = (result.results ?? []).map((row) => mapMessage(row, recipientUserId));
       const pending = messages.filter((message) => message.readAt === null);
       if (pending.length) {
         await this.db.batch(
@@ -1119,6 +1172,7 @@ function mapMessage(row: Row, viewerUserId?: string): StoredMessage {
         }
       : null,
     createdAt: Number(row.created_at),
+    editedAt: row.edited_at == null ? null : Number(row.edited_at),
     deliveredAt: row.conversation_kind==='group' && viewerUserId!==senderUserId
       ? row.own_delivered_at==null?null:Number(row.own_delivered_at)
       : row.delivered_at==null?null:Number(row.delivered_at),

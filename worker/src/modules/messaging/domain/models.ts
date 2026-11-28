@@ -94,6 +94,7 @@ export interface StoredMessage {
   reactions?: MessageReactionSummary[];
   isFavorite?: boolean;
   createdAt: number;
+  editedAt?: number | null;
   deliveredAt: number | null;
   readAt: number | null;
   readBy?: Array<{ userId: string; readAt: number }>;

@@ -30,6 +30,18 @@ describe("unified safe diagnostics", () => {
     expect(out).not.toContain("@example");
     expect(out).toContain("[данные скрыты]");
   });
+  test("preserves safe static SDP event labels while still redacting real SDP payloads", () => {
+    logDiagnostic("Звонки", "SDP предложение", "отправлен");
+    logDiagnostic("Звонки", "SDP ответ", "получен");
+    logDiagnostic("Звонки", "сигнал", "v=0 o=- 123 sdp secret");
+    const lines = diagnosticText().split("\n");
+    expect(lines[0]).toContain("SDP предложение");
+    expect(lines[0]).not.toContain("[данные скрыты]");
+    expect(lines[1]).toContain("SDP ответ");
+    expect(lines[1]).not.toContain("[данные скрыты]");
+    expect(lines[2]).toContain("[данные скрыты]");
+    expect(lines[2]).not.toContain("secret");
+  });
   test("maps API paths and query strings to privacy-safe operations", () => {
     expect(describeApiOperation("/api/v1/chats/private-chat-id/calls/call-id/signals?after=400", "POST")).toBe("POST сигналы звонка");
     expect(describeApiOperation("/api/v1/chats/chat-secret/voice/uploads/secret-session/complete", "POST")).toBe("POST загрузка голосового");

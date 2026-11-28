@@ -15,6 +15,7 @@ import {
   validateDeleteScope,
   validateDeliveryReceiptInput,
   validateForwardInput,
+  validateMessageEditInput,
   validateMessageId,
   validateMessageInput,
   validateReactionEmoji,
@@ -227,6 +228,60 @@ export class MessagingService {
     return this.persistAndPublish(actor, targetConversation, message);
   }
 
+  async editMessage(
+    actor: MessagingActor,
+    rawConversationId: string,
+    rawMessageId: string,
+    body: Record<string, unknown>
+  ) {
+    const conversationId = validateConversationId(rawConversationId);
+    const messageId = validateMessageId(rawMessageId);
+    const input = validateMessageEditInput(body);
+    const conversation = await this.requireConversation(conversationId, actor.userId);
+    const existing = await this.repository.findMessageForUser(conversationId, messageId, actor.userId);
+    if (!existing) notFound("message_not_found", "Сообщение не найдено.");
+    if (existing.senderUserId !== actor.userId) {
+      throw new ApiError(403, "edit_forbidden", "Редактировать чужое сообщение нельзя.");
+    }
+    if (existing.kind !== "text") {
+      badRequest("edit_unsupported", "Редактировать можно только текстовые сообщения.");
+    }
+    if (existing.text === input.text) {
+      await this.enrichMessages(conversationId, [existing], actor.userId);
+      return { message: existing, unchanged: true };
+    }
+
+    const editedAt = Date.now();
+    const updated = await this.repository.editMessage(conversationId, messageId, input.text, editedAt);
+    if (!updated) notFound("message_not_found", "Сообщение не найдено.");
+
+    const message: StoredMessage = {
+      ...existing,
+      text: input.text,
+      editedAt
+    };
+    await this.enrichMessages(conversationId, [message], actor.userId);
+
+    const allRecipients = await this.repository.listConversationRecipients(conversation);
+    const visibleRecipients = "title" in conversation && conversation.historyMode === "since_join"
+      ? new Set(
+          (await this.repository.listGroupMembers(conversation.conversationId))
+            .filter((member) => member.joinedAt <= message.createdAt)
+            .map((member) => member.userId)
+        )
+      : new Set(allRecipients);
+    const recipients = allRecipients.filter((id) => visibleRecipients.has(id));
+    await this.realtime.publishToUsers(recipients, {
+      type: "message.edited",
+      conversationId,
+      messageId,
+      text: input.text,
+      editedAt
+    });
+
+    return { message, unchanged: false };
+  }
+
   async deleteMessage(
     actor: MessagingActor,
     rawConversationId: string,
@@ -371,7 +426,8 @@ export class MessagingService {
         text: entry.message.text,
         fileName: entry.message.file?.fileName ?? null,
         voiceDurationMs: entry.message.voice?.durationMs ?? null,
-        createdAt: entry.message.createdAt
+        createdAt: entry.message.createdAt,
+        editedAt: entry.message.editedAt ?? null
       });
     }
     return items;

@@ -31,6 +31,7 @@ export interface MessagingRepository {
   listMessages(conversationId: string, limit: number, viewerUserId: string): Promise<StoredMessage[]>;
   listMessagesByIds(conversationId: string, messageIds: string[], viewerUserId: string): Promise<Map<string, StoredMessage>>;
   insertMessage(input: StoredMessage): Promise<InsertMessageResult>;
+  editMessage(conversationId: string, messageId: string, text: string, editedAt: number): Promise<boolean>;
   hideMessageForUser(conversationId: string, messageId: string, userId: string, now: number): Promise<boolean>;
   deleteMessageForEveryone(conversationId: string, messageId: string): Promise<boolean>;
   toggleReaction(messageId: string, userId: string, emoji: string, now: number): Promise<{ added: boolean; reactions: MessageReactionSummary[] }>;

@@ -11,6 +11,10 @@ let generation = 0;
 let statusList = [];
 let sharePresence = true;
 
+function isCallActive() {
+  return typeof document !== "undefined" && document.documentElement?.dataset?.bulbamCallActive === "true";
+}
+
 export function setupPresence() {
   const checkbox = document.querySelector("#presence-share");
   checkbox?.addEventListener("change", async () => {
@@ -63,8 +67,17 @@ export function setupPresence() {
     refreshTimer=setInterval(()=>void refreshPresence(),15000);
   });
 
+  window.addEventListener("bulbam:call-activity-changed", (event) => {
+    if (!accountId || event.detail?.active) return;
+    if (document.visibilityState === "visible") {
+      void heartbeat();
+      void refreshPresence();
+    }
+  });
+
   document.addEventListener("visibilitychange", () => {
     if (!accountId)return;
+    if (isCallActive() && document.visibilityState === "visible") return;
     void heartbeat();
     if (document.visibilityState==="visible")void refreshPresence();
   });
@@ -74,7 +87,7 @@ export function setupPresence() {
     if (accountId)void heartbeat(false);
   });
   window.addEventListener("online", () => {
-    if (!accountId)return;
+    if (!accountId || isCallActive())return;
     void heartbeat();
     void refreshPresence();
   });
@@ -82,6 +95,7 @@ export function setupPresence() {
 
 async function heartbeat(visible=document.visibilityState==="visible") {
   if (!accountId)return;
+  if (visible && isCallActive()) return;
   if (visible && typeof navigator !== "undefined" && navigator.onLine === false) return;
   try {
     await api("/api/v1/presence/heartbeat", {
@@ -105,7 +119,7 @@ async function loadSettings(currentGeneration) {
 }
 
 async function refreshPresence() {
-  if (!accountId || requestInFlight || document.visibilityState!=="visible")return;
+  if (!accountId || requestInFlight || document.visibilityState!=="visible" || isCallActive())return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   requestInFlight=true;
   logDiagnostic('Сеть','проверка присутствия запущена');

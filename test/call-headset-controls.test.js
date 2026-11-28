@@ -65,4 +65,52 @@ describe("headset and OS call controls", () => {
     old();
     expect(onMute).not.toHaveBeenCalled();
   });
+  test("second pause from AirPods/headset unmutes microphone after debounce and protects remote audio", () => {
+    let clock = 1000;
+    const session = fakeSession(["play", "pause"]);
+    const onMute = vi.fn();
+    const onMediaKey = vi.fn();
+    const controls = createCallHeadsetControls(
+      { mediaSession: session },
+      { onMute, onMediaKey, now: () => clock }
+    );
+    controls.activate(false);
+
+    // First tap on headset stem -> mutes mic
+    session.actions.get("pause")();
+    expect(onMute).toHaveBeenLastCalledWith(true);
+    expect(onMediaKey).toHaveBeenCalledTimes(1);
+    controls.updateMuted(true);
+
+    // Duplicate OS bounce within 100ms -> ignored so it does not accidentally unmute
+    clock += 100;
+    session.actions.get("pause")();
+    expect(onMute).toHaveBeenCalledTimes(1);
+    expect(onMediaKey).toHaveBeenCalledTimes(2);
+
+    // Deliberate second tap after 500ms -> unmutes mic!
+    clock += 500;
+    session.actions.get("pause")();
+    expect(onMute).toHaveBeenLastCalledWith(false);
+    expect(onMute).toHaveBeenCalledTimes(2);
+    expect(onMediaKey).toHaveBeenCalledTimes(3);
+  });
+  test("swallows async InvalidStateError Promise rejection from mediaSession.setMicrophoneActive", async () => {
+    const session = fakeSession();
+    session.setMicrophoneActive = vi.fn(() => Promise.reject(Object.assign(new Error("Invalid state"), { name: "InvalidStateError" })));
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const controls = createCallHeadsetControls({ mediaSession: session }, { onMute: () => {} });
+      controls.activate(false);
+      controls.updateMuted(true);
+      controls.deactivate();
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      expect(session.setMicrophoneActive).toHaveBeenCalledTimes(3);
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

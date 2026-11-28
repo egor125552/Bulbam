@@ -149,6 +149,12 @@ const migrations = [
       )`,
       "CREATE INDEX IF NOT EXISTS idx_favorite_messages_user ON favorite_messages(user_id, created_at)"
     ]
+  },
+  {
+    version: 8,
+    statements: [
+      "ALTER TABLE messages ADD COLUMN edited_at INTEGER"
+    ]
   }
 ] as const;
 
@@ -220,6 +226,9 @@ async function ensureMessageActionsSchema(db: D1Database): Promise<void> {
   if (!columns.has("forwarded_from_display_name")) {
     await runStatement(db, "ALTER TABLE messages ADD COLUMN forwarded_from_display_name TEXT");
   }
+  if (!columns.has("edited_at")) {
+    await runStatement(db, "ALTER TABLE messages ADD COLUMN edited_at INTEGER");
+  }
   for (const statement of migrations[6].statements.slice(3)) {
     await runStatement(db, statement);
   }
@@ -269,7 +278,7 @@ async function runMigrationStatement(db:D1Database,version:number,sql:string):Pr
       if((info.results??[]).some(item=>item.name===column[1]))return;
     }
   }
-  if (version === 7) {
+  if (version === 7 || version === 8) {
     const column = sql.match(/^ALTER TABLE messages ADD COLUMN ([a-z_]+)/);
     if (column) {
       const info = await db.prepare("PRAGMA table_info(messages)").all<{ name: string }>();

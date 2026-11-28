@@ -104,22 +104,33 @@ export async function handleMessagingHttp(
     return methodNotAllowed(["POST", "DELETE"]);
   }
 
-  const messageDeleteMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})$/i);
-  if (messageDeleteMatch) {
-    if (request.method !== "DELETE") return methodNotAllowed(["DELETE"]);
+  const messageItemMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages\/([0-9a-f-]{36})$/i);
+  if (messageItemMatch) {
     const actor = await authenticate(request);
-    const queryScope = url.searchParams.get("scope");
-    let scope: unknown = queryScope;
-    if (!scope) {
-      try {
-        const body = await readJsonObject(request);
-        scope = body.scope;
-      } catch {
-        scope = null;
-      }
+    if (request.method === "PATCH") {
+      const result = await service.editMessage(
+        actor,
+        messageItemMatch[1],
+        messageItemMatch[2],
+        await readJsonObject(request)
+      );
+      return json({ ok: true, ...result });
     }
-    const result = await service.deleteMessage(actor, messageDeleteMatch[1], messageDeleteMatch[2], scope);
-    return json({ ok: true, ...result });
+    if (request.method === "DELETE") {
+      const queryScope = url.searchParams.get("scope");
+      let scope: unknown = queryScope;
+      if (!scope) {
+        try {
+          const body = await readJsonObject(request);
+          scope = body.scope;
+        } catch {
+          scope = null;
+        }
+      }
+      const result = await service.deleteMessage(actor, messageItemMatch[1], messageItemMatch[2], scope);
+      return json({ ok: true, ...result });
+    }
+    return methodNotAllowed(["PATCH", "DELETE"]);
   }
 
   const messagesMatch = url.pathname.match(/^\/api\/v1\/chats\/([0-9a-f-]{36})\/messages$/i);

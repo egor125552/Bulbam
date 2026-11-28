@@ -1,11 +1,23 @@
 // Browser-standard Media Session conferencing controls. Availability depends
-// on OS/browser/headset: the headset's physical mute switch is not exposed.
-// While a call is active, regular play/pause keys are a fallback for earbuds
-// that send a media key rather than the dedicated togglemicrophone action.
-export function createCallHeadsetControls(navigatorLike, { onMute, onHangup } = {}) {
+// on OS/browser/headset. While a call is active, regular play/pause keys are
+// mapped to microphone mute/unmute for earbuds that send media keys instead of
+// the dedicated togglemicrophone action.
+//
+// Important iOS/Safari detail: active remote <audio> playback can keep the OS
+// media session in "playing" state even while the microphone is muted, so a
+// second press on AirPods/Bluetooth headphones often fires "pause" again.
+// Treating a subsequent "pause" (after a short debounce) as an unmute toggle
+// prevents the microphone from getting stuck muted.
+const HEADSET_REPEAT_PAUSE_DEBOUNCE_MS = 350;
+
+export function createCallHeadsetControls(
+  navigatorLike,
+  { onMute, onHangup, onMediaKey, now = () => Date.now() } = {}
+) {
   let session = null;
   let active = false;
   let muted = false;
+  let lastMuteCommandAt = -Infinity;
   const registered = new Set();
 
   function safely(action, handler) {
@@ -16,11 +28,27 @@ export function createCallHeadsetControls(navigatorLike, { onMute, onHangup } = 
     } catch { return false; }
   }
 
+  function safelySetMicrophoneActive(targetSession, isActive) {
+    if (!targetSession || typeof targetSession.setMicrophoneActive !== "function") return;
+    try {
+      const maybePromise = targetSession.setMicrophoneActive(Boolean(isActive));
+      if (maybePromise && typeof maybePromise.catch === "function") {
+        maybePromise.catch(() => {});
+      }
+    } catch {}
+  }
+
   function updateMuted(nextMuted) {
     muted = Boolean(nextMuted);
     if (!active || !session) return;
-    try { session.setMicrophoneActive?.(!muted); } catch {}
+    safelySetMicrophoneActive(session, !muted);
     try { session.playbackState = muted ? "paused" : "playing"; } catch {}
+  }
+
+  function triggerMute(nextMuted) {
+    lastMuteCommandAt = now();
+    onMute?.(Boolean(nextMuted));
+    onMediaKey?.();
   }
 
   return {
@@ -29,20 +57,46 @@ export function createCallHeadsetControls(navigatorLike, { onMute, onHangup } = 
       session = navigatorLike?.mediaSession ?? null;
       if (!session?.setActionHandler) return false;
       active = true;
-      safely("togglemicrophone", () => { if (active) onMute?.(!muted); });
-      safely("pause", () => { if (active) onMute?.(true); });
-      safely("play", () => { if (active) onMute?.(false); });
-      safely("hangup", () => { if (active) onHangup?.(); });
+      lastMuteCommandAt = -Infinity;
+      safely("togglemicrophone", () => {
+        if (!active) return;
+        triggerMute(!muted);
+      });
+      safely("pause", () => {
+        if (!active) return;
+        if (!muted) {
+          triggerMute(true);
+          return;
+        }
+        if ((now() - lastMuteCommandAt) >= HEADSET_REPEAT_PAUSE_DEBOUNCE_MS) {
+          triggerMute(false);
+        } else {
+          onMediaKey?.();
+        }
+      });
+      safely("play", () => {
+        if (!active) return;
+        if (muted) {
+          triggerMute(false);
+        } else {
+          onMediaKey?.();
+        }
+      });
+      safely("hangup", () => {
+        if (active) onHangup?.();
+      });
       updateMuted(isMuted);
       return registered.size > 0;
     },
     updateMuted,
     deactivate() {
       active = false;
+      lastMuteCommandAt = -Infinity;
+      const previousSession = session;
       for (const action of registered) safely(action, null);
       registered.clear();
-      try { session?.setMicrophoneActive?.(false); } catch {}
-      try { if (session) session.playbackState = "none"; } catch {}
+      safelySetMicrophoneActive(previousSession, false);
+      try { if (previousSession) previousSession.playbackState = "none"; } catch {}
       session = null;
     }
   };

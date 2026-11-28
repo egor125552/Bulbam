@@ -19,15 +19,27 @@ function canRetryRequest(path, method, options) {
 }
 
 async function fetchWithTimeout(path, fetchOptions, timeoutMs) {
-  if (!timeoutMs || timeoutMs <= 0 || fetchOptions.signal || typeof AbortController === "undefined") {
+  const externalSignal = fetchOptions.signal;
+  if ((!timeoutMs || timeoutMs <= 0) || typeof AbortController === "undefined") {
     return fetch(path, fetchOptions);
   }
   const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else if (typeof externalSignal.addEventListener === "function") {
+      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    }
+  }
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(path, { ...fetchOptions, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+    if (externalSignal && typeof externalSignal.removeEventListener === "function") {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
   }
 }
 

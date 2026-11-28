@@ -255,7 +255,14 @@ export function setupAdminRecovery(){
     url.searchParams.delete("reviewRecovery");
     history.replaceState(null,"",url.pathname+url.search+url.hash);
   });
+  let lastReturnSyncAt = 0;
+  const isCallActive = () =>
+    typeof document !== "undefined" && document.documentElement?.dataset?.bulbamCallActive === "true";
   const syncOnReturn=()=>{
+    if (isCallActive()) return;
+    const now = Date.now();
+    if (now - lastReturnSyncAt < 1500) return;
+    lastReturnSyncAt = now;
     if(pending)void checkStatus(true);
     if(isManagerAccount())void refreshQueue();
   };
@@ -295,5 +302,5 @@ export function setupAdminRecovery(){
     const button=event.target?.closest?.('[data-open-settings="security"]');
     if(button && isManagerAccount())void refreshQueue();
   });
-  setInterval(()=>{if(isManagerAccount())void refreshQueue();},30000);
+  setInterval(()=>{if(isManagerAccount() && !isCallActive())void refreshQueue();},30000);
 }

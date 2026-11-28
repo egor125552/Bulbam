@@ -438,15 +438,18 @@ export function setupOwnerControl() {
     if (button && isOwnerAccount()) void refreshOwnerUsers();
   });
 
+  const isCallActive = () =>
+    typeof document !== "undefined" && document.documentElement?.dataset?.bulbamCallActive === "true";
+
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && isOwnerAccount()) {
+    if (document.visibilityState === "visible" && isOwnerAccount() && !isCallActive()) {
       const panel = document.querySelector("#owner-control-panel");
       if (panel && !panel.hidden) void refreshOwnerUsers();
     }
   });
 
   setInterval(() => {
-    if (!isOwnerAccount()) return;
+    if (!isOwnerAccount() || isCallActive()) return;
     const dialog = document.querySelector("#settings-dialog");
     const screen = document.querySelector('[data-settings-screen="diagnostics"]');
     if (dialog?.open && screen && !screen.hidden) {

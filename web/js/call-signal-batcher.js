@@ -5,12 +5,15 @@ export function createIceCandidateBatcher({
   flush,
   windowMs = 90,
   maxBatch = 8,
+  immediateFirst = false,
+  isUrgent = null,
   setTimer = setTimeout,
   clearTimer = clearTimeout
 }) {
   let queue = [];
   let timer = null;
   let epoch = 0;
+  let flushedInEpoch = false;
 
   function schedule() {
     if (timer !== null) return;
@@ -22,7 +25,9 @@ export function createIceCandidateBatcher({
 
   function push(item) {
     queue.push(item);
-    if (queue.length >= maxBatch) {
+    const urgent = typeof isUrgent === "function" && Boolean(isUrgent(item));
+    const leadingEdge = immediateFirst && !flushedInEpoch;
+    if (leadingEdge || urgent || queue.length >= maxBatch) {
       void flushNow();
       return;
     }
@@ -37,12 +42,14 @@ export function createIceCandidateBatcher({
     if (!queue.length) return;
     const batch = queue;
     queue = [];
+    flushedInEpoch = true;
     const currentEpoch = epoch;
     await flush(batch, currentEpoch);
   }
 
   function clear() {
     epoch += 1;
+    flushedInEpoch = false;
     if (timer !== null) {
       clearTimer(timer);
       timer = null;

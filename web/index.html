@@ -8,9 +8,9 @@
   <title>Бульбам</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=32684a31c0a7">
-  <link rel="stylesheet" href="/canonical-ui.css?v=c8193bfbadda" data-bulbam-canonical-ui>
-  <link rel="modulepreload" href="/boot.d0fb92a6f7f7.js">
+  <link rel="stylesheet" href="/styles.css?v=c22bb0c9186d">
+  <link rel="stylesheet" href="/canonical-ui.css?v=8afebfd968af" data-bulbam-canonical-ui>
+  <link rel="modulepreload" href="/boot.5db6cb6ffd00.js">
 </head>
 <body>
   <a class="skip-link" href="#main">К основному содержимому</a>
@@ -20,7 +20,7 @@
       <span class="brand-mark" aria-hidden="true">Б</span>
       <div>
         <h1>Бульбам</h1>
-        <p>Сообщения, голосовые и звонки</p>
+        <p>Чаты, группы, голосовые, файлы и звонки</p>
       </div>
     </div>
   </header>
@@ -36,20 +36,43 @@
 
       <section id="auth-showcase" class="card auth-showcase" aria-labelledby="showcase-title">
         <div class="showcase-header">
-          <p id="showcase-kicker" class="showcase-kicker">Чистый звук 48 кГц</p>
-          <h3 id="showcase-title" class="showcase-title">Голосовые студийного качества</h3>
-          <p id="showcase-description" class="showcase-description">Записывайте без искажений, ставьте запись на паузу, ускоряйте прослушивание и слушайте с того места, где остановились.</p>
+          <p id="showcase-kicker" class="showcase-kicker">Личные диалоги и группы</p>
+          <h3 id="showcase-title" class="showcase-title">Переписка, где всё под рукой</h3>
+          <p id="showcase-description" class="showcase-description">Создавайте группы, отвечайте на сообщения, редактируйте отправленное, ставьте реакции, сохраняйте важное в избранное, пересылайте и открывайте ссылки прямо из чата.</p>
         </div>
 
         <div class="showcase-tabs" role="tablist" aria-label="Возможности Бульбама">
-          <button type="button" role="tab" class="showcase-tab is-active" data-showcase-tab="voice" aria-selected="true" tabindex="0">Голосовые</button>
+          <button type="button" role="tab" class="showcase-tab is-active" data-showcase-tab="chats" aria-selected="true" tabindex="0">Чаты</button>
+          <button type="button" role="tab" class="showcase-tab" data-showcase-tab="voice" aria-selected="false" tabindex="-1">Голосовые</button>
           <button type="button" role="tab" class="showcase-tab" data-showcase-tab="calls" aria-selected="false" tabindex="-1">Звонки</button>
           <button type="button" role="tab" class="showcase-tab" data-showcase-tab="files" aria-selected="false" tabindex="-1">Файлы</button>
           <button type="button" role="tab" class="showcase-tab" data-showcase-tab="security" aria-selected="false" tabindex="-1">Защита</button>
         </div>
 
         <div class="showcase-stage" aria-hidden="true">
-          <div class="showcase-scene showcase-scene-voice" data-showcase-stage="voice">
+          <div class="showcase-scene showcase-scene-chats" data-showcase-stage="chats">
+            <div class="scene-chat-card">
+              <div class="scene-reply-quote">
+                <strong>Алёна</strong>
+                <span>Скинь ссылку на проект</span>
+              </div>
+              <p class="scene-chat-text">Готово, смотри тут: <span class="scene-chat-link">bulbam.app</span></p>
+              <div class="scene-chat-footer">
+                <span class="scene-chip">🔥 2</span>
+                <span class="scene-chip">★ В избранном</span>
+                <span class="scene-edited-tag">изменено</span>
+              </div>
+            </div>
+            <div class="scene-meta-row">
+              <span>Ответы и правка</span>
+              <span>·</span>
+              <span>Реакции и избранное</span>
+              <span>·</span>
+              <span>Ссылки и группы</span>
+            </div>
+          </div>
+
+          <div class="showcase-scene showcase-scene-voice" data-showcase-stage="voice" hidden>
             <div class="scene-glass-bar">
               <span class="scene-badge scene-badge-voice">Запись 0:18</span>
               <div class="scene-eq">
@@ -78,9 +101,11 @@
               <span class="scene-device is-target">MacBook</span>
             </div>
             <div class="scene-meta-row">
+              <span>Группы по выбору</span>
+              <span>·</span>
               <span>Бульбам Пераход</span>
               <span>·</span>
-              <span>4 режима микрофона</span>
+              <span>Автобитрейт</span>
             </div>
           </div>
 
@@ -113,7 +138,7 @@
               </div>
             </div>
             <div class="scene-meta-row">
-              <span>Приглашения</span>
+              <span>4 режима чтения</span>
               <span>·</span>
               <span>VoiceOver</span>
               <span>·</span>
@@ -123,7 +148,7 @@
         </div>
 
         <div class="showcase-footer">
-          <p id="showcase-cue" class="showcase-cue">Кнопка микрофона справа внизу чата</p>
+          <p id="showcase-cue" class="showcase-cue">Кнопка меню действий есть у каждого сообщения</p>
           <button id="showcase-demo-toggle" type="button" class="showcase-demo-toggle" aria-pressed="false">Оживить предпросмотр</button>
         </div>
       </section>
@@ -167,7 +192,7 @@
 
         <div id="auth-view-register" class="card auth-card" hidden>
           <h3 id="auth-register-heading" tabindex="-1">Регистрация в Бульбаме</h3>
-          <p class="hint">Для регистрации нужен одноразовый код приглашения.</p>
+          <p class="hint">Для регистрации нужен одноразовый код приглашения. После входа станут доступны личные и групповые чаты, редактирование сообщений, кликабельные ссылки, голосовые 48 кГц, файлы до 512 МБ и групповые звонки.</p>
           <button id="auth-register-guide-button" type="button" class="button-with-icon guide-launch-button" data-icon="compass">Не знаете, как зарегистрироваться?</button>
 
           <div id="registration-guide-dock" class="guide-dock" role="region" aria-label="Пошаговая подсказка" hidden>
@@ -283,12 +308,12 @@
     <dialog id="bulbam-welcome-dialog" aria-labelledby="bulbam-welcome-title">
       <h2 id="bulbam-welcome-title" tabindex="-1">Добро пожаловать в Бульбам!</h2>
       <p id="bulbam-welcome-name">Рады видеть вас здесь.</p>
-      <p>Бульбам создан в Беларуси. Здесь можно переписываться, отправлять голосовые сообщения и звонить.</p>
+      <p>Бульбам создан в Беларуси. Здесь есть личные и групповые чаты, ответы, редактирование сообщений, реакции, избранное, кликабельные ссылки, голосовые 48 кГц, файлы до 512 МБ и звонки.</p>
       <ol>
-        <li>Нажмите «Новый чат», чтобы найти собеседника.</li>
+        <li>Нажмите «Новый чат», чтобы найти собеседника или создать группу. У каждого сообщения есть меню действий: ответ, редактирование, реакции, пересылка, избранное и удаление.</li>
         <li>Для безопасного входа откройте «Настройки → Ключи доступа».</li>
-        <li>При звонке «Бульбам Пераход» позволяет продолжить разговор на другом устройстве, где вы уже вошли.</li>
-        <li>Язык приложения можно изменить в настройках. VoiceOver и экранные дикторы поддерживаются.</li>
+        <li>В звонках можно звонить 1-на-1 или выбирать участников в группе, а «Бульбам Пераход» переносит разговор на другое устройство, где вы уже вошли.</li>
+        <li>Язык приложения и режим чтения сообщений можно изменить в настройках. VoiceOver и экранные дикторы поддерживаются полностью.</li>
       </ol>
       <label for="welcome-language">Язык интерфейса</label>
       <select id="welcome-language">
@@ -393,6 +418,14 @@
             <button id="call-start" class="icon-button" data-icon="phone" type="button" aria-label="Позвонить" hidden>Позвонить</button>
           </header>
 
+          <div id="group-call-banner" class="group-call-banner" role="region" aria-label="Активный групповой звонок" hidden>
+            <div class="group-call-banner-copy">
+              <strong id="group-call-banner-title">Идёт групповой звонок</strong>
+              <span id="group-call-banner-meta"></span>
+            </div>
+            <button id="group-call-join" class="button-with-icon primary-action" data-icon="phone" type="button">Присоединиться</button>
+          </div>
+
 
 
           <div id="conversation-empty" class="conversation-empty">
@@ -400,10 +433,17 @@
             <p class="empty-headline">Выберите переписку или начните новую.</p>
             <div class="empty-capabilities" aria-hidden="true">
               <div class="empty-cap-card">
+                <span class="empty-cap-icon is-chat" data-icon="compose"></span>
+                <div>
+                  <strong>Чаты и действия</strong>
+                  <span>Ответы, правка, реакции, избранное и ссылки</span>
+                </div>
+              </div>
+              <div class="empty-cap-card">
                 <span class="empty-cap-icon is-call" data-icon="phone"></span>
                 <div>
-                  <strong>Звонки</strong>
-                  <span>Зелёная кнопка сверху в чате</span>
+                  <strong>Звонки 1-на-1 и в группах</strong>
+                  <span>Выбор участников и Бульбам Пераход</span>
                 </div>
               </div>
               <div class="empty-cap-card">
@@ -437,6 +477,13 @@
                 <span id="reply-preview-text" data-user-content="true"></span>
               </div>
               <button id="reply-preview-cancel" class="icon-button composer-reply-cancel" data-icon="close" type="button" aria-label="Отменить ответ">Отменить ответ</button>
+            </div>
+            <div id="edit-preview-bar" class="composer-edit-bar" role="region" aria-label="Редактирование сообщения" hidden>
+              <div class="composer-reply-copy">
+                <strong id="edit-preview-title">Редактирование сообщения</strong>
+                <span id="edit-preview-text" data-user-content="true"></span>
+              </div>
+              <button id="edit-preview-cancel" class="icon-button composer-reply-cancel" data-icon="close" type="button" aria-label="Отменить редактирование">Отменить редактирование</button>
             </div>
             <div id="voice-draft-panel" class="voice-draft-panel" hidden>
               <div>
@@ -490,6 +537,10 @@
               <p id="call-status" role="status" aria-live="polite">Звонок не активен.</p>
               <p id="call-duration" aria-live="off" role="timer" hidden>Время звонка: 00:00</p>
             </div>
+            <section id="call-participants-section" class="call-participants-section" aria-labelledby="call-participants-heading" hidden>
+              <h3 id="call-participants-heading" class="call-participants-heading">Участники звонка</h3>
+              <ul id="call-participants-list" class="call-participants-list"></ul>
+            </section>
             <div class="call-screen-navigation">
               <button id="call-minimize" type="button" hidden>Свернуть звонок</button>
               <button id="call-expand" type="button" hidden>Открыть звонок</button>
@@ -502,9 +553,12 @@
               <button id="call-mute" class="button-with-icon" data-icon="mic" type="button" hidden>Выключить микрофон</button>
               <button id="call-audio-cycle" class="button-with-icon" type="button" aria-label="Переключить режим микрофона" hidden>Режим микрофона</button>
               <button id="call-end" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить звонок</button>
+              <button id="call-end-all" class="button-with-icon danger-button" data-icon="phone-off" type="button" hidden>Завершить для всех</button>
               <button id="call-dismiss" class="button-with-icon" type="button" hidden>Закрыть</button>
             </div>
+            <button id="call-pocket" type="button" hidden>Режим в кармане</button>
             <audio id="call-remote-audio" autoplay playsinline></audio>
+            <div id="call-remote-audios" hidden></div>
           </section>
 
   
@@ -549,6 +603,22 @@
           <button id="group-members-add" type="button" hidden>Добавить участников</button>
         </div>
       </dialog>
+      <dialog id="group-call-picker-dialog" aria-labelledby="group-call-picker-title" class="group-dialog">
+        <div class="form-stack">
+          <h2 id="group-call-picker-title" tabindex="-1">Кому позвонить?</h2>
+          <p id="group-call-picker-hint" class="hint">Выберите участников группы, которым нужно позвонить.</p>
+          <div class="group-call-picker-toolbar">
+            <p id="group-call-picker-count" role="status" aria-live="polite">Никто не выбран</p>
+            <button id="group-call-picker-select-all" type="button" hidden>Выбрать всех</button>
+          </div>
+          <ul id="group-call-picker-list" class="user-results" aria-label="Участники для звонка"></ul>
+          <p id="group-call-picker-status" class="hint" role="status" aria-live="polite"></p>
+          <div class="group-dialog-actions">
+            <button id="group-call-picker-cancel" type="button">Отмена</button>
+            <button id="group-call-picker-submit" type="button" class="primary-action" hidden>Позвонить</button>
+          </div>
+        </div>
+      </dialog>
       <dialog id="media-lightbox" class="media-lightbox" aria-labelledby="media-lightbox-title">
         <div class="media-lightbox-header">
           <div class="media-lightbox-info">
@@ -572,6 +642,7 @@
         <div id="message-actions-reactions" class="reaction-picker-row" role="group" aria-label="Реакции"></div>
         <div id="message-actions-main" class="message-actions-list">
           <button id="msg-action-reply" type="button">Ответить</button>
+          <button id="msg-action-edit" type="button" hidden>Редактировать</button>
           <button id="msg-action-copy" type="button">Скопировать</button>
           <button id="msg-action-forward" type="button">Переслать</button>
           <button id="msg-action-favorite" type="button">Добавить в избранное</button>
@@ -836,6 +907,17 @@
                 <button id="diagnostics-clear" type="button">Очистить журнал</button>
               </div>
               <p id="diagnostics-log-status" role="status" aria-live="polite"></p>
+              <section aria-labelledby="call-profiler-title" class="call-profiler-section">
+                <h3 id="call-profiler-title">Профайлер соединения звонка</h3>
+                <p class="hint">Показывает в миллисекундах, на какой этап уходит время при установке аудиозвонка: микрофон, TURN/ICE, HTTP-ответ, SDP, батчер ICE-кандидатов, ICE-проверка, DTLS и первый входящий аудиопакет. Без IP-адресов, имён и содержимого SDP.</p>
+                <label for="call-profiler-output">Последний профиль соединения</label>
+                <textarea id="call-profiler-output" readonly rows="10" spellcheck="false" aria-live="off" aria-label="Профиль соединения последнего звонка"></textarea>
+                <div class="call-log-actions" data-diagnostics-private="true">
+                  <button id="call-profiler-copy" type="button">Скопировать профиль звонка</button>
+                  <button id="call-profiler-clear" type="button">Очистить профиль</button>
+                </div>
+                <p id="call-profiler-status" role="status" aria-live="polite"></p>
+              </section>
               <details id="call-diagnostics" hidden>
                 <summary>Текущие параметры соединения звонка</summary>
                 <p id="call-diagnostics-text" aria-live="off">Проверяю соединение…</p>
@@ -898,7 +980,7 @@
   <script type="module">
     try {
       try {
-        await import("/boot.d0fb92a6f7f7.js");
+        await import("/boot.5db6cb6ffd00.js");
       } catch (bundleError) {
         console.warn("[Bulbam] Fingerprinted bundle unavailable, falling back to /boot.js", bundleError);
         await import("/boot.js?fallback=1");

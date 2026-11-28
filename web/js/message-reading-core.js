@@ -201,6 +201,7 @@ export function buildMessageReadingText(message, {
   const replyPrefix = formatReplyPrefix(message, translate);
   const reactionsSuffix = formatReactionsSummary(message, translate);
   const favoriteSuffix = message?.isFavorite ? `${translate("В избранном")}.` : "";
+  const editedSuffix = message?.editedAt ? translate("изменено") : "";
 
   if (normalizedMode === "telegram") {
     const status = deliveryStatusSummary(message, { mine, isGroup, verbose: true, translate });
@@ -227,6 +228,7 @@ export function buildMessageReadingText(message, {
       chunks.push(`${prefix} ${message.text || ""}`.trim());
     }
 
+    if (editedSuffix) chunks.push(`${capitalizeSentence(editedSuffix)}.`);
     if (reactionsSuffix) chunks.push(reactionsSuffix);
     if (favoriteSuffix) chunks.push(favoriteSuffix);
     if (fullTimestamp) chunks.push(`${fullTimestamp}.`);
@@ -235,7 +237,7 @@ export function buildMessageReadingText(message, {
   }
 
   const status = deliveryStatusSummary(message, { mine, isGroup, verbose: false, translate });
-  const tail = [shortClock, status].filter(Boolean).join(", ");
+  const tail = [shortClock, editedSuffix, status].filter(Boolean).join(", ");
   const extras = [reactionsSuffix, favoriteSuffix].filter(Boolean).join(" ");
   const contextPrefix = [forwardPrefix, replyPrefix].filter(Boolean).join(" ");
 

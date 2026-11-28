@@ -81,9 +81,9 @@ describe("registration guide and capability showcase logic", () => {
   });
 
   test("normalizes interactive showcase capability IDs", () => {
-    expect(SHOWCASE_CAPABILITIES.map((c) => c.id)).toEqual(["voice", "calls", "files", "security"]);
+    expect(SHOWCASE_CAPABILITIES.map((c) => c.id)).toEqual(["chats", "voice", "calls", "files", "security"]);
     expect(normalizeShowcaseCapability("calls")).toBe("calls");
-    expect(normalizeShowcaseCapability("unknown")).toBe("voice");
+    expect(normalizeShowcaseCapability("unknown")).toBe("chats");
   });
 
   test("keeps required guide button, dialog, showcase and Liquid Glass cues in HTML", async () => {

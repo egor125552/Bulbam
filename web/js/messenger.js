@@ -6,6 +6,7 @@ import { filePreviewText } from "./file-format.js";
 import { renderFileMessage, resetFileMedia } from "./file-message.js";
 import { buildMessageReadingText, deliveryStatusSummary, formatDurationSpoken } from "./message-reading-core.js";
 import { getMessageReadingMode } from "./message-reading.js";
+import { buildAccessibleLinksBar, renderLinkifiedText } from "./message-links.js";
 import { announce, elements, getCurrentAccount } from "./ui.js";
 import { subscribeRealtime, reconnectRealtime, realtimeConnected } from "./shared-realtime.js";
 import {
@@ -33,6 +34,7 @@ let groupEditorMode='create';
 let groupEditorConversation=null;
 let groupSearchTimer=null;
 let replyTarget = null;
+let editTarget = null;
 let actionMessage = null;
 let actionReturnFocus = null;
 let forwardSourceMessage = null;
@@ -65,6 +67,11 @@ export function setupMessenger() {
   });
   elements.messageForm.addEventListener("submit", sendCurrentMessage);
   elements.messageInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && editTarget) {
+      event.preventDefault();
+      clearEditTarget({ announceCancel: true, restoreDraft: true });
+      return;
+    }
     if (event.key === "Escape" && replyTarget) {
       event.preventDefault();
       clearReplyTarget({ announceCancel: true });
@@ -97,7 +104,9 @@ export function setupMessenger() {
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !account) return;
-    void refreshVisibleState();
+    const callActive = document.documentElement?.dataset?.bulbamCallActive === "true";
+    const callMinimized = Boolean(document.querySelector("#call-panel")?.classList.contains("is-minimized"));
+    if (!callActive || callMinimized) void refreshVisibleState();
     if (!realtimeConnected()) reconnectRealtime({ resetBackoff: true });
   });
 }
@@ -129,6 +138,7 @@ async function switchAccount(nextAccount) {
   stopPolling();
   closeSearchPanel();
   clearReplyTarget();
+  clearEditTarget();
   actionMessage = null;
   actionReturnFocus = null;
   forwardSourceMessage = null;
@@ -317,6 +327,7 @@ function renderChats() {
 async function selectChat(chat, { focusHeading = false } = {}) {
   selectedChat = chat;
   clearReplyTarget();
+  clearEditTarget();
   if (jumpButton) jumpButton.hidden = true;
   messages = [];
   resetVoicePlayers();
@@ -377,7 +388,9 @@ function renderConversation() {
     : `@${chat.peer.username} · ${presenceLabel(chat.peer.userId)}`;
   const groupInfo=document.querySelector('#group-info-open');
   if(groupInfo)groupInfo.hidden=chat.kind!=='group';
-  elements.callStartButton.hidden=chat.kind==='group';
+  elements.callStartButton.hidden=false;
+  const callLabel = translateText(chat.kind==='group' ? 'Позвонить в группу' : 'Позвонить');
+  elements.callStartButton.setAttribute('aria-label', callLabel);
   elements.conversationEmpty.hidden = true;
   elements.messageForm.hidden = false;
   renderMessages();
@@ -479,6 +492,12 @@ function buildMessageMetaNode(message, mine) {
   time.textContent = messageTime(message.createdAt);
   meta.append(time);
 
+  if (message.editedAt && !message.localState) {
+    const edited = document.createElement("span");
+    edited.className = "message-edited-badge";
+    edited.textContent = ` · ${translateText("изменено")}`;
+    meta.append(edited);
+  }
   const state = message.localState === "pending"
     ? "отправляется"
     : message.localState === "failed"
@@ -727,9 +746,11 @@ function renderMessagesAsList(list, readingMode, locale) {
         if (forwardedNode) visualBody.append(forwardedNode);
         const body = document.createElement("p");
         body.dataset.userContent = "true";
-        body.textContent = message.text;
+        const links = renderLinkifiedText(body, message.text);
         visualBody.append(author, body, meta);
         item.append(surface, visualBody);
+        const accessibleLinksBar = buildAccessibleLinksBar(links, translateText);
+        if (accessibleLinksBar) item.append(accessibleLinksBar);
         if (replyQuoteNode) item.append(replyQuoteNode);
         if (reactionsNode) item.append(reactionsNode);
         if (actionsTrigger) {
@@ -756,7 +777,7 @@ function renderMessagesAsList(list, readingMode, locale) {
     } else {
       const body = document.createElement("p");
       body.dataset.userContent = "true";
-      body.textContent = message.text;
+      renderLinkifiedText(body, message.text);
       item.append(body);
     }
     if (reactionsNode) item.append(reactionsNode);
@@ -837,7 +858,7 @@ function renderMessagesAsTable(list, locale) {
     } else {
       const body = document.createElement("p");
       body.dataset.userContent = "true";
-      body.textContent = message.text;
+      renderLinkifiedText(body, message.text);
       contentCell.append(body);
     }
     if (reactionsNode) contentCell.append(reactionsNode);
@@ -849,6 +870,13 @@ function renderMessagesAsTable(list, locale) {
     if (Number.isFinite(validDate.getTime())) time.dateTime = validDate.toISOString();
     time.textContent = messageTime(message.createdAt);
     metaCell.append(time);
+
+    if (message.editedAt && !message.localState) {
+      const edited = document.createElement("span");
+      edited.className = "message-edited-badge";
+      edited.textContent = ` · ${translateText("изменено")}`;
+      metaCell.append(edited);
+    }
 
     const statusSummary = deliveryStatusSummary(message, { mine, isGroup, verbose: false, translate: translateText });
     if (statusSummary) {
@@ -900,6 +928,11 @@ async function sendCurrentMessage(event) {
   if (!account || !selectedChat) return;
   const text = elements.messageInput.value.replace(/\r\n?/g, "\n").trim();
   if (!text) return;
+
+  if (editTarget && editTarget.conversationId === selectedChat.conversationId) {
+    await saveEditedMessage(editTarget, text);
+    return;
+  }
 
   const activeReply = replyTarget && replyTarget.conversationId === selectedChat.conversationId ? replyTarget : null;
   const pending = {
@@ -1022,13 +1055,15 @@ function connectRealtime() {
 function handleRealtimePayload(payload) {
   if (!payload || typeof payload !== "object") return;
   const known = [
-    "message.created", "message.deleted", "message.reactions.updated", "favorites.updated",
+    "message.created", "message.edited", "message.deleted", "message.reactions.updated", "favorites.updated",
     "messages.delivered", "messages.read", "voice.progress", "chat.created", "chat.updated", "chat.removed"
   ];
   logDiagnostic("Сеть", "получено событие сокета", known.includes(payload?.type) ? payload.type : "другое");
   if (payload?.type === "message.created" && payload.message) {
     logDiagnostic("Сервер", "событие новое сообщение");
     handleRealtimeMessage(payload);
+  } else if (payload?.type === "message.edited" && payload.message) {
+    handleRealtimeMessageEdited(payload);
   } else if (payload?.type === "message.deleted" && payload.messageId) {
     handleRealtimeMessageDeleted(payload);
   } else if (payload?.type === "message.reactions.updated" && payload.messageId) {
@@ -1036,7 +1071,7 @@ function handleRealtimePayload(payload) {
   } else if (payload?.type === "favorites.updated" && payload.messageId) {
     handleRealtimeFavoritesUpdated(payload);
   } else if (payload?.type === "chat.removed") {
-    if (selectedChat?.conversationId === payload.conversationId) { selectedChat = null; messages = []; clearReplyTarget(); renderConversation(); }
+    if (selectedChat?.conversationId === payload.conversationId) { selectedChat = null; messages = []; clearReplyTarget(); clearEditTarget(); renderConversation(); }
     void loadChats({ quiet: true });
   } else if (payload?.type === "chat.created" || payload?.type === "chat.updated") {
     void loadChats({ quiet: true });
@@ -1366,11 +1401,23 @@ function setupMessageActions() {
     elements.messageInput?.focus();
   });
 
+  document.querySelector("#edit-preview-cancel")?.addEventListener("click", () => {
+    clearEditTarget({ announceCancel: true, restoreDraft: true });
+    elements.messageInput?.focus();
+  });
+
   document.querySelector("#msg-action-reply")?.addEventListener("click", () => {
     if (!actionMessage) return;
     const target = actionMessage;
     closeMessageActionsDialog({ restoreFocus: false });
     setReplyTarget(target);
+  });
+
+  document.querySelector("#msg-action-edit")?.addEventListener("click", () => {
+    if (!actionMessage) return;
+    const target = actionMessage;
+    closeMessageActionsDialog({ restoreFocus: false });
+    startEditMessage(target);
   });
 
   document.querySelector("#msg-action-copy")?.addEventListener("click", () => {
@@ -1465,14 +1512,132 @@ function setupMessageActions() {
   });
 }
 
+function canEditMessage(message) {
+  if (!message || message.localState || !account || !selectedChat) return false;
+  if (message.senderUserId !== account.userId) return false;
+  return message.kind === "text" && !message.file && !message.voice;
+}
+
 function canDeleteForEveryone(message) {
   if (!message || message.localState || !account || !selectedChat) return false;
   if (message.senderUserId === account.userId) return true;
   return selectedChat.kind === "group" && selectedChat.ownerUserId === account.userId;
 }
 
+function startEditMessage(message) {
+  if (!canEditMessage(message)) return;
+  clearReplyTarget();
+  const previousDraft = editTarget ? editTarget.previousDraft : elements.messageInput.value;
+  editTarget = {
+    conversationId: selectedChat.conversationId,
+    messageId: message.messageId,
+    originalText: message.text ?? "",
+    previousDraft
+  };
+  const bar = document.querySelector("#edit-preview-bar");
+  const textEl = document.querySelector("#edit-preview-text");
+  if (textEl) textEl.textContent = (message.text ?? "").trim().slice(0, 140);
+  if (bar) bar.hidden = false;
+  elements.messageForm.classList.add("composer-has-edit");
+  const sendBtn = document.querySelector("#send-message");
+  if (sendBtn) {
+    sendBtn.setAttribute("aria-label", translateText("Сохранить изменения"));
+    sendBtn.textContent = translateText("Сохранить");
+  }
+  elements.messageInput.value = message.text ?? "";
+  elements.messageInput.focus();
+  elements.messageInput.setSelectionRange(elements.messageInput.value.length, elements.messageInput.value.length);
+  announce("Редактирование сообщения. Измените текст и нажмите Enter для сохранения или Escape для отмены.");
+}
+
+function clearEditTarget({ announceCancel = false, restoreDraft = false } = {}) {
+  const previous = editTarget;
+  editTarget = null;
+  const bar = document.querySelector("#edit-preview-bar");
+  if (bar) bar.hidden = true;
+  elements.messageForm?.classList.remove("composer-has-edit");
+  const sendBtn = document.querySelector("#send-message");
+  if (sendBtn) {
+    sendBtn.setAttribute("aria-label", translateText("Отправить сообщение"));
+    sendBtn.textContent = translateText("Отправить");
+  }
+  if (previous && restoreDraft) {
+    elements.messageInput.value = previous.previousDraft ?? "";
+  }
+  if (announceCancel && previous) announce("Редактирование отменено.");
+}
+
+async function saveEditedMessage(target, nextText) {
+  if (!account || !selectedChat || !target) return;
+  const normalizedOriginal = String(target.originalText ?? "").replace(/\r\n?/g, "\n").trim();
+  if (nextText === normalizedOriginal) {
+    const draft = target.previousDraft ?? "";
+    clearEditTarget();
+    elements.messageInput.value = draft;
+    announce("Текст сообщения не изменился.");
+    return;
+  }
+  const sendBtn = document.querySelector("#send-message");
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const result = await api(`/api/v1/chats/${target.conversationId}/messages/${target.messageId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ text: nextText })
+    });
+    const draft = target.previousDraft ?? "";
+    clearEditTarget();
+    elements.messageInput.value = draft;
+    if (result?.message) {
+      applyMessageEditedLocally(result.message);
+    }
+    announce("Сообщение изменено.");
+    await loadChats({ quiet: true });
+  } catch (error) {
+    announce(`Не удалось изменить сообщение: ${error.message}`);
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+function applyMessageEditedLocally(updatedMessage) {
+  if (!updatedMessage?.messageId) return;
+  if (selectedChat?.conversationId === updatedMessage.conversationId) {
+    const local = messages.find((candidate) => candidate.messageId === updatedMessage.messageId);
+    if (local) {
+      local.text = updatedMessage.text;
+      local.editedAt = updatedMessage.editedAt ?? Date.now();
+    }
+    for (const candidate of messages) {
+      if (candidate.replyTo?.messageId === updatedMessage.messageId && !candidate.replyTo.deleted) {
+        candidate.replyTo = {
+          ...candidate.replyTo,
+          text: String(updatedMessage.text ?? "").slice(0, 160)
+        };
+      }
+    }
+    if (replyTarget?.messageId === updatedMessage.messageId) {
+      replyTarget.snippet = String(updatedMessage.text ?? "").trim().slice(0, 140);
+      const textEl = document.querySelector("#reply-preview-text");
+      if (textEl) textEl.textContent = replyTarget.snippet;
+    }
+    if (actionMessage?.messageId === updatedMessage.messageId && document.querySelector("#message-actions-dialog")?.open) {
+      actionMessage = local ?? updatedMessage;
+      const preview = document.querySelector("#message-actions-preview");
+      if (preview) {
+        const mine = actionMessage.senderUserId === account?.userId;
+        const authorName = resolveMessageAuthor(actionMessage, mine);
+        preview.textContent = `${authorName}: ${messageSnippetText(actionMessage)}`;
+      }
+    }
+    renderMessages({ preserveVoicePlayback: true });
+  }
+  const favDialog = document.querySelector("#favorites-dialog");
+  if (favDialog?.open) void loadFavoritesIntoDialog();
+}
+
 function setReplyTarget(message) {
   if (!message || !selectedChat || message.localState) return;
+  if (editTarget) clearEditTarget({ restoreDraft: true });
   const mine = message.senderUserId === account?.userId;
   const authorName = resolveMessageAuthor(message, mine);
   const snippet = messageSnippetText(message).slice(0, 140);
@@ -1518,6 +1683,11 @@ function openMessageActions(message, returnFocusEl) {
   }
 
   renderDialogReactionButtons(message);
+
+  const editBtn = document.querySelector("#msg-action-edit");
+  if (editBtn) {
+    editBtn.hidden = !canEditMessage(message);
+  }
 
   const copyBtn = document.querySelector("#msg-action-copy");
   if (copyBtn) {
@@ -1679,6 +1849,7 @@ function applyMessageRemovedLocally(conversationId, messageId) {
       }
     }
     if (replyTarget?.messageId === messageId) clearReplyTarget();
+    if (editTarget?.messageId === messageId) clearEditTarget({ restoreDraft: true });
     if (actionMessage?.messageId === messageId) closeMessageActionsDialog({ restoreFocus: false });
     renderMessages({ preserveVoicePlayback: true });
   }
@@ -1818,13 +1989,15 @@ function renderFavoritesList() {
     const body = document.createElement("p");
     body.className = "favorite-item-text";
     body.dataset.userContent = "true";
-    body.textContent = entry.text?.trim()
-      ? entry.text
-      : entry.kind === "voice"
+    if (entry.text?.trim()) {
+      renderLinkifiedText(body, entry.text);
+    } else {
+      body.textContent = entry.kind === "voice"
         ? translateText("Голосовое сообщение")
         : entry.fileName
           ? `${translateText("Файл")}: ${entry.fileName}`
           : translateText("Сообщение");
+    }
 
     const actions = document.createElement("div");
     actions.className = "favorite-item-actions";
@@ -1900,6 +2073,12 @@ function jumpToMessageById(messageId) {
   targetEl.tabIndex = -1;
   targetEl.focus({ preventScroll: true });
   announce("Переход к исходному сообщению.");
+}
+
+function handleRealtimeMessageEdited(payload) {
+  if (!payload?.message) return;
+  applyMessageEditedLocally(payload.message);
+  void loadChats({ quiet: true });
 }
 
 function handleRealtimeMessageDeleted(payload) {

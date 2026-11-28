@@ -9,10 +9,12 @@ const observers = new Set();
 const pollCounts = new Map();
 const POLLS = new Set(["GET сигналы звонка", "GET состояние звонка", "GET присутствие"]);
 const SAFE_TOKEN = /^[a-zа-яё0-9 _.,:()№/+\-=]{0,100}$/iu;
+const SAFE_STATIC_LABELS = new Set(["SDP предложение", "SDP ответ"]);
 const CONFIDENTIAL = /(?:\d{1,3}\.){3}\d{1,3}|[0-9a-f]{8}-[0-9a-f-]{27,}|(?:turns?|stun):|bearer|secret|token|password|cookie|authorization|credential|candidate|sdp|@|https?:\/\//i;
 const CATEGORIES = new Set(["Звонки", "Интерфейс", "Навигация", "Сеть", "Сервер", "Голосовые", "Микрофон", "Ошибки"]);
 function safe(value) {
   const v = String(value ?? "").slice(0, 100);
+  if (SAFE_STATIC_LABELS.has(v)) return v;
   return SAFE_TOKEN.test(v) && !CONFIDENTIAL.test(v) ? v : "[данные скрыты]";
 }
 export function logDiagnostic(category, action, detail = "") {

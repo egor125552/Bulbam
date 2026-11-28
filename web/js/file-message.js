@@ -6,6 +6,7 @@ import {
   formatFileSize,
   formatMediaDuration
 } from "./file-format.js";
+import { renderLinkifiedText } from "./message-links.js";
 
 const AUDIO_SPEEDS = [1, 1.25, 1.5, 2];
 const AUDIO_SPEED_KEY = "bulbam.audio.playbackRate";
@@ -421,7 +422,7 @@ function appendCaption(root, text) {
   const p = document.createElement("p");
   p.className = "file-caption";
   p.dataset.userContent = "true";
-  p.textContent = clean;
+  renderLinkifiedText(p, clean);
   root.append(p);
   return p;
 }
@@ -434,7 +435,13 @@ function refreshCachedCard(entry, message, authorName) {
   if (clean && !entry.caption) {
     entry.caption = appendCaption(entry.root, clean);
   } else if (entry.caption) {
-    entry.caption.textContent = clean;
+    if (clean) {
+      renderLinkifiedText(entry.caption, clean);
+      entry.caption.hidden = false;
+    } else {
+      entry.caption.replaceChildren();
+      entry.caption.hidden = true;
+    }
   }
 }
 

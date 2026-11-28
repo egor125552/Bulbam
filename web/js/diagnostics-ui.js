@@ -1,4 +1,6 @@
 import { logDiagnostic, diagnosticText, clearDiagnostics, subscribeDiagnostics, diagnosticErrorName, diagnosticErrorOrigin, diagnosticStats } from "./diagnostics-log.js";
+import { callProfiler, formatCallProfileReport } from "./call-profiler.js";
+import { translateText } from "./i18n.js";
 
 const IGNORE = /password|secret|token|recovery|code|passkey|key|username|message|text|search|invite|profile|auth/i;
 function eventTargetId(node) {
@@ -11,16 +13,34 @@ function eventTargetId(node) {
 export function setupDiagnostics() {
   const field = document.querySelector("#diagnostics-log");
   const status = document.querySelector("#diagnostics-log-status");
+  const profilerField = document.querySelector("#call-profiler-output");
+  const profilerStatus = document.querySelector("#call-profiler-status");
   if (!field) return;
   const dialog = document.querySelector("#settings-dialog");
   let updateScheduled = false;
+  const updateProfilerField = () => {
+    if (!profilerField) return;
+    profilerField.value = formatCallProfileReport(callProfiler.getLatest(), translateText);
+  };
   const updateField = () => {
     field.value = diagnosticText();
     const stats=diagnosticStats();
     const count=document.querySelector('#diagnostics-count');
     if(count)count.textContent=`Событий: ${stats.count} из ${stats.limit}. Всего за сеанс: ${stats.total}.`;
+    updateProfilerField();
   };
   updateField();
+  callProfiler.subscribe(() => {
+    updateProfilerField();
+  });
+  window.addEventListener("bulbam:language-changed", updateProfilerField);
+  if (typeof window !== "undefined") {
+    window.__bulbamCallProfiler = {
+      latest: () => callProfiler.getLatest(),
+      history: () => callProfiler.getHistory(),
+      text: () => formatCallProfileReport(callProfiler.getLatest(), translateText)
+    };
+  }
   // Keeping a 900-line textarea synchronized after every polling request
   // would slow down ordinary calls. Only render while diagnostics is open.
   subscribeDiagnostics(() => {
@@ -75,6 +95,21 @@ export function setupDiagnostics() {
     // Revoke on a later task, after Safari has started the download.
     setTimeout(() => URL.revokeObjectURL(url), 30000);
     if (status) status.textContent = "Скачивание журнала начато.";
+  });
+  document.querySelector("#call-profiler-clear")?.addEventListener("click", () => {
+    callProfiler.clear();
+    if (profilerStatus) profilerStatus.textContent = "Профиль звонка очищен.";
+  });
+  document.querySelector("#call-profiler-copy")?.addEventListener("click", async () => {
+    const text = formatCallProfileReport(callProfiler.getLatest(), translateText);
+    try {
+      await navigator.clipboard.writeText(text);
+      if (profilerStatus) profilerStatus.textContent = "Профиль звонка скопирован.";
+    } catch {
+      profilerField?.focus();
+      profilerField?.select();
+      if (profilerStatus) profilerStatus.textContent = "Профиль выделен. Скопируйте его стандартной командой.";
+    }
   });
   logDiagnostic("Навигация", "диагностика запущена");
 }

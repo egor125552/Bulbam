@@ -197,11 +197,12 @@ body.signed-in-mode {
     color-mix(in srgb, var(--brand) 2.5%, var(--surface));
 }
 
-/* The call screen lives outside the conversation; chat keeps three stable rows. */
+/* The call screen lives outside the conversation; chat keeps header, optional group call banner, history, and composer. */
 .conversation-header { grid-row: 1; }
+.group-call-banner { grid-row: 2; }
 .conversation-empty,
-.message-list { grid-row: 2; min-height: 0; }
-.composer { grid-row: 3; }
+.message-list { grid-row: 3; min-height: 0; }
+.composer { grid-row: 4; }
 
 /* Keep the header/composer as fixed grid rows and scroll only the history. */
 .signed-in-mode .conversation-pane { height: 100%; min-height: 0; overflow: hidden; }
@@ -255,7 +256,7 @@ body.signed-in-mode {
   box-shadow: none;
   background: transparent;
 }
-.message-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 0; font-variant-numeric: tabular-nums; }
+.message-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem; font-variant-numeric: tabular-nums; }
 .jump-to-latest {
   position: absolute;
   right: 1.25rem;
@@ -400,6 +401,7 @@ body.signed-in-mode {
 .call-banner.is-minimized .call-copy h2 { font-size: 0.9rem; }
 .call-banner.is-minimized #call-peer { margin: 0.2rem 0 0; font-size: 0.95rem; }
 .call-banner.is-minimized #call-status,
+.call-banner.is-minimized .call-participants-section,
 .call-banner.is-minimized .call-actions { display: none; }
 .call-banner.is-minimized .call-screen-navigation { position: static; flex-shrink: 0; }
 .call-banner.is-minimized .call-screen-navigation button { padding-inline: 0.65rem; }
@@ -852,8 +854,8 @@ dialog::backdrop {
 
 .showcase-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.35rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.3rem;
   padding: 0.32rem;
   border-radius: 0.95rem;
   border: 1px solid var(--glass-border);
@@ -907,6 +909,78 @@ dialog::backdrop {
   gap: 1rem;
   justify-items: center;
   animation: bulbam-scene-in 240ms var(--ease-spring) both;
+}
+
+.scene-chat-card {
+  width: min(100%, 26rem);
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.8rem 1rem;
+  border-radius: 1.1rem;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  box-shadow: inset 0 1px 0 var(--glass-specular), 0 10px 26px rgba(17, 24, 39, 0.08);
+  text-align: left;
+}
+
+.scene-reply-quote {
+  display: grid;
+  gap: 0.05rem;
+  padding: 0.3rem 0.55rem;
+  border-left: 3px solid var(--brand);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  font-size: 0.78rem;
+}
+
+.scene-reply-quote strong {
+  color: var(--brand);
+  font-weight: 750;
+}
+
+.scene-reply-quote span {
+  color: var(--muted);
+}
+
+.scene-chat-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.scene-chat-link {
+  color: #0b57d0;
+  text-decoration: underline;
+  font-weight: 650;
+}
+
+@media (prefers-color-scheme: dark) {
+  .scene-chat-link {
+    color: #7cc4ff;
+  }
+}
+
+.scene-chat-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.scene-chip {
+  padding: 0.16rem 0.52rem;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface-soft);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.scene-edited-tag {
+  margin-left: auto;
+  font-size: 0.74rem;
+  font-style: italic;
+  color: var(--muted);
 }
 
 .scene-glass-bar {
@@ -1716,7 +1790,7 @@ dialog::backdrop {
 .empty-capabilities {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.65rem;
 }
 
@@ -1842,6 +1916,31 @@ dialog::backdrop {
 
 .call-banner.is-minimized .call-visual-stage {
   display: none;
+}
+
+.call-banner.is-pocket:not([hidden]) {
+  background: #000 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  justify-items: center;
+  align-content: center;
+}
+
+.call-banner.is-pocket > :not(#call-pocket) {
+  display: none !important;
+}
+
+#call-pocket {
+  margin-top: 0.35rem;
+}
+
+.call-banner.is-pocket #call-pocket {
+  background: #111;
+  color: #fff;
+  border: 2px solid #fff;
+  padding: 1rem 1.5rem;
+  font-size: 1.05rem;
+  font-weight: 700;
 }
 
 #call-answer {

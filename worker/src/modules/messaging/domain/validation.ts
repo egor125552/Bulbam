@@ -57,6 +57,18 @@ export function validateMessageInput(body: Record<string, unknown>) {
   return { text, clientMessageId: rawClientMessageId, replyToMessageId };
 }
 
+export function validateMessageEditInput(body: Record<string, unknown>) {
+  const rawText = body.text;
+  if (typeof rawText !== "string") {
+    badRequest("invalid_message", "Текст сообщения обязателен.");
+  }
+  const text = rawText.replace(/\r\n?/g, "\n").trim();
+  if (!text || text.length > 4000) {
+    badRequest("invalid_message", "Сообщение должно содержать от 1 до 4000 символов.");
+  }
+  return { text };
+}
+
 export function validateDeleteScope(value: unknown): "me" | "everyone" {
   if (value === "me" || value === "everyone") return value;
   badRequest("invalid_delete_scope", "Укажите способ удаления: у себя или у всех.");

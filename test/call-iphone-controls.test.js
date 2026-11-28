@@ -75,38 +75,39 @@ test("pocket mode preserves the same call and exits through the single accessibl
  expect(classList.contains("is-pocket")).toBe(false);
 });
 
-test("call background audio loops quietly and is stopped on hangup",async()=>{
- const audio={paused:true,loop:false,volume:1,currentTime:12,
+test("call background audio stays disabled and completely silent during calls",async()=>{
+ const audio={paused:false,loop:true,volume:1,muted:false,currentTime:12,
   play:vi.fn(async()=>{audio.paused=false;}),
   pause:vi.fn(()=>{audio.paused=true;})
  };
  const session={metadata:null};
  const player=createCallKeepaliveAudio(audio,{mediaSession:session});
- player.activate("Собеседник");
- expect(audio.volume).toBe(0.01);
- expect(audio.loop).toBe(true);
- await player.resume();
- expect(audio.play).toHaveBeenCalledOnce();
- player.deactivate();
+ expect(player.activate("Собеседник")).toBe(false);
+ expect(audio.volume).toBe(0);
+ expect(audio.muted).toBe(true);
+ expect(audio.loop).toBe(false);
  expect(audio.pause).toHaveBeenCalledOnce();
+ await player.resume();
+ expect(audio.play).not.toHaveBeenCalled();
+ player.deactivate();
  expect(audio.currentTime).toBe(0);
  expect(session.metadata).toBeNull();
  await player.resume();
- expect(audio.play).toHaveBeenCalledOnce();
+ expect(audio.play).not.toHaveBeenCalled();
 });
 
-test("late keepalive playback cannot restart after hangup",async()=>{
- let settle;
- const audio={paused:true,currentTime:0,volume:1,loop:false,
-  play:vi.fn(()=>new Promise(resolve=>{settle=()=>{audio.paused=false;resolve();};})),
+test("keepalive audio never starts playback even if activate and resume are called repeatedly",async()=>{
+ const audio={paused:true,currentTime:0,volume:0.5,muted:false,loop:true,
+  play:vi.fn(async()=>{audio.paused=false;}),
   pause:vi.fn(()=>{audio.paused=true;})};
  const player=createCallKeepaliveAudio(audio,{});
- player.activate("Caller");
- await Promise.resolve();
+ expect(player.activate("Caller")).toBe(false);
+ await player.resume();
  player.deactivate();
- settle();
- await vi.waitFor(()=>expect(audio.pause).toHaveBeenCalledTimes(2));
+ expect(audio.play).not.toHaveBeenCalled();
  expect(audio.paused).toBe(true);
+ expect(audio.muted).toBe(true);
+ expect(audio.volume).toBe(0);
 });
 
 test("stale cached app shell without keepalive audio cannot break a call",async()=>{

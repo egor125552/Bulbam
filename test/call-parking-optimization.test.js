@@ -90,6 +90,36 @@ describe("ICE candidate batcher", () => {
     vi.advanceTimersByTime(200);
     expect(flushed).toHaveLength(0);
   });
+
+  test("immediateFirst and isUrgent flush the first candidate and TURN relay candidates at 0ms", () => {
+    vi.useFakeTimers();
+    const flushed = [];
+    const batcher = createIceCandidateBatcher({
+      flush: (items) => { flushed.push(items); },
+      windowMs: 40,
+      maxBatch: 8,
+      immediateFirst: true,
+      isUrgent: (item) => String(item?.payload?.candidate ?? "").includes(" typ relay ")
+    });
+
+    // First candidate flushes immediately without waiting 40 ms.
+    batcher.push({ kind: "ice", payload: { candidate: "candidate:1 1 udp 2122260223 10.0.0.1 50000 typ host" } });
+    expect(flushed).toHaveLength(1);
+
+    // Subsequent non-relay candidate waits in batch window.
+    batcher.push({ kind: "ice", payload: { candidate: "candidate:2 1 udp 1686052607 1.2.3.4 50001 typ srflx" } });
+    expect(flushed).toHaveLength(1);
+
+    // Urgent TURN relay candidate flushes immediately together with queued srflx.
+    batcher.push({ kind: "ice", payload: { candidate: "candidate:3 1 udp 41885439 5.6.7.8 50002 typ relay raddr 0.0.0.0" } });
+    expect(flushed).toHaveLength(2);
+    expect(flushed[1]).toHaveLength(2);
+
+    // After clear() (new ICE epoch), leading-edge immediate flush resets.
+    batcher.clear();
+    batcher.push({ kind: "ice", payload: { candidate: "candidate:4 1 udp 2122260223 10.0.0.2 50003 typ host" } });
+    expect(flushed).toHaveLength(3);
+  });
 });
 
 describe("adaptive call polling cadence", () => {

@@ -1,6 +1,7 @@
 import { prepareRingback, startRingback, stopRingback, resetRingbackAudio } from "./call-ringback.js";
 import { prepareCallCues, playCallCue, stopCallCues, resetCallCueAudio } from "./call-cues.js";
 import { startCallTrace, logCallEvent } from "./call-event-log.js";
+import { callProfiler, formatCallProfileCompact } from "./call-profiler.js";
 import { createCallConnectionWatchdog } from "./call-connection-watchdog.js";
 import { createRecoveryGate } from "./call-recovery-gate.js";
 import { createCallHeadsetControls } from "./call-headset-controls.js";
@@ -28,9 +29,30 @@ import {
   markBitrateNetworkRecovered,
   stopAdaptiveBitrate
 } from "./call-bitrate-controller.js";
+import {
+  createJitterBufferController,
+  applyJitterBufferTarget,
+  formatJitterBufferLabel
+} from "./call-jitter-controller.js";
+import {
+  shouldInitiateOffer,
+  reconcileMeshPeers,
+  formatParticipantCount,
+  buildGroupCallBannerText,
+  formatParticipantStatus
+} from "./group-call-mesh.js";
+import {
+  createGroupCallPickerState,
+  formatCallPickerCount,
+  formatCallPickerSubmitLabel
+} from "./group-call-picker.js";
+import { translateText } from "./i18n.js";
 import { announce, elements, getCurrentSession } from "./ui.js";
 
 let account = null;
+let groupCallPickerChat = null;
+let groupCallPickerState = null;
+let groupCallPickerRequestId = 0;
 let currentCall = null;
 let localStream = null;
 let peerConnection = null;
@@ -61,10 +83,13 @@ let qualityMonitorTimer = null;
 let callTimerInterval = null;
 let lastInboundAudioStats = null;
 let lastSelectedCallRoute = null;
-let healthyQualitySamples = 0;
-let jitterBufferTargetMs = null;
+const jitterController = createJitterBufferController();
 let audioConnectedOnce = false;
 let networkRecoveryActive = false;
+let lastConnectedAt = 0;
+let watchdogExtended = false;
+let callAbortController = null;
+let callActivityActive = false;
 let signalProcessingQueue = Promise.resolve();
 let signalPollInFlight = false;
 let signalPollRequestId = 0;
@@ -79,11 +104,91 @@ let headsetControls = null;
 let pendingFastRecovery = null;
 let profileSwitchEpoch = 0;
 let profileSwitchQueue = Promise.resolve();
+const groupPeers = new Map();
+const activeGroupCallsByChat = new Map();
+let selectedGroupChatId = null;
+let localTrackRecovering = false;
+let remoteAudioStopping = false;
+let activeProfileSessionId = null;
+let firstAudioProbeTimer = null;
+let firstAudioProbeAttempts = 0;
+let profileLoggedForSessionId = null;
+
+function setCallActivityFlag(active) {
+  const next = Boolean(active);
+  if (callActivityActive === next) return;
+  callActivityActive = next;
+  if (typeof document !== "undefined" && document.documentElement) {
+    document.documentElement.dataset.bulbamCallActive = next ? "true" : "false";
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("bulbam:call-activity-changed", { detail: { active: next } }));
+  }
+}
+
+function ensureCallAbortSignal() {
+  if (typeof AbortController === "undefined") return undefined;
+  if (!callAbortController || callAbortController.signal.aborted) {
+    callAbortController = new AbortController();
+  }
+  return callAbortController.signal;
+}
+
+function abortCallRequests() {
+  if (callAbortController) {
+    try { callAbortController.abort(); } catch {}
+    callAbortController = null;
+  }
+}
+
+function isRelayCandidateSignal(item) {
+  const text = item?.payload?.candidate;
+  return typeof text === "string" && /\btyp relay\b/.test(text);
+}
+
+function hasFreshTurnCache() {
+  return Boolean(
+    lastIceServers &&
+    (Date.now() - iceServersFetchedAt) < 120_000 &&
+    turnAvailable(lastIceServers)
+  );
+}
+
+function isGroupCall(call = currentCall) {
+  return call?.kind === "group";
+}
+
+function isAnyRemoteAudioBlocked() {
+  if (remotePlaybackBlocked) return true;
+  for (const entry of groupPeers.values()) {
+    if (entry.remotePlaybackBlocked) return true;
+  }
+  return false;
+}
+
+function ensureRemoteAudioPlaying() {
+  if (!currentCall || remoteAudioStopping) return;
+  const players = [];
+  if (elements.callRemoteAudio?.srcObject) players.push(elements.callRemoteAudio);
+  for (const entry of groupPeers.values()) {
+    if (entry.audioEl?.srcObject) players.push(entry.audioEl);
+  }
+  for (const player of players) {
+    if (player.paused && typeof player.play === "function") {
+      void Promise.resolve().then(() => player.play()).catch(() => {});
+    }
+  }
+}
+
 const networkRestoration = createCallNetworkRestoration(({ reason, freshNetwork }) => {
   if (freshNetwork) recoveryGate.reset();
   if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
   networkRecoveryActive = true;
   logCallEvent("восстановление", freshNetwork ? "сеть вернулась" : "маршрут изменился");
+  if (isGroupCall(currentCall)) {
+    void recoverAllGroupPeers(reason, freshNetwork);
+    return;
+  }
   initialConnectionWatchdog.disarm();
   clearTimeout(recoveryWatchdogTimer);
   recoveryWatchdogTimer = null;
@@ -103,23 +208,36 @@ function onNetworkAvailable(reason) {
   });
 }
 
-const DISCONNECT_RECOVERY_GRACE_MS = 2_500;
+const DISCONNECT_RECOVERY_GRACE_MS = 3_500;
 // Mobile ICE/TURN negotiation may take longer than 7 seconds after a radio handover.
 const RECOVERY_WATCHDOG_MS = 12_000;
 const QUALITY_SAMPLE_MS = 2_000;
-const JITTER_BUFFER_DEGRADED_MS = 180;
-const JITTER_BUFFER_SEVERE_MS = 300;
 const FALLBACK_ICE_SERVERS = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 const ICE_CANDIDATE_POOL_SIZE = 4;
 const ICE_CACHE_TTL_MS = 180_000;
 const iceBatcher = createIceCandidateBatcher({
   flush: flushIceCandidateBatch,
-  windowMs: 90,
-  maxBatch: 8
+  windowMs: 40,
+  maxBatch: 8,
+  immediateFirst: true,
+  isUrgent: isRelayCandidateSignal
 });
 const recoveryGate = createRecoveryGate();
 const initialConnectionWatchdog = createCallConnectionWatchdog((callId) => {
   if (currentCall?.callId !== callId || currentCall.status !== "accepted" || isPeerConnected()) return;
+  // On slow mobile links, TURN relay gathering or an in-flight offer may still be
+  // progressing at 12s. Give one 6-second grace extension before tearing it down.
+  if (!watchdogExtended && (peerConnection?.iceGatheringState === "gathering" || restartInFlight)) {
+    watchdogExtended = true;
+    logCallEvent("ожидание подключения", "сбор ICE ещё идёт");
+    setTimeout(() => {
+      if (currentCall?.callId !== callId || currentCall.status !== "accepted" || isPeerConnected()) return;
+      logCallEvent("таймер подключения истёк", "18 s");
+      setCallStatus("Соединение зависло. Автоматически восстанавливаю аудио…");
+      void recoverCallConnection({ hard: false, reason: "initial-connection-timeout" });
+    }, 6_000);
+    return;
+  }
   logCallEvent("таймер подключения истёк", "12 s");
   if (isTemporaryTurnOnly() && !relayCandidateSeen) {
     logCallEvent("TURN не дал relay", "нет кандидата за 12 секунд");
@@ -152,12 +270,23 @@ export function setupCalls() {
   });
   headsetControls = createCallHeadsetControls(navigator, {
     onMute: (next) => setMuted(next),
-    onHangup: () => { if (currentCall) void endCall(); }
+    onHangup: () => { if (currentCall) void endCall(); },
+    onMediaKey: () => ensureRemoteAudioPlaying()
+  });
+  // Pressing headset Play/Pause on iOS/Safari can pause the active <audio> tag.
+  // Keep remote voice playing whenever the call is still active.
+  elements.callRemoteAudio?.addEventListener?.("pause", () => {
+    if (!currentCall || remoteAudioStopping || !elements.callRemoteAudio?.srcObject) return;
+    void Promise.resolve().then(() => elements.callRemoteAudio.play()).catch(() => {});
   });
   elements.callStartButton.addEventListener("click", () => {
     prepareRingback();
     prepareCallCues();
     void startCall();
+  });
+  elements.groupCallJoinButton?.addEventListener("click", () => {
+    prepareCallCues();
+    void joinActiveGroupCallFromBanner();
   });
   elements.callAnswerButton.addEventListener("click", () => { prepareCallCues(); void answerCall(); });
   elements.callDeclineButton.addEventListener("click", () => { prepareCallCues(); void declineCall(); });
@@ -165,6 +294,7 @@ export function setupCalls() {
   elements.callHandoffButton.addEventListener("click", () => void handoffCall());
   document.querySelector("#call-discover")?.addEventListener("click",()=>void discoverActiveCall());
   elements.callEndButton.addEventListener("click", () => { prepareCallCues(); void endCall(); });
+  elements.callEndAllButton?.addEventListener("click", () => { prepareCallCues(); void endCall({ endForAll: true }); });
   const routeChoice=document.querySelector("#turn-route-preference");
   if(routeChoice){
     routeChoice.value=isTemporaryTurnOnly()?"relay":"auto";
@@ -200,6 +330,29 @@ export function setupCalls() {
   elements.callMinimizeButton.addEventListener("click", minimizeCall);
   elements.callExpandButton.addEventListener("click", expandCall);
   elements.callDismissButton.addEventListener("click", dismissFinishedCall);
+  elements.groupCallPickerSelectAllButton?.addEventListener("click", () => {
+    if (!groupCallPickerState) return;
+    groupCallPickerState.toggleAll();
+    renderGroupCallPicker();
+  });
+  elements.groupCallPickerCancelButton?.addEventListener("click", () => {
+    closeGroupCallPicker({ restoreFocus: true });
+  });
+  elements.groupCallPickerDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeGroupCallPicker({ restoreFocus: true });
+  });
+  elements.groupCallPickerSubmitButton?.addEventListener("click", () => {
+    if (!groupCallPickerChat || !groupCallPickerState) return;
+    const snap = groupCallPickerState.snapshot();
+    if (!snap.canCall) return;
+    const targetChat = groupCallPickerChat;
+    const invitedUserIds = [...snap.selectedIds];
+    closeGroupCallPicker({ restoreFocus: false });
+    prepareRingback();
+    prepareCallCues();
+    void executeStartCall(targetChat, { invitedUserIds });
+  });
 
   const observer = new MutationObserver(syncCallButton);
   observer.observe(elements.conversationPeer, { childList: true, characterData: true, subtree: true });
@@ -208,6 +361,15 @@ export function setupCalls() {
   window.addEventListener("bulbam:account-changed", (event) => {
     void switchAccount(event.detail?.account ?? null);
   });
+  window.addEventListener("bulbam:chat-changed", (event) => {
+    const chat = event.detail?.chat ?? null;
+    selectedGroupChatId = chat?.kind === "group" ? chat.conversationId : null;
+    renderGroupCallBanner();
+    syncCallButton();
+    if (selectedGroupChatId && account) {
+      void refreshActiveGroupCallForChat(selectedGroupChatId);
+    }
+  });
   window.addEventListener("bulbam:audio-profile-changed", () => {
     void applyAudioProfileDuringCall();
   });
@@ -215,7 +377,11 @@ export function setupCalls() {
     if (!currentCall || currentCall.status !== "accepted" || recoveryPending) return;
     networkRestoration.offline();
     networkRecoveryActive = true;
-    raiseJitterBufferForNetworkStress(peerConnection, "severe");
+    if (isGroupCall(currentCall)) {
+      for (const entry of groupPeers.values()) raiseJitterBufferForNetworkStress(entry.pc, "severe");
+    } else {
+      raiseJitterBufferForNetworkStress(peerConnection, "severe");
+    }
     setCallStatus("Сеть недоступна. Сохраняю звонок и жду восстановления подключения…");
   });
   window.addEventListener("online", () => onNetworkAvailable("online"));
@@ -250,9 +416,12 @@ async function switchAccount(nextAccount) {
   if (currentCall) { logCallEvent("смена аккаунта"); cleanupMedia(); }
   account = nextAccount;
   currentCall = null;
+  activeGroupCallsByChat.clear();
+  selectedGroupChatId = null;
   resetCallRuntime();
   closeCallRealtime();
   renderIdle();
+  renderGroupCallBanner();
   syncCallButton();
   if (!account) return;
   connectCallRealtime();
@@ -308,30 +477,189 @@ async function handleVisibleCallPush(data) {
   }
 }
 
+function closeGroupCallPicker({ restoreFocus = false } = {}) {
+  groupCallPickerRequestId += 1;
+  groupCallPickerChat = null;
+  groupCallPickerState = null;
+  if (elements.groupCallPickerDialog?.open) {
+    elements.groupCallPickerDialog.close();
+  }
+  if (restoreFocus && !elements.callStartButton.hidden && !elements.callStartButton.disabled) {
+    elements.callStartButton.focus();
+  }
+}
+
+function renderGroupCallPicker() {
+  if (!groupCallPickerState) return;
+  const snap = groupCallPickerState.snapshot();
+  if (elements.groupCallPickerCount) {
+    elements.groupCallPickerCount.textContent = translateText(formatCallPickerCount(snap.selectedCount));
+  }
+  if (elements.groupCallPickerSelectAllButton) {
+    elements.groupCallPickerSelectAllButton.hidden = snap.candidates.length < 2;
+    elements.groupCallPickerSelectAllButton.textContent = translateText(
+      snap.allSelected ? "Снять выбор" : "Выбрать всех"
+    );
+  }
+  if (elements.groupCallPickerSubmitButton) {
+    elements.groupCallPickerSubmitButton.hidden = !snap.canCall;
+    elements.groupCallPickerSubmitButton.textContent = translateText(
+      formatCallPickerSubmitLabel(snap.selectedCount)
+    );
+  }
+  if (!elements.groupCallPickerList) return;
+  elements.groupCallPickerList.replaceChildren();
+  if (snap.candidates.length === 0) {
+    if (elements.groupCallPickerStatus) {
+      elements.groupCallPickerStatus.textContent = translateText("В группе пока нет других участников для звонка.");
+    }
+    return;
+  }
+  if (elements.groupCallPickerStatus) {
+    elements.groupCallPickerStatus.textContent = "";
+  }
+  for (const member of snap.candidates) {
+    const selected = groupCallPickerState.isSelected(member.userId);
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "group-user-choice";
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+
+    const nameSpan = document.createElement("span");
+    nameSpan.dataset.userContent = "true";
+    nameSpan.textContent = member.username
+      ? `${member.displayName} (@${member.username})`
+      : member.displayName;
+
+    const badge = document.createElement("span");
+    badge.className = "group-call-picker-badge";
+    badge.textContent = translateText(selected ? "Выбран" : "Не выбран");
+
+    button.append(nameSpan, badge);
+    button.addEventListener("click", () => {
+      if (!groupCallPickerState) return;
+      groupCallPickerState.toggle(member.userId);
+      renderGroupCallPicker();
+    });
+    li.append(button);
+    elements.groupCallPickerList.append(li);
+  }
+}
+
+async function openGroupCallPicker(chat) {
+  if (!elements.groupCallPickerDialog) {
+    await executeStartCall(chat);
+    return;
+  }
+  const requestId = ++groupCallPickerRequestId;
+  groupCallPickerChat = chat;
+  groupCallPickerState = createGroupCallPickerState([], account?.userId ?? null);
+
+  if (elements.groupCallPickerTitle) {
+    elements.groupCallPickerTitle.textContent = translateText("Кому позвонить?");
+  }
+  if (elements.groupCallPickerCount) {
+    elements.groupCallPickerCount.textContent = translateText(formatCallPickerCount(0));
+  }
+  if (elements.groupCallPickerSelectAllButton) {
+    elements.groupCallPickerSelectAllButton.hidden = true;
+  }
+  if (elements.groupCallPickerSubmitButton) {
+    elements.groupCallPickerSubmitButton.hidden = true;
+    elements.groupCallPickerSubmitButton.textContent = translateText("Позвонить");
+  }
+  if (elements.groupCallPickerList) {
+    elements.groupCallPickerList.replaceChildren();
+  }
+  if (elements.groupCallPickerStatus) {
+    elements.groupCallPickerStatus.textContent = translateText("Загружаем участников группы…");
+  }
+
+  if (!elements.groupCallPickerDialog.open) {
+    elements.groupCallPickerDialog.showModal();
+  }
+  elements.groupCallPickerTitle?.focus();
+
+  try {
+    const result = await api(`/api/v1/chats/${encodeURIComponent(chat.conversationId)}/members`);
+    if (requestId !== groupCallPickerRequestId || !groupCallPickerState) return;
+    groupCallPickerState.setMembers(result.members ?? []);
+    renderGroupCallPicker();
+    if (groupCallPickerState.snapshot().candidates.length === 0) {
+      announce("В группе пока нет других участников для звонка.");
+    }
+  } catch (error) {
+    if (requestId !== groupCallPickerRequestId) return;
+    if (elements.groupCallPickerStatus) {
+      elements.groupCallPickerStatus.textContent = translateText("Не удалось загрузить список участников.");
+    }
+    announce(`Не удалось загрузить список участников: ${error.message}`);
+  }
+}
+
 async function startCall() {
   if (!account || currentCall) return;
   const chat = await selectedChatFromUi();
   if (!chat) {
-    announce("Сначала откройте личный чат.");
+    announce("Сначала откройте чат.");
     return;
   }
+  if (chat.kind === "group") {
+    const existingGroupCall = activeGroupCallsByChat.get(chat.conversationId);
+    if (existingGroupCall?.callId) {
+      selectedGroupChatId = chat.conversationId;
+      await joinActiveGroupCallFromBanner();
+      return;
+    }
+    await openGroupCallPicker(chat);
+    return;
+  }
+  await executeStartCall(chat);
+}
 
+async function executeStartCall(chat, { invitedUserIds = null } = {}) {
+  if (!account || currentCall || !chat) return;
   elements.callStartButton.disabled = true;
+  activeProfileSessionId = callProfiler.start("outgoing", { kind: chat.kind === "group" ? "group" : "direct" });
+  const profileSessionId = activeProfileSessionId;
   try {
     // Fetch short-lived TURN credentials while the user grants microphone
     // access and the room is being created. These independent network waits
     // must not add up sequentially on slow cellular connections.
     void prefetchIceServers();
     logCallEvent("запрос микрофона");
+    callProfiler.mark("mic_start", profileSessionId);
     localStream = await requestMicrophone();
+    callProfiler.mark("mic_ready", profileSessionId);
     logCallEvent("микрофон доступен");
-    const result = await api(`/api/v1/chats/${encodeURIComponent(chat.conversationId)}/calls`, {
-      method: "POST"
-    });
+    const init = Array.isArray(invitedUserIds) && invitedUserIds.length > 0
+      ? { method: "POST", body: JSON.stringify({ invitedUserIds }) }
+      : { method: "POST" };
+    callProfiler.mark("call_create_start", profileSessionId);
+    const result = await api(`/api/v1/chats/${encodeURIComponent(chat.conversationId)}/calls`, init);
+    callProfiler.mark("call_create_done", profileSessionId);
     currentCall = result.call;
-    answeredLocally = false;
     offerStarted = false;
     recoveryPending = false;
+    if (isGroupCall(currentCall)) {
+      answeredLocally = true;
+      startCallTrace("outgoing");
+      playCallCue("connected");
+      rememberActiveGroupCall(currentCall);
+      showConnectedControls(groupCallStatusText());
+      renderCallParticipants();
+      await syncGroupPeers();
+      startCallPolling();
+      renderGroupCallBanner();
+      const groupName = currentCall.groupTitle || currentCall.peer?.displayName || "Группа";
+      const total = currentCall.participants?.length ?? 1;
+      announce(total > 1
+        ? `Вы присоединились к групповому звонку «${groupName}». Участников: ${total}.`
+        : `Групповой звонок «${groupName}» запущен. Режим звука: ${getSelectedAudioProfile().label}.`);
+      return;
+    }
+    answeredLocally = false;
     startCallTrace("outgoing");
     showOutgoing(currentCall);
     startRingback();
@@ -340,6 +668,7 @@ async function startCall() {
     ringTimeout = setTimeout(() => void timeoutRinging(), 60_000);
     announce(`Звоним ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
+    callProfiler.setMeta({ status: "failed" }, profileSessionId);
     stopLocalStream();
     announce(`Не удалось начать звонок: ${friendlyMediaError(error)}`);
   } finally {
@@ -348,47 +677,183 @@ async function startCall() {
   }
 }
 
+async function joinActiveGroupCallFromBanner() {
+  if (!account || currentCall || !selectedGroupChatId) return;
+  const active = activeGroupCallsByChat.get(selectedGroupChatId);
+  if (!active?.callId) return;
+  const joinButton = elements.groupCallJoinButton;
+  if (joinButton) joinButton.disabled = true;
+  try {
+    void prefetchIceServers();
+    logCallEvent("запрос микрофона");
+    localStream = await requestMicrophone();
+    logCallEvent("микрофон доступен");
+    const result = await api(
+      `/api/v1/chats/${encodeURIComponent(selectedGroupChatId)}/calls/${encodeURIComponent(active.callId)}/join`,
+      { method: "POST" }
+    );
+    currentCall = result.call;
+    answeredLocally = true;
+    offerStarted = false;
+    recoveryPending = false;
+    startCallTrace("incoming");
+    playCallCue("answered");
+    rememberActiveGroupCall(currentCall);
+    showConnectedControls(groupCallStatusText());
+    renderCallParticipants();
+    await syncGroupPeers();
+    startCallPolling();
+    renderGroupCallBanner();
+    const groupName = currentCall.groupTitle || currentCall.peer?.displayName || "Группа";
+    announce(`Вы присоединились к групповому звонку «${groupName}». Режим звука: ${getSelectedAudioProfile().label}.`);
+  } catch (error) {
+    stopLocalStream();
+    announce(`Не удалось присоединиться к групповому звонку: ${friendlyMediaError(error)}`);
+  } finally {
+    if (joinButton) joinButton.disabled = false;
+    syncCallButton();
+  }
+}
+
 async function answerCall() {
-  if (!account || !currentCall || currentCall.status !== "ringing" || currentCall.direction !== "incoming") return;
+  if (!account || !currentCall) return;
+  if (isGroupCall(currentCall)) {
+    if (currentCall.joined) return;
+    const answeringCallId = currentCall.callId;
+    elements.callAnswerButton.disabled = true;
+    answeredLocally = true;
+    try {
+      void prefetchIceServers();
+      logCallEvent("запрос микрофона");
+      const microphone = await requestMicrophone();
+      if (currentCall?.callId !== answeringCallId) {
+        microphone.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      localStream = microphone;
+      logCallEvent("микрофон доступен");
+      const joined = await api(callPath("/join"), { method: "POST" });
+      if (currentCall?.callId !== answeringCallId) return;
+      logCallEvent("звонок принят");
+      clearCallNotifications(answeringCallId);
+      playCallCue("answered");
+      currentCall = joined.call;
+      recoveryPending = false;
+      rememberActiveGroupCall(currentCall);
+      showConnectedControls(groupCallStatusText());
+      renderCallParticipants();
+      await syncGroupPeers();
+      startCallPolling();
+      renderGroupCallBanner();
+      const groupName = currentCall.groupTitle || currentCall.peer?.displayName || "Группа";
+      announce(`Вы присоединились к групповому звонку «${groupName}». Режим звука: ${getSelectedAudioProfile().label}.`);
+    } catch (error) {
+      if (currentCall?.callId !== answeringCallId) return;
+      answeredLocally = false;
+      cleanupGroupPeers();
+      stopLocalStream();
+      elements.callAnswerButton.hidden = false;
+      elements.callDeclineButton.hidden = false;
+      setCallStatus(`Не удалось присоединиться: ${friendlyMediaError(error)}`);
+      announce(`Не удалось присоединиться: ${friendlyMediaError(error)}`);
+    } finally {
+      elements.callAnswerButton.disabled = false;
+    }
+    return;
+  }
+  if (currentCall.status !== "ringing" || currentCall.direction !== "incoming") return;
   const answeringCallId = currentCall.callId;
+  const answerEndpoint = callPath("/answer");
+  const endEndpoint = callPath("/end");
   elements.callAnswerButton.disabled = true;
   answeredLocally = true;
+  setCallActivityFlag(true);
+  activeProfileSessionId = callProfiler.start("incoming", { kind: "direct" });
+  const profileSessionId = activeProfileSessionId;
+  let acquiredMic = null;
+  let serverAccepted = false;
   try {
+    // Run microphone acquisition, TURN/ICE credential resolution, and POST /answer
+    // in parallel. On iOS/Safari, CoreAudio route switching takes 800-1900 ms;
+    // accepting on the server concurrently means the caller's pre-offer + pre-ICE
+    // are already waiting locally the instant the mic track resolves.
     logCallEvent("запрос микрофона");
-    const microphone = await requestMicrophone();
+    callProfiler.mark("mic_start", profileSessionId);
+    const micPromise = requestMicrophone().then((stream) => {
+      acquiredMic = stream;
+      callProfiler.mark("mic_ready", profileSessionId);
+      logCallEvent("микрофон доступен");
+      return stream;
+    });
+    const icePromise = getIceServers().catch(() => lastIceServers ?? FALLBACK_ICE_SERVERS);
+    const sendAnswerRequest = async () => {
+      callProfiler.mark("answer_http_start", profileSessionId);
+      const response = await api(answerEndpoint, { method: "POST", signal: ensureCallAbortSignal() });
+      callProfiler.mark("answer_http_done", profileSessionId);
+      serverAccepted = true;
+      return response;
+    };
+    const [micResult, iceResult, serverAnswer] = await Promise.allSettled([
+      micPromise,
+      icePromise,
+      sendAnswerRequest()
+    ]);
+
     if (currentCall?.callId !== answeringCallId) {
-      microphone.getTracks().forEach((track) => track.stop());
+      if (acquiredMic) acquiredMic.getTracks().forEach((track) => track.stop());
       return;
     }
-    localStream = microphone;
-    logCallEvent("микрофон доступен");
-    // Server answer and TURN/peer preparation happen independently. Doing
-    // them serially added a whole TURN-network round trip before the caller
-    // could start its offer. Promise.allSettled also handles a rare WebRTC
-    // initialization failure after the server already accepted the call.
-    const [peerReady, serverAnswer] = await Promise.allSettled([
-      ensurePeerConnection(),
-      api(callPath("/answer"), { method: "POST" })
-    ]);
-    if (currentCall?.callId !== answeringCallId) return;
-    if (serverAnswer.status === "rejected") throw serverAnswer.reason;
+    if (micResult.status === "rejected") {
+      if (serverAccepted) void deliverCallTermination(endEndpoint);
+      throw micResult.reason;
+    }
+    if (serverAnswer.status === "rejected") {
+      acquiredMic.getTracks().forEach((track) => track.stop());
+      throw serverAnswer.reason;
+    }
+
+    localStream = micResult.value;
+    const resolvedIceServers = iceResult.status === "fulfilled" ? iceResult.value : null;
     logCallEvent("звонок принят");
     clearCallNotifications(answeringCallId);
     playCallCue("answered");
     currentCall = serverAnswer.value.call;
     recoveryPending = false;
-    if (peerReady.status === "rejected") {
+
+    let pc = null;
+    try {
+      pc = await ensurePeerConnection({ iceServers: resolvedIceServers });
+    } catch {
+      if (currentCall?.callId !== answeringCallId) return;
       showConnectedControls("Ответ отправлен. Подключаю резервный аудиомаршрут…");
       startCallPolling();
       void recoverCallConnection({ hard: true, reason: "initial-peer-creation" });
       return;
     }
-    if (peerReady.value !== peerConnection) return;
+    if (currentCall?.callId !== answeringCallId || pc !== peerConnection) return;
+
     showConnectedControls("Соединяем звонок…");
-    startCallPolling();
+    const piggybackedSignals = Array.isArray(serverAnswer.value.signals) ? serverAnswer.value.signals : [];
+    let hasPreOffer = false;
+    for (const signal of piggybackedSignals) {
+      if (signal?.kind === "offer") hasPreOffer = true;
+    }
+    if (piggybackedSignals.length) {
+      for (const signal of piggybackedSignals) {
+        if (currentCall?.callId !== answeringCallId || recoveryPending) break;
+        const processed = await enqueueSignal(signal);
+        if (processed) {
+          signalPollCursor = Math.max(signalPollCursor, Number(signal.sequence) || 0);
+        }
+      }
+    }
+    // If the caller's pre-offer already arrived inside POST /answer, skip the
+    // redundant immediate GET /signals burst and keep normal safety polling.
+    syncCallPollingCadence({ immediateSignals: !hasPreOffer, immediateState: false });
     announce(`Вы ответили ${currentCall.peer.displayName}. Режим звука: ${getSelectedAudioProfile().label}.`);
   } catch (error) {
     if (currentCall?.callId !== answeringCallId) return;
+    callProfiler.setMeta({ status: "failed" }, profileSessionId);
     answeredLocally = false;
     cleanupPeerConnection();
     stopLocalStream();
@@ -406,6 +871,27 @@ async function resumeRecoveredCall() {
   // iOS/Safari can establish WebRTC while rejecting the autoplay promise.
   // This action must run play() directly in a real click gesture and MUST NOT
   // close or renegotiate an already-connected peer connection.
+  if (isGroupCall(currentCall) && isAnyRemoteAudioBlocked()) {
+    let anyStillBlocked = false;
+    for (const entry of groupPeers.values()) {
+      if (entry.remotePlaybackBlocked && entry.audioEl?.srcObject) {
+        try {
+          await entry.audioEl.play();
+          entry.remotePlaybackBlocked = false;
+        } catch {
+          anyStillBlocked = true;
+        }
+      }
+    }
+    if (!anyStillBlocked) {
+      elements.callResumeButton.hidden = true;
+      announce("Звук звонка включён.");
+      setCallStatus(groupCallStatusText());
+    } else {
+      setCallStatus("Браузер не разрешил воспроизвести звук. Попробуйте нажать ещё раз.");
+    }
+    return;
+  }
   if (remotePlaybackBlocked && elements.callRemoteAudio.srcObject) {
     const player = elements.callRemoteAudio;
     try {
@@ -424,6 +910,16 @@ async function resumeRecoveredCall() {
   try {
     if (!localStream) localStream = await requestMicrophone();
     await prepareRecoveryCursor();
+    if (isGroupCall(currentCall)) {
+      cleanupGroupPeers();
+      recoveryPending = false;
+      showConnectedControls("Восстанавливаю групповой звонок…");
+      renderCallParticipants();
+      await syncGroupPeers({ forceRenegotiate: true });
+      startCallPolling();
+      announce(`Звук группового звонка «${currentCall.groupTitle || currentCall.peer?.displayName || "Группа"}» восстанавливается.`);
+      return;
+    }
     cleanupPeerConnection();
     remoteCandidates = [];
     offerStarted = false;
@@ -514,22 +1010,33 @@ async function declineCall() {
   }
 }
 
-async function endCall() {
+async function endCall({ endForAll = false } = {}) {
   if (!currentCall) return;
+  const group = isGroupCall(currentCall);
   // Release the mic, speakers, and RTCPeerConnection immediately, regardless
   // of mobile network latency. The room update then ends it on every device.
-  const path = callPath("/end");
+  const path = callPath(group ? "/leave" : "/end");
+  const body = group && endForAll ? { endForAll: true } : null;
   elements.callEndButton.disabled = true;
-  finishCall("Звонок завершён.");
-  announce("Звонок завершён.");
+  if (elements.callEndAllButton) elements.callEndAllButton.disabled = true;
+  const endMessage = group
+    ? (endForAll ? "Групповой звонок завершён для всех." : "Вы покинули групповой звонок.")
+    : "Звонок завершён.";
+  finishCall(endMessage);
+  announce(endMessage);
   elements.callEndButton.disabled = false;
-  await deliverCallTermination(path);
+  if (elements.callEndAllButton) elements.callEndAllButton.disabled = false;
+  await deliverCallTermination(path, body);
+  if (selectedGroupChatId) void refreshActiveGroupCallForChat(selectedGroupChatId);
 }
 
-async function deliverCallTermination(path) {
+async function deliverCallTermination(path, body = null) {
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      await api(path, { method: "POST" });
+      await api(path, {
+        method: "POST",
+        ...(body ? { body: JSON.stringify(body) } : {})
+      });
       return;
     } catch (error) {
       logCallEvent("завершение не доставлено", "повтор отправки");
@@ -553,7 +1060,8 @@ async function selectedChatFromUi() {
   if (elements.messageForm.hidden) return null;
 
   const conversationId = elements.messageForm.dataset?.conversationId;
-  if (conversationId) return { conversationId };
+  const kind = elements.messageForm.dataset?.chatKind ?? "direct";
+  if (conversationId) return { conversationId, kind };
 
   // Compatibility fallback for tests and old cached markup. Presence text may follow
   // the username, so never treat the whole visible line as the username.
@@ -592,12 +1100,49 @@ function closeCallRealtime() {
 async function handleCallEvent(event) {
   if (!account || !event || typeof event !== "object") return;
 
+  if (event.type === "call.group.updated" && event.conversationId) {
+    if (event.active) {
+      activeGroupCallsByChat.set(event.conversationId, {
+        callId: event.callId,
+        conversationId: event.conversationId,
+        groupTitle: event.groupTitle,
+        avatarIcon: event.avatarIcon,
+        participantCount: event.participantCount,
+        participants: event.participants ?? []
+      });
+    } else {
+      activeGroupCallsByChat.delete(event.conversationId);
+    }
+    renderGroupCallBanner();
+    syncCallButton();
+    if (!event.active && currentCall?.callId === event.callId) {
+      finishCall("Групповой звонок завершён.");
+      announce("Групповой звонок завершён.");
+    }
+    return;
+  }
+
   if (event.type === "call.active" && event.call) {
     if (currentCall) return;
     currentCall = event.call;
     startCallTrace(currentCall.direction);
     answeredLocally = false;
     offerStarted = false;
+    if (isGroupCall(currentCall)) {
+      rememberActiveGroupCall(currentCall);
+      renderGroupCallBanner();
+      if (currentCall.status === "accepted") {
+        recoveryPending = true;
+        showRecoveredCall("Активный групповой звонок найден. Нажмите «Восстановить звук».");
+        renderCallParticipants();
+        startStatePolling();
+        announce(`Активный групповой звонок «${currentCall.groupTitle || currentCall.peer.displayName}» найден.`);
+      } else {
+        currentCall = null;
+        renderIdle();
+      }
+      return;
+    }
     if (currentCall.status === "ringing" && currentCall.direction === "incoming") {
       recoveryPending = false;
       showIncoming(currentCall);
@@ -621,6 +1166,10 @@ async function handleCallEvent(event) {
   }
 
   if (event.type === "call.ringing" && event.call) {
+    if (isGroupCall(event.call)) {
+      rememberActiveGroupCall(event.call);
+      renderGroupCallBanner();
+    }
     if (!currentCall) {
       currentCall = event.call;
       startCallTrace(currentCall.direction);
@@ -630,15 +1179,64 @@ async function handleCallEvent(event) {
       showIncoming(currentCall);
       void prefetchIceServers();
       startStatePolling();
-      announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      if (isGroupCall(currentCall)) {
+        announce(`Входящий групповой звонок в группе ${currentCall.groupTitle || currentCall.peer.displayName} от ${currentCall.caller?.displayName ?? "участника"}.`);
+      } else {
+        announce(`Входящий звонок от ${currentCall.peer.displayName}.`);
+      }
     }
     return;
   }
 
   if (!currentCall || event.callId !== currentCall.callId) return;
 
+  if (event.type === "call.participant.joined" && isGroupCall(currentCall)) {
+    const joined = event.participant;
+    if (Array.isArray(event.participants)) {
+      currentCall = { ...currentCall, ...(event.call ?? {}), participants: event.participants, participantCount: event.participants.length };
+    }
+    rememberActiveGroupCall(currentCall);
+    renderGroupCallBanner();
+    renderCallParticipants();
+    if (currentCall.joined && !recoveryPending) {
+      setCallStatus(groupCallStatusText());
+      await syncGroupPeers();
+      if (joined && joined.userId !== account.userId) {
+        playCallCue("answered");
+        announce(`${joined.displayName} присоединился к звонку.`);
+      }
+    }
+    return;
+  }
+
+  if (event.type === "call.participant.left" && isGroupCall(currentCall)) {
+    const previous = (currentCall.participants ?? []).find((entry) => entry.userId === event.userId);
+    if (Array.isArray(event.participants)) {
+      currentCall = { ...currentCall, ...(event.call ?? {}), participants: event.participants, participantCount: event.participants.length };
+    }
+    rememberActiveGroupCall(currentCall);
+    renderGroupCallBanner();
+    if (event.userId) removeGroupPeer(event.userId);
+    renderCallParticipants();
+    if (currentCall.joined && !recoveryPending) {
+      setCallStatus(groupCallStatusText());
+      if (previous && previous.userId !== account.userId) {
+        announce(`${previous.displayName} покинул звонок.`);
+      }
+    }
+    return;
+  }
+
+  if (event.type === "call.participant.updated") {
+    if (isGroupCall(currentCall) && Array.isArray(event.participants)) {
+      currentCall = { ...currentCall, participants: event.participants, participantCount: event.participants.length };
+      renderCallParticipants();
+    }
+    return;
+  }
+
   if (event.type === "call.handoff") {
-    if (event.actorUserId === account.userId && event.newSessionId!==getCurrentSession()?.sessionId) {
+    if (event.actorUserId === account.userId && event.newSessionId !== getCurrentSession()?.sessionId) {
       finishCall("Звонок перенесён на другое ваше устройство.");
       announce("Звонок продолжен на другом устройстве.");
     } else if (event.actorUserId !== account.userId) {
@@ -648,7 +1246,10 @@ async function handleCallEvent(event) {
   }
 
   if (event.type === "call.answered") {
+    if (isGroupCall(currentCall)) return;
     if (currentCall.status === "accepted") return;
+    callProfiler.setMeta({ answerSource: "ws" }, activeProfileSessionId);
+    callProfiler.mark("call_answered", activeProfileSessionId, { meta: "ws" });
     logCallEvent("звонок принят");
     stopRingback();
     playCallCue("answered");
@@ -677,6 +1278,10 @@ async function handleCallEvent(event) {
     return;
   }
   if (event.type === "call.ended") {
+    if (isGroupCall(currentCall)) {
+      activeGroupCallsByChat.delete(currentCall.conversationId);
+      renderGroupCallBanner();
+    }
     finishCall("Звонок завершён.");
     announce("Звонок завершён.");
     return;
@@ -710,15 +1315,20 @@ async function applyLocalDescriptionWithOpusTuning(pc, description) {
 async function beginOfferIfNeeded() {
   if (!currentCall || currentCall.direction !== "outgoing" || offerStarted || recoveryPending) return;
   const startingCallId = currentCall.callId;
+  const profileSessionId = activeProfileSessionId;
   offerStarted = true;
   logCallEvent("начало согласования", "исходящее предложение");
   try {
     const pc = await ensurePeerConnection();
     if (currentCall?.callId !== startingCallId || pc !== peerConnection) return;
     localNegotiationId = crypto.randomUUID();
+    callProfiler.mark("offer_create_start", profileSessionId);
     const rawOffer = await pc.createOffer();
     const offer = await applyLocalDescriptionWithOpusTuning(pc, rawOffer);
+    callProfiler.mark("offer_local_set", profileSessionId);
+    callProfiler.mark("offer_send_start", profileSessionId);
     await sendSignal("offer", { type: offer.type, sdp: offer.sdp, negotiationId: localNegotiationId });
+    callProfiler.mark("offer_sent", profileSessionId);
     logCallEvent("SDP предложение", "отправлено");
   } catch (error) {
     if (currentCall?.callId !== startingCallId) return;
@@ -794,8 +1404,17 @@ async function prefetchIceServers() {
 
 async function prewarmOutgoingPeerConnection() {
   if (!currentCall || currentCall.direction !== "outgoing" || currentCall.status !== "ringing" || !localStream || peerConnection) return;
+  const ringingCallId = currentCall.callId;
+  const profileSessionId = activeProfileSessionId;
   try {
     await ensurePeerConnection();
+    callProfiler.mark("prewarm_pc_ready", profileSessionId);
+    // Create and upload the caller's SDP offer + initial ICE/TURN candidates while
+    // the callee's phone is still ringing. CallRoom stores them safely until
+    // POST /answer and returns them immediately in the answer response.
+    if (currentCall?.callId === ringingCallId && currentCall.status === "ringing" && !offerStarted && !recoveryPending) {
+      await beginOfferIfNeeded();
+    }
   } catch {
     // Prewarming is only a latency optimization. The normal offer path retries after answer.
   }
@@ -833,9 +1452,11 @@ async function ensurePeerConnection(options = {}) {
 }
 
 async function createPeerConnection({ iceServers: providedIceServers = null, refreshIce = false } = {}, epoch) {
+  const profileSessionId = activeProfileSessionId;
   if (!localStream) localStream = await requestMicrophone();
   const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
   if (epoch !== peerCreationEpoch) throw new Error("Создание устаревшего аудиосоединения отменено.");
+  callProfiler.mark("pc_create_start", profileSessionId);
   const pc = createPeerConnectionWithRoutePool(iceServers);
   relayCandidateSeen = false;
   const discoveredCandidateTypes = new Set();
@@ -851,11 +1472,11 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     const sender = pc.addTrack(track, localStream);
     logDiagnostic('Звонки','дорожка добавлена',track.kind==='audio'?'audio':'другое');
     if (track.kind === "audio") {
-      try { await tuneAudioSender(sender, undefined, { managedExternally: true }); } catch {
-        // Encoder bitrate control is an enhancement; capture settings remain valid if unsupported.
-      }
+      // Do not block SDP offer/answer creation waiting for sender encoder tuning.
+      void tuneAudioSender(sender, undefined, { managedExternally: true }).catch(() => {});
     }
   }
+  callProfiler.mark("pc_created", profileSessionId);
 
   pc.addEventListener("icecandidate", (event) => {
     if (!currentCall || peerConnection !== pc) return;
@@ -866,6 +1487,8 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
     const candidate = event.candidate;
     const candidateType = /\btyp (host|srflx|prflx|relay)\b/.exec(candidate.candidate)?.[1] ?? "неизвестно";
     if (candidateType === "relay") relayCandidateSeen = true;
+    callProfiler.mark("first_local_ice", profileSessionId, { meta: candidateType });
+    callProfiler.setMeta({ firstLocalIceType: candidateType }, profileSessionId);
     if (!discoveredCandidateTypes.has(candidateType)) {
       discoveredCandidateTypes.add(candidateType);
       logCallEvent("ICE получен", candidateType);
@@ -902,10 +1525,11 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   });
   pc.addEventListener("track", (event) => {
     if (peerConnection !== pc) return;
+    callProfiler.mark("remote_track", profileSessionId);
     logCallEvent("SDP ответ", "удалённая аудиодорожка");
     const stream = event.streams[0] ?? new MediaStream([event.track]);
     elements.callRemoteAudio.srcObject = stream;
-    applyJitterBufferTargetToReceiver(event.receiver, jitterBufferTargetMs);
+    applyJitterBufferTarget(event.receiver, jitterController.targetMs);
     void Promise.resolve().then(() => elements.callRemoteAudio.play()).then(() => {
       if (peerConnection !== pc) return;
       remotePlaybackBlocked = false;
@@ -934,18 +1558,87 @@ async function createPeerConnection({ iceServers: providedIceServers = null, ref
   return pc;
 }
 
+function stopFirstAudioFrameProbe() {
+  clearTimeout(firstAudioProbeTimer);
+  firstAudioProbeTimer = null;
+  firstAudioProbeAttempts = 0;
+}
+
+function logProfilerSummaryOnce(sessionId) {
+  if (!sessionId || profileLoggedForSessionId === sessionId) return;
+  const snapshot = callProfiler.getLatest();
+  if (!snapshot || snapshot.id !== sessionId || snapshot.totalConnectMs === null) return;
+  const summary = formatCallProfileCompact(snapshot);
+  if (!summary) return;
+  profileLoggedForSessionId = sessionId;
+  logCallEvent("профайлер", summary);
+}
+
+function startFirstAudioFrameProbe(pc, sessionId) {
+  stopFirstAudioFrameProbe();
+  if (!pc || typeof pc.getStats !== "function" || !sessionId) {
+    logProfilerSummaryOnce(sessionId);
+    return;
+  }
+  const poll = async () => {
+    firstAudioProbeTimer = null;
+    if (peerConnection !== pc || activeProfileSessionId !== sessionId || pc.connectionState !== "connected") return;
+    firstAudioProbeAttempts += 1;
+    try {
+      const stats = await pc.getStats();
+      if (peerConnection !== pc || activeProfileSessionId !== sessionId) return;
+      const route = selectedCallRoute(stats);
+      if (route === "через TURN-сервер") callProfiler.setMeta({ route: "turn" }, sessionId);
+      else if (route === "прямое соединение") callProfiler.setMeta({ route: "direct" }, sessionId);
+
+      let rttMs = null;
+      let inboundPackets = 0;
+      stats.forEach((report) => {
+        if (report.type === "candidate-pair" && (report.nominated || report.state === "succeeded")) {
+          if (typeof report.currentRoundTripTime === "number" && Number.isFinite(report.currentRoundTripTime)) {
+            rttMs = report.currentRoundTripTime * 1000;
+          }
+        }
+        const kind = report.kind ?? report.mediaType;
+        if (report.type === "inbound-rtp" && kind === "audio" && !report.isRemote) {
+          inboundPackets = Math.max(inboundPackets, Number(report.packetsReceived) || 0);
+        }
+      });
+      if (rttMs !== null) callProfiler.setMeta({ rttMs }, sessionId);
+      if (inboundPackets > 0) {
+        callProfiler.mark("first_audio_frame", sessionId);
+        logProfilerSummaryOnce(sessionId);
+        return;
+      }
+    } catch {
+      logProfilerSummaryOnce(sessionId);
+      return;
+    }
+    if (firstAudioProbeAttempts < 50) {
+      firstAudioProbeTimer = setTimeout(() => void poll(), 40);
+    } else {
+      logProfilerSummaryOnce(sessionId);
+    }
+  };
+  void poll();
+}
+
 function handlePeerConnectionState(pc) {
   logCallEvent("WebRTC состояние", pc.connectionState);
   updateCallDiagnostics(pc);
   syncCallPollingCadence();
   if (pc.connectionState === "connected") {
+    callProfiler.mark("pc_connected", activeProfileSessionId);
+    startFirstAudioFrameProbe(pc, activeProfileSessionId);
     initialConnectionWatchdog.disarm();
+    watchdogExtended = false;
     recoveryGate.reset();
+    lastConnectedAt = Date.now();
     const recovered = networkRecoveryActive;
     clearAutomaticRecoveryTimers();
     recoveryAttempt = 0;
     networkRecoveryActive = false;
-    healthyQualitySamples = 0;
+    applyJitterBufferToPeer(pc, jitterController.onConnected({ recovered }));
     if (recovered) {
       const audioSender = pc.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
       if (audioSender) markBitrateNetworkRecovered(audioSender);
@@ -966,6 +1659,7 @@ function handlePeerConnectionState(pc) {
   }
 
   if (pc.connectionState === "connecting") {
+    callProfiler.mark("pc_connecting", activeProfileSessionId);
     setCallStatus(networkRecoveryActive ? "Восстанавливаю аудио…" : "Соединяю аудио…");
     return;
   }
@@ -986,6 +1680,11 @@ function handlePeerConnectionState(pc) {
 
 function handleIceConnectionState(pc) {
   logCallEvent("ICE состояние", pc.iceConnectionState);
+  if (pc.iceConnectionState === "checking") {
+    callProfiler.mark("ice_checking", activeProfileSessionId);
+  } else if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+    callProfiler.mark("ice_connected", activeProfileSessionId);
+  }
   syncCallPollingCadence();
   if (pc.iceConnectionState === "disconnected") {
     raiseJitterBufferForNetworkStress(pc, "degraded");
@@ -1029,7 +1728,10 @@ async function recoverCallConnection({ hard, reason }) {
 
   try {
     if (currentCall.direction === "outgoing") {
-      await restartOffer({ rebuild: hard, refreshIce: true, automatic: true });
+      // Reuse fresh TURN credentials on the first soft ICE restart so slow
+      // links don't stall for 1.5-6.5s re-fetching /api/v1/calls/ice.
+      const shouldRefreshIce = hard || !hasFreshTurnCache();
+      await restartOffer({ rebuild: hard, refreshIce: shouldRefreshIce, automatic: true });
     } else {
       await sendSignal("resume", {
         reason,
@@ -1086,6 +1788,15 @@ function hasTurnRelay() {
 }
 
 function isPeerConnected() {
+  if (isGroupCall(currentCall)) {
+    if (!groupPeers.size) return true;
+    for (const entry of groupPeers.values()) {
+      const state = entry.pc?.connectionState;
+      const iceState = entry.pc?.iceConnectionState;
+      if (state !== "connected" && iceState !== "connected" && iceState !== "completed") return false;
+    }
+    return true;
+  }
   return peerConnection?.connectionState === "connected" || peerConnection?.iceConnectionState === "connected" ||
     peerConnection?.iceConnectionState === "completed";
 }
@@ -1108,7 +1819,6 @@ function stopQualityMonitoring() {
   qualityMonitorTimer = null;
   lastInboundAudioStats = null;
   lastSelectedCallRoute = null;
-  healthyQualitySamples = 0;
 }
 
 async function sampleInboundAudioQuality(pc) {
@@ -1149,23 +1859,12 @@ async function sampleInboundAudioQuality(pc) {
     const packetDelta = receivedDelta + lostDelta;
     const lossRate = packetDelta > 0 ? lostDelta / packetDelta : 0;
 
-    if (lossRate >= 0.08 || current.jitterMs >= 80) {
-      healthyQualitySamples = 0;
-      setJitterBufferTarget(pc, JITTER_BUFFER_SEVERE_MS);
-    } else if (lossRate >= 0.025 || current.jitterMs >= 35) {
-      healthyQualitySamples = 0;
-      setJitterBufferTarget(pc, Math.max(jitterBufferTargetMs ?? 0, JITTER_BUFFER_DEGRADED_MS));
-    } else if (jitterBufferTargetMs !== null) {
-      healthyQualitySamples += 1;
-      if (healthyQualitySamples >= 4) {
-        healthyQualitySamples = 0;
-        if (jitterBufferTargetMs > JITTER_BUFFER_DEGRADED_MS) {
-          setJitterBufferTarget(pc, JITTER_BUFFER_DEGRADED_MS);
-        } else {
-          setJitterBufferTarget(pc, null);
-        }
-      }
-    }
+    const transition = jitterController.onStatsSample({
+      lossRate,
+      jitterMs: current.jitterMs,
+      packetDelta
+    });
+    applyJitterBufferToPeer(pc, transition);
   } catch {
     // getStats and jitterBufferTarget are optional enhancements; WebRTC keeps its own jitter buffer without them.
   }
@@ -1173,20 +1872,20 @@ async function sampleInboundAudioQuality(pc) {
 
 function raiseJitterBufferForNetworkStress(pc, severity) {
   if (!pc) return;
-  const target = severity === "severe" ? JITTER_BUFFER_SEVERE_MS : JITTER_BUFFER_DEGRADED_MS;
-  if (jitterBufferTargetMs === null || target > jitterBufferTargetMs) setJitterBufferTarget(pc, target);
+  const transition = jitterController.onNetworkStress(severity);
+  applyJitterBufferToPeer(pc, transition);
 }
 
-function setJitterBufferTarget(pc, targetMs) {
-  jitterBufferTargetMs = targetMs;
-  for (const receiver of pc?.getReceivers?.() ?? []) {
-    if (receiver.track?.kind === "audio") applyJitterBufferTargetToReceiver(receiver, targetMs);
+function applyJitterBufferToPeer(pc, transition) {
+  if (!transition) return;
+  if (transition.changed) {
+    logCallEvent("буфер звука", formatJitterBufferLabel(transition.targetMs));
   }
-}
-
-function applyJitterBufferTargetToReceiver(receiver, targetMs) {
-  if (!receiver || !("jitterBufferTarget" in receiver)) return;
-  try { receiver.jitterBufferTarget = targetMs; } catch {}
+  for (const receiver of pc?.getReceivers?.() ?? []) {
+    if (receiver.track?.kind === "audio") {
+      applyJitterBufferTarget(receiver, transition.targetMs);
+    }
+  }
 }
 
 function applyAudioProfileDuringCall() {
@@ -1201,9 +1900,13 @@ function applyAudioProfileDuringCall() {
     if (!track || !currentCall) return;
     const callId = currentCall.callId;
     const pc = peerConnection;
-    const sender = pc?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
+    const primarySender = pc?.getSenders?.().find((candidate) => candidate.track?.kind === "audio");
+    const groupSenders = [...groupPeers.values()]
+      .map((entry) => entry.pc?.getSenders?.().find((candidate) => candidate.track?.kind === "audio"))
+      .filter(Boolean);
+    const sender = primarySender ?? groupSenders[0] ?? null;
     logDiagnostic("Микрофон", "переключение в звонке", profile.id);
-    const trace=(stage,detail='')=>logDiagnostic('Микрофон',stage,detail);
+    const trace = (stage, detail = "") => logDiagnostic("Микрофон", stage, detail);
     try {
       const switchResult = await switchCallAudioProfile({
         oldStream, sender,
@@ -1211,9 +1914,9 @@ function applyAudioProfileDuringCall() {
         applyExisting: (oldTrack) => applySelectedAudioProfileToTrack(oldTrack, profile.id),
         isCurrent: () => epoch === profileSwitchEpoch && currentCall?.callId === callId &&
           peerConnection === pc && localStream === oldStream,
-        muted,trace
+        muted, trace
       });
-      if (switchResult.status === "stale") { trace('переключение пропущено'); return; }
+      if (switchResult.status === "stale") { trace("переключение пропущено"); return; }
       if (switchResult.captureError) logDiagnostic("Микрофон", "новая дорожка недоступна", switchResult.captureError);
       if (switchResult.status === "failed") {
         logDiagnostic("Микрофон", "ошибка переключения", switchResult.fallbackError);
@@ -1222,15 +1925,27 @@ function applyAudioProfileDuringCall() {
       }
       if (switchResult.status === "replaced") {
         localStream = switchResult.stream;
+        attachLocalTrackListeners(localStream);
+        // Replace the track on all additional group call peer senders too.
+        for (const extraSender of groupSenders) {
+          if (extraSender !== sender && typeof extraSender.replaceTrack === "function") {
+            try { await extraSender.replaceTrack(switchResult.track); } catch {}
+          }
+        }
       }
       const result = switchResult.status === "replaced"
         ? updateAudioProfileStatus(switchResult.track, profile.id)
         : switchResult.result;
       if (epoch !== profileSwitchEpoch || currentCall?.callId !== callId) return;
-      if (sender) {
-        trace('настройка кодировщика начало');
-        try {await tuneAudioSender(sender, profile.id, { managedExternally: true });trace('настройка кодировщика успешно');}
-        catch(error){trace('настройка кодировщика ошибка',diagnosticErrorName(error));}
+      const allSenders = [...new Set([primarySender, ...groupSenders].filter(Boolean))];
+      for (const activeSender of allSenders) {
+        trace("настройка кодировщика начало");
+        try {
+          await tuneAudioSender(activeSender, profile.id, { managedExternally: true });
+          trace("настройка кодировщика успешно");
+        } catch (error) {
+          trace("настройка кодировщика ошибка", diagnosticErrorName(error));
+        }
       }
       const partial = switchResult.status === "fallback" || result?.mismatches?.length || result?.unknown?.length;
       logDiagnostic("Микрофон", partial ? "режим применён частично" : "режим применён", profile.id);
@@ -1238,7 +1953,7 @@ function applyAudioProfileDuringCall() {
         ? `Режим «${profile.label}» применён к действующему микрофону, но браузер не подтвердил все параметры.`
         : `Режим звука «${profile.label}» применён к текущему микрофону.`);
     } catch (error) {
-      trace('непредвиденная ошибка переключения',mediaErrorCategory(error));
+      trace("непредвиденная ошибка переключения", mediaErrorCategory(error));
       logDiagnostic("Микрофон", "ошибка переключения", mediaErrorCategory(error));
       if (currentCall?.callId === callId) announce(`Не удалось переключить режим звука во время звонка: ${friendlyMediaError(error)}.`);
     }
@@ -1246,22 +1961,26 @@ function applyAudioProfileDuringCall() {
   return profileSwitchQueue;
 }
 
-async function sendSignal(kind, payload) {
+async function sendSignal(kind, payload, { targetUserId = null } = {}) {
   if (!currentCall) return;
   // Capture the current call so an old request cannot mutate the next one's cursor.
   const sendingCallId = currentCall.callId;
   const path = callPath("/signals");
   const retries = kind === "ice" ? 1 : 2;
+  const body = targetUserId ? { kind, payload, targetUserId } : { kind, payload };
+  const signal = ensureCallAbortSignal();
   try {
     const result = await api(path, {
       method: "POST",
       retries,
-      body: JSON.stringify({ kind, payload })
+      signal,
+      body: JSON.stringify(body)
     });
     if (currentCall?.callId !== sendingCallId) return;
     if (result.signal?.sequence) processedSignalSequences.add(result.signal.sequence);
     if (kind !== "ice") logCallEvent("сигнал отправлен", kind);
   } catch (error) {
+    if (currentCall?.callId !== sendingCallId && error?.name === "AbortError") return;
     if (currentCall?.callId === sendingCallId)
       logCallEvent("сигнал ошибка", `${kind}, ${String(error?.name || "network")}`);
     throw error;
@@ -1270,9 +1989,13 @@ async function sendSignal(kind, payload) {
 
 async function flushIceCandidateBatch(signals) {
   if (!currentCall || !Array.isArray(signals) || !signals.length) return;
+  const profileSessionId = activeProfileSessionId;
+  const markedFlush = callProfiler.mark("first_ice_flush_start", profileSessionId, { meta: String(signals.length) });
+  if (markedFlush) callProfiler.setMeta({ firstIceBatchSize: signals.length }, profileSessionId);
   if (signals.length === 1) {
     try {
       await sendSignal("ice", signals[0].payload);
+      if (markedFlush) callProfiler.mark("first_ice_flush_done", profileSessionId);
     } catch {
       // Already logged by sendSignal; a closed call or offline radio may reject late candidates.
     }
@@ -1284,14 +2007,16 @@ async function flushIceCandidateBatch(signals) {
     const result = await api(path, {
       method: "POST",
       retries: 1,
+      signal: ensureCallAbortSignal(),
       body: JSON.stringify({ signals })
     });
+    if (markedFlush) callProfiler.mark("first_ice_flush_done", profileSessionId);
     if (currentCall?.callId !== sendingCallId) return;
     for (const signal of result.signals ?? []) {
       if (signal?.sequence) processedSignalSequences.add(signal.sequence);
     }
   } catch (error) {
-    if (currentCall?.callId === sendingCallId)
+    if (currentCall?.callId === sendingCallId && error?.name !== "AbortError")
       logCallEvent("сигнал ошибка", `ice, ${String(error?.name || "network")}`);
   }
 }
@@ -1319,22 +2044,37 @@ function enqueueSignal(signal) {
 async function processSignal(signal) {
   if (!currentCall || signal.callId !== currentCall.callId) return true;
   if (signal.senderUserId === account?.userId || processedSignalSequences.has(signal.sequence)) return true;
+  if (isGroupCall(currentCall)) {
+    return processGroupSignal(signal);
+  }
   const processingCallId = currentCall.callId;
   if (signal.kind !== "ice") logCallEvent("сигнал получен", signal.kind);
   try {
     if (signal.kind === "resume") {
       if (currentCall.direction === "outgoing" && !recoveryPending) {
         const hard = signal.payload?.mode === "rebuild";
-        await recoverCallConnection({
-          hard,
-          reason: typeof signal.payload?.reason === "string" ? signal.payload.reason : "peer-reconnect"
-        });
+        const createdAt = Number(signal.createdAt) || 0;
+        const isStaleDuringHealthyCall = isPeerConnected() && !(
+          hard && createdAt > lastConnectedAt + 3_000
+        );
+        if (isStaleDuringHealthyCall) {
+          logCallEvent("восстановление пропущено", "соединение уже активно");
+        } else {
+          await recoverCallConnection({
+            hard,
+            reason: typeof signal.payload?.reason === "string" ? signal.payload.reason : "peer-reconnect"
+          });
+        }
       }
       processedSignalSequences.add(signal.sequence);
       return true;
     }
 
     const recoveryMode = signal.payload?.recoveryMode;
+    const profileSessionId = activeProfileSessionId;
+    if (signal.kind === "offer") callProfiler.mark("offer_received", profileSessionId);
+    else if (signal.kind === "answer") callProfiler.mark("answer_received", profileSessionId);
+    else if (signal.kind === "ice") callProfiler.mark("first_remote_ice", profileSessionId);
     let pc = await ensurePeerConnection();
     if (currentCall?.callId !== processingCallId || pc !== peerConnection) return true;
     if (signal.kind === "offer") {
@@ -1358,12 +2098,17 @@ async function processSignal(signal) {
       }
       remoteNegotiationId = incomingNegotiation;
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      callProfiler.mark("offer_remote_set", profileSessionId);
       logCallEvent("SDP предложение", "принято");
       await flushRemoteCandidates();
+      callProfiler.mark("answer_create_start", profileSessionId);
       const rawAnswer = await pc.createAnswer();
       const answer = await applyLocalDescriptionWithOpusTuning(pc, rawAnswer);
+      callProfiler.mark("answer_local_set", profileSessionId);
+      callProfiler.mark("answer_send_start", profileSessionId);
       await sendSignal("answer", { type: answer.type, sdp: answer.sdp,
         negotiationId: remoteNegotiationId });
+      callProfiler.mark("answer_sent", profileSessionId);
       logCallEvent("SDP ответ", "отправлен");
       showConnectedControls("Соединяю аудио…");
       processedSignalSequences.add(signal.sequence);
@@ -1375,6 +2120,7 @@ async function processSignal(signal) {
         return true;
       }
       await pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      callProfiler.mark("answer_remote_set", profileSessionId);
       logCallEvent("SDP ответ", "получен");
       await flushRemoteCandidates();
       processedSignalSequences.add(signal.sequence);
@@ -1483,7 +2229,9 @@ async function pollSignals() {
   const requestId = ++signalPollRequestId;
   try {
     const callId = currentCall.callId;
-    const result = await api(`${callPath("/signals")}?after=${signalPollCursor}`);
+    const result = await api(`${callPath("/signals")}?after=${signalPollCursor}`, {
+      signal: ensureCallAbortSignal()
+    });
     if (currentCall?.callId !== callId) return;
     for (const signal of result.signals ?? []) {
       if (currentCall?.callId !== callId || recoveryPending) break;
@@ -1493,7 +2241,7 @@ async function pollSignals() {
     }
   } catch (error) {
     // The single foreground reconnect is handled separately; do not log every polling tick.
-    if (currentCall?.status === "accepted")
+    if (currentCall?.status === "accepted" && error?.name !== "AbortError")
       logCallEvent("ошибка опроса", String(error?.name || "network"));
   } finally {
     if (signalPollRequestId === requestId) signalPollInFlight = false;
@@ -1509,11 +2257,13 @@ async function pollCallState() {
   const polledCallId = currentCall.callId;
   const path = callPath();
   try {
-    const result = await api(path);
+    const result = await api(path, { signal: ensureCallAbortSignal() });
     const latest = result.call;
     if (!matchesCallResponse(currentCall, polledCallId, latest)) return;
 
     if (latest.status === "accepted" && currentCall.status === "ringing") {
+      callProfiler.setMeta({ answerSource: "poll" }, activeProfileSessionId);
+      callProfiler.mark("call_answered", activeProfileSessionId, { meta: "poll" });
       stopRingback();
       currentCall = latest;
       clearTimeout(ringTimeout);
@@ -1533,13 +2283,29 @@ async function pollCallState() {
       return;
     }
 
-    if (latest.status==="accepted" && currentCall.sessionOwnerId
-      && latest.sessionOwnerId && latest.sessionOwnerId!==getCurrentSession()?.sessionId
+    if (latest.status === "accepted" && currentCall.sessionOwnerId
+      && latest.sessionOwnerId && latest.sessionOwnerId !== getCurrentSession()?.sessionId
       && !recoveryPending) {
       finishCall("Звонок перенесён на другое ваше устройство.");
       return;
     }
+    const wasGroup = isGroupCall(currentCall);
     currentCall = { ...currentCall, ...latest };
+    if (wasGroup) {
+      if (latest.status === "ended") {
+        activeGroupCallsByChat.delete(latest.conversationId);
+        renderGroupCallBanner();
+        finishCall("Групповой звонок завершён.");
+        return;
+      }
+      rememberActiveGroupCall(currentCall);
+      renderGroupCallBanner();
+      renderCallParticipants();
+      if (currentCall.joined && !recoveryPending) {
+        await syncGroupPeers();
+      }
+      return;
+    }
     if (latest.status === "declined") finishCall("Собеседник отклонил звонок.");
     else if (latest.status === "ended") finishCall("Звонок завершён.");
   } catch {
@@ -1589,8 +2355,10 @@ async function restoreCallFromUrl() {
 async function getIceServers({ refresh = false } = {}) {
   clearTimeout(icePrefetchTimer);
   icePrefetchTimer = null;
+  const profileSessionId = activeProfileSessionId;
   const cacheFresh = !refresh && lastIceServers && (Date.now() - iceServersFetchedAt) < ICE_CACHE_TTL_MS;
   if (cacheFresh) {
+    callProfiler.setMeta({ iceCacheHit: true, iceHasTurn: turnAvailable(lastIceServers) }, profileSessionId);
     setCallRouteAvailability(lastIceServers);
     return lastIceServers;
   }
@@ -1601,6 +2369,7 @@ async function getIceServers({ refresh = false } = {}) {
   if (!iceServersPromise) {
     const requestToken = iceRequestEpoch.token();
     logCallEvent("запрос TURN", "обновление серверов");
+    callProfiler.mark("ice_fetch_start", profileSessionId);
     iceServersPromise = api("/api/v1/calls/ice")
       .then((result) => {
         if (!iceRequestEpoch.isCurrent(requestToken)) return FALLBACK_ICE_SERVERS;
@@ -1609,12 +2378,17 @@ async function getIceServers({ refresh = false } = {}) {
           lastIceServers = servers;
           iceServersFetchedAt = Date.now();
         }
-        setCallRouteAvailability(lastIceServers ?? FALLBACK_ICE_SERVERS);
-        return lastIceServers ?? FALLBACK_ICE_SERVERS;
+        const resolved = lastIceServers ?? FALLBACK_ICE_SERVERS;
+        callProfiler.mark("ice_fetch_done", profileSessionId);
+        callProfiler.setMeta({ iceCacheHit: false, iceHasTurn: turnAvailable(resolved) }, profileSessionId);
+        setCallRouteAvailability(resolved);
+        return resolved;
       })
       .catch((error) => {
         if (!iceRequestEpoch.isCurrent(requestToken)) return FALLBACK_ICE_SERVERS;
         iceServersPromise = null;
+        callProfiler.mark("ice_fetch_done", profileSessionId, { meta: "error" });
+        callProfiler.setMeta({ iceCacheHit: false, iceHasTurn: turnAvailable(lastIceServers ?? FALLBACK_ICE_SERVERS) }, profileSessionId);
         logCallEvent("TURN недоступен", String(error?.name || "network"));
         return lastIceServers ?? FALLBACK_ICE_SERVERS;
       });
@@ -1631,16 +2405,555 @@ async function requestMicrophone() {
   const stream = await requestCallMicrophone();
   // Keep the caller muted even if iOS replaces a capture track on recovery.
   if (muted) for (const track of stream.getAudioTracks()) track.enabled = false;
+  attachLocalTrackListeners(stream);
   return stream;
 }
 
+function attachLocalTrackListeners(stream) {
+  for (const track of stream?.getAudioTracks?.() ?? []) {
+    if (typeof track.addEventListener !== "function") continue;
+    track.addEventListener("ended", () => {
+      if (!currentCall || localStream !== stream || recoveryPending) return;
+      logDiagnostic("Микрофон", "дорожка микрофона завершилась");
+      void recoverLocalMicrophoneTrack();
+    });
+  }
+}
+
+async function recoverLocalMicrophoneTrack() {
+  if (localTrackRecovering || !currentCall || recoveryPending) return;
+  const targetCallId = currentCall.callId;
+  localTrackRecovering = true;
+  try {
+    const freshStream = await requestCallMicrophone();
+    if (currentCall?.callId !== targetCallId) {
+      for (const track of freshStream.getTracks()) track.stop();
+      return;
+    }
+    const freshTrack = freshStream.getAudioTracks()[0];
+    if (!freshTrack) return;
+    freshTrack.enabled = !muted;
+    const oldStream = localStream;
+    localStream = freshStream;
+    attachLocalTrackListeners(freshStream);
+    const allPcs = [peerConnection, ...[...groupPeers.values()].map((entry) => entry.pc)].filter(Boolean);
+    for (const pc of allPcs) {
+      const sender = pc.getSenders?.().find((candidate) => candidate.track?.kind === "audio" || !candidate.track);
+      if (sender && typeof sender.replaceTrack === "function") {
+        try {
+          await sender.replaceTrack(freshTrack);
+          await tuneAudioSender(sender, undefined, { managedExternally: true });
+        } catch {}
+      }
+    }
+    if (oldStream && oldStream !== freshStream) {
+      for (const oldTrack of oldStream.getTracks()) oldTrack.stop();
+    }
+    logDiagnostic("Микрофон", "микрофон восстановлен");
+  } catch (error) {
+    logDiagnostic("Микрофон", "ошибка восстановления микрофона", mediaErrorCategory(error));
+  } finally {
+    localTrackRecovering = false;
+  }
+}
+
+function rememberActiveGroupCall(call) {
+  if (!call || call.kind !== "group" || !call.conversationId) return;
+  if (call.status === "accepted") {
+    activeGroupCallsByChat.set(call.conversationId, {
+      callId: call.callId,
+      conversationId: call.conversationId,
+      groupTitle: call.groupTitle || call.peer?.displayName || "Группа",
+      avatarIcon: call.avatarIcon || "👥",
+      participantCount: call.participantCount ?? call.participants?.length ?? 0,
+      participants: call.participants ?? []
+    });
+  } else {
+    activeGroupCallsByChat.delete(call.conversationId);
+  }
+}
+
+async function refreshActiveGroupCallForChat(conversationId) {
+  if (!account || !conversationId) return;
+  try {
+    const result = await api(`/api/v1/chats/${encodeURIComponent(conversationId)}/calls/active`);
+    if (result.call && result.call.kind === "group" && result.call.status === "accepted") {
+      rememberActiveGroupCall(result.call);
+    } else {
+      activeGroupCallsByChat.delete(conversationId);
+    }
+    renderGroupCallBanner();
+    syncCallButton();
+  } catch {
+    // Ignore transient lookup errors; realtime updates will refresh the banner.
+  }
+}
+
+function renderGroupCallBanner() {
+  if (!elements.groupCallBanner) return;
+  const active = selectedGroupChatId ? activeGroupCallsByChat.get(selectedGroupChatId) : null;
+  const alreadyInThisCall = Boolean(currentCall && currentCall.conversationId === selectedGroupChatId && currentCall.joined !== false);
+  if (!active || alreadyInThisCall || !account) {
+    elements.groupCallBanner.hidden = true;
+    return;
+  }
+  elements.groupCallBanner.hidden = false;
+  if (elements.groupCallBannerTitle) {
+    elements.groupCallBannerTitle.textContent = translateText(buildGroupCallBannerText(active));
+  }
+  if (elements.groupCallBannerMeta) {
+    const names = (active.participants ?? []).map((entry) => entry.displayName).filter(Boolean).slice(0, 4);
+    elements.groupCallBannerMeta.textContent = names.length ? names.join(", ") : "";
+  }
+  if (elements.groupCallJoinButton) {
+    elements.groupCallJoinButton.disabled = Boolean(currentCall);
+  }
+}
+
+function groupCallStatusText() {
+  if (!currentCall || !isGroupCall(currentCall)) return "";
+  if (isAnyRemoteAudioBlocked()) {
+    return "Браузер заблокировал воспроизведение. Нажмите «Включить звук».";
+  }
+  const count = currentCall.participants?.length ?? 1;
+  if (count <= 1) {
+    return `Ожидаем участников… Режим: ${getSelectedAudioProfile().label}.`;
+  }
+  return `В звонке: ${formatParticipantCount(count)}. Режим: ${getSelectedAudioProfile().label}.`;
+}
+
+function renderCallParticipants() {
+  if (!elements.callParticipantsSection || !elements.callParticipantsList) return;
+  if (!currentCall || !isGroupCall(currentCall)) {
+    elements.callParticipantsSection.hidden = true;
+    elements.callParticipantsList.replaceChildren();
+    if (elements.callEndAllButton) elements.callEndAllButton.hidden = true;
+    return;
+  }
+  const list = Array.isArray(currentCall.participants) ? currentCall.participants : [];
+  elements.callParticipantsSection.hidden = !list.length;
+  elements.callParticipantsList.replaceChildren();
+  for (const participant of list) {
+    const isSelf = participant.userId === account?.userId;
+    const peerEntry = groupPeers.get(participant.userId);
+    const connectionState = isSelf
+      ? "connected"
+      : (peerEntry?.pc?.connectionState || "connecting");
+    const isMuted = isSelf ? muted : Boolean(participant.muted);
+
+    const item = document.createElement("li");
+    item.className = "call-participant-item";
+    if (isMuted) item.classList.add("is-muted");
+    item.dataset.userId = participant.userId;
+
+    const name = document.createElement("span");
+    name.className = "call-participant-name";
+    name.dataset.userContent = "true";
+    name.textContent = isSelf ? `${participant.displayName} (${translateText("вы")})` : participant.displayName;
+
+    const state = document.createElement("span");
+    state.className = "call-participant-state";
+    const statusText = isSelf
+      ? translateText(isMuted ? "микрофон выключен" : "микрофон включён")
+      : translateText(
+          connectionState === "connected"
+            ? (isMuted ? "на связи · без микрофона" : "на связи")
+            : connectionState === "failed" || connectionState === "disconnected"
+              ? (isMuted ? "переподключается · без микрофона" : "переподключается")
+              : (isMuted ? "соединяется · без микрофона" : "соединяется")
+        );
+    state.textContent = statusText;
+
+    item.setAttribute(
+      "aria-label",
+      translateText(formatParticipantStatus({
+        displayName: participant.displayName,
+        muted: isMuted,
+        connectionState,
+        isSelf
+      }))
+    );
+    item.append(name, state);
+    elements.callParticipantsList.append(item);
+  }
+  const canEndAll = Boolean(
+    currentCall.joined &&
+    currentCall.callerUserId === account?.userId &&
+    list.length > 1
+  );
+  if (elements.callEndAllButton) elements.callEndAllButton.hidden = !canEndAll;
+}
+
+async function syncGroupPeers({ forceRenegotiate = false } = {}) {
+  if (!currentCall || !isGroupCall(currentCall) || !currentCall.joined || recoveryPending || !account) return;
+  const { toConnect, toRemove } = reconcileMeshPeers(
+    account.userId,
+    currentCall.participants ?? [],
+    [...groupPeers.keys()]
+  );
+  for (const peerId of toRemove) {
+    removeGroupPeer(peerId);
+  }
+  if (!toConnect.length && !forceRenegotiate) {
+    renderCallParticipants();
+    return;
+  }
+  const iceServers = await getIceServers();
+  if (!currentCall || !isGroupCall(currentCall)) return;
+  for (const item of toConnect) {
+    const entry = await ensureGroupPeer(item.userId, { iceServers });
+    if (!entry || !currentCall || !isGroupCall(currentCall)) continue;
+    if (item.shouldOffer) {
+      await sendGroupOffer(entry, { iceRestart: false });
+    }
+  }
+  if (forceRenegotiate) {
+    for (const [peerId, entry] of groupPeers.entries()) {
+      if (shouldInitiateOffer(account.userId, peerId)) {
+        await sendGroupOffer(entry, { iceRestart: true, recoveryMode: "rebuild" });
+      } else {
+        await sendSignal("resume", { reason: "client-reconnect", mode: "rebuild" }, { targetUserId: peerId }).catch(() => {});
+      }
+    }
+  }
+  renderCallParticipants();
+  setCallStatus(groupCallStatusText());
+}
+
+async function ensureGroupPeer(peerUserId, { iceServers: providedIceServers = null, refreshIce = false } = {}) {
+  const existing = groupPeers.get(peerUserId);
+  if (existing?.pc && existing.pc.signalingState !== "closed") return existing;
+  if (!localStream) localStream = await requestMicrophone();
+  const iceServers = providedIceServers ?? await getIceServers({ refresh: refreshIce });
+  if (!currentCall || !isGroupCall(currentCall)) return null;
+
+  const pc = createPeerConnectionWithRoutePool(iceServers);
+  const audioEl = document.createElement("audio");
+  audioEl.autoplay = true;
+  audioEl.playsInline = true;
+  audioEl.dataset.peerUserId = peerUserId;
+  audioEl.addEventListener("pause", () => {
+    if (!currentCall || remoteAudioStopping || !audioEl.srcObject) return;
+    void Promise.resolve().then(() => audioEl.play()).catch(() => {});
+  });
+  elements.callRemoteAudios?.append(audioEl);
+
+  const entry = {
+    userId: peerUserId,
+    pc,
+    audioEl,
+    localNegotiationId: null,
+    remoteNegotiationId: null,
+    remoteCandidates: [],
+    offerStarted: false,
+    restartInFlight: false,
+    disconnectTimer: null,
+    recoveryWatchdog: null,
+    recoveryAttempt: 0,
+    remotePlaybackBlocked: false,
+    iceBatcher: null
+  };
+  entry.iceBatcher = createIceCandidateBatcher({
+    flush: (signals) => flushGroupIceBatch(peerUserId, signals),
+    windowMs: 40,
+    maxBatch: 8,
+    immediateFirst: true,
+    isUrgent: isRelayCandidateSignal
+  });
+  groupPeers.set(peerUserId, entry);
+
+  for (const track of localStream.getTracks()) {
+    const sender = pc.addTrack(track, localStream);
+    if (track.kind === "audio") {
+      void tuneAudioSender(sender, undefined, { managedExternally: true }).catch(() => {});
+    }
+  }
+
+  pc.addEventListener("icecandidate", (event) => {
+    if (!currentCall || groupPeers.get(peerUserId)?.pc !== pc) return;
+    if (!event.candidate) {
+      void entry.iceBatcher.flushNow();
+      return;
+    }
+    const candidate = event.candidate;
+    const isInitiator = shouldInitiateOffer(account?.userId, peerUserId);
+    entry.iceBatcher.push({
+      kind: "ice",
+      targetUserId: peerUserId,
+      payload: {
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid,
+        sdpMLineIndex: candidate.sdpMLineIndex,
+        usernameFragment: candidate.usernameFragment ?? null,
+        negotiationId: isInitiator ? entry.localNegotiationId : entry.remoteNegotiationId
+      }
+    });
+  });
+
+  pc.addEventListener("icegatheringstatechange", () => {
+    if (groupPeers.get(peerUserId)?.pc !== pc) return;
+    if (pc.iceGatheringState === "complete") void entry.iceBatcher.flushNow();
+  });
+
+  pc.addEventListener("track", (event) => {
+    if (groupPeers.get(peerUserId)?.pc !== pc) return;
+    const stream = event.streams[0] ?? new MediaStream([event.track]);
+    audioEl.srcObject = stream;
+    applyJitterBufferTarget(event.receiver, jitterController.targetMs);
+    void Promise.resolve().then(() => audioEl.play()).then(() => {
+      if (groupPeers.get(peerUserId)?.pc !== pc) return;
+      entry.remotePlaybackBlocked = false;
+      if (!recoveryPending && !isAnyRemoteAudioBlocked()) elements.callResumeButton.hidden = true;
+    }).catch(() => {
+      if (groupPeers.get(peerUserId)?.pc !== pc) return;
+      entry.remotePlaybackBlocked = true;
+      elements.callResumeButton.hidden = false;
+      elements.callResumeButton.textContent = "Включить звук";
+      setCallStatus("Соединение есть, но Safari заблокировал воспроизведение. Нажмите «Включить звук».");
+    });
+  });
+
+  pc.addEventListener("connectionstatechange", () => {
+    if (groupPeers.get(peerUserId)?.pc !== pc) return;
+    renderCallParticipants();
+    syncCallPollingCadence();
+    if (pc.connectionState === "connected") {
+      clearTimeout(entry.disconnectTimer);
+      clearTimeout(entry.recoveryWatchdog);
+      entry.disconnectTimer = null;
+      entry.recoveryWatchdog = null;
+      entry.recoveryAttempt = 0;
+      setCallStatus(groupCallStatusText());
+      return;
+    }
+    if (pc.connectionState === "disconnected") {
+      raiseJitterBufferForNetworkStress(pc, "degraded");
+      if (!entry.disconnectTimer) {
+        entry.disconnectTimer = setTimeout(() => {
+          entry.disconnectTimer = null;
+          if (groupPeers.get(peerUserId)?.pc !== pc || !currentCall) return;
+          if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+            void recoverGroupPeer(peerUserId, "connection-disconnected", false);
+          }
+        }, DISCONNECT_RECOVERY_GRACE_MS);
+      }
+      return;
+    }
+    if (pc.connectionState === "failed") {
+      raiseJitterBufferForNetworkStress(pc, "severe");
+      void recoverGroupPeer(peerUserId, "connection-failed", false);
+    }
+  });
+
+  return entry;
+}
+
+async function sendGroupOffer(entry, { iceRestart = false, recoveryMode = null } = {}) {
+  if (!currentCall || !isGroupCall(currentCall) || !entry?.pc) return;
+  if (entry.restartInFlight) return;
+  entry.restartInFlight = true;
+  try {
+    entry.localNegotiationId = crypto.randomUUID();
+    const rawOffer = await entry.pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+    const offer = await applyLocalDescriptionWithOpusTuning(entry.pc, rawOffer);
+    entry.offerStarted = true;
+    const payload = {
+      type: offer.type,
+      sdp: offer.sdp,
+      negotiationId: entry.localNegotiationId,
+      ...(recoveryMode ? { recoveryMode } : {})
+    };
+    await sendSignal("offer", payload, { targetUserId: entry.userId });
+  } catch (error) {
+    logCallEvent("сигнал ошибка", `offer, ${String(error?.name || "network")}`);
+  } finally {
+    entry.restartInFlight = false;
+  }
+}
+
+async function flushGroupIceBatch(peerUserId, signals) {
+  if (!currentCall || !isGroupCall(currentCall) || !Array.isArray(signals) || !signals.length) return;
+  if (signals.length === 1) {
+    try {
+      await sendSignal("ice", signals[0].payload, { targetUserId: peerUserId });
+    } catch {}
+    return;
+  }
+  const sendingCallId = currentCall.callId;
+  try {
+    const result = await api(callPath("/signals"), {
+      method: "POST",
+      retries: 1,
+      body: JSON.stringify({ signals })
+    });
+    if (currentCall?.callId !== sendingCallId) return;
+    for (const signal of result.signals ?? []) {
+      if (signal?.sequence) processedSignalSequences.add(signal.sequence);
+    }
+  } catch (error) {
+    if (currentCall?.callId === sendingCallId) {
+      logCallEvent("сигнал ошибка", `ice, ${String(error?.name || "network")}`);
+    }
+  }
+}
+
+async function processGroupSignal(signal) {
+  const peerUserId = signal.senderUserId;
+  const processingCallId = currentCall?.callId;
+  if (!peerUserId || !processingCallId) return true;
+  if (signal.kind !== "ice") logCallEvent("сигнал получен", signal.kind);
+  try {
+    if (signal.kind === "resume") {
+      if (shouldInitiateOffer(account?.userId, peerUserId) && !recoveryPending) {
+        const hard = signal.payload?.mode === "rebuild";
+        await recoverGroupPeer(peerUserId, signal.payload?.reason || "peer-reconnect", hard);
+      }
+      processedSignalSequences.add(signal.sequence);
+      return true;
+    }
+
+    let entry = await ensureGroupPeer(peerUserId);
+    if (!entry || currentCall?.callId !== processingCallId) return true;
+
+    if (signal.kind === "offer") {
+      const incomingNegotiation = signal.payload?.negotiationId ?? null;
+      if (incomingNegotiation && incomingNegotiation === entry.remoteNegotiationId &&
+          entry.pc.remoteDescription?.sdp === signal.payload.sdp) {
+        processedSignalSequences.add(signal.sequence);
+        return true;
+      }
+      if (signal.payload?.recoveryMode === "rebuild" || entry.pc.signalingState !== "stable") {
+        const pendingCandidates = entry.remoteCandidates;
+        removeGroupPeer(peerUserId);
+        entry = await ensureGroupPeer(peerUserId, { refreshIce: signal.payload?.recoveryMode === "rebuild" });
+        if (!entry || currentCall?.callId !== processingCallId) return true;
+        entry.remoteCandidates = pendingCandidates;
+      }
+      entry.remoteNegotiationId = incomingNegotiation;
+      await entry.pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+      await flushGroupRemoteCandidates(entry);
+      const rawAnswer = await entry.pc.createAnswer();
+      const answer = await applyLocalDescriptionWithOpusTuning(entry.pc, rawAnswer);
+      await sendSignal("answer", {
+        type: answer.type,
+        sdp: answer.sdp,
+        negotiationId: entry.remoteNegotiationId
+      }, { targetUserId: peerUserId });
+      processedSignalSequences.add(signal.sequence);
+      return true;
+    }
+
+    if (signal.kind === "answer") {
+      if (signal.payload?.negotiationId && signal.payload.negotiationId !== entry.localNegotiationId) {
+        processedSignalSequences.add(signal.sequence);
+        return true;
+      }
+      if (entry.pc.signalingState === "have-local-offer") {
+        await entry.pc.setRemoteDescription({ type: signal.payload.type, sdp: signal.payload.sdp });
+        await flushGroupRemoteCandidates(entry);
+      }
+      processedSignalSequences.add(signal.sequence);
+      return true;
+    }
+
+    if (signal.kind === "ice") {
+      const isInitiator = shouldInitiateOffer(account?.userId, peerUserId);
+      const currentGen = isInitiator ? entry.localNegotiationId : entry.remoteNegotiationId;
+      const disposition = classifyIceCandidate(signal.payload?.negotiationId, currentGen, !isInitiator);
+      if (disposition === "ignore") {
+        processedSignalSequences.add(signal.sequence);
+        return true;
+      }
+      if (disposition === "queue" || !entry.pc.remoteDescription) {
+        entry.remoteCandidates.push(signal.payload);
+        if (entry.remoteCandidates.length > 128) entry.remoteCandidates.splice(0, entry.remoteCandidates.length - 128);
+      } else {
+        await entry.pc.addIceCandidate(signal.payload);
+      }
+    }
+    processedSignalSequences.add(signal.sequence);
+    return true;
+  } catch (error) {
+    if (currentCall?.callId !== processingCallId) return true;
+    logCallEvent("сигнал ошибка", `${signal.kind}, ${String(error?.name || "network")}`);
+    return false;
+  }
+}
+
+async function flushGroupRemoteCandidates(entry) {
+  if (!entry?.pc?.remoteDescription) return;
+  const queued = entry.remoteCandidates;
+  entry.remoteCandidates = [];
+  const isInitiator = shouldInitiateOffer(account?.userId, entry.userId);
+  const expected = isInitiator ? entry.localNegotiationId : entry.remoteNegotiationId;
+  for (const candidate of queued) {
+    if (candidate.negotiationId && expected && candidate.negotiationId !== expected) continue;
+    try { await entry.pc.addIceCandidate(candidate); } catch {}
+  }
+}
+
+async function recoverGroupPeer(peerUserId, reason, hard) {
+  if (!currentCall || !isGroupCall(currentCall) || recoveryPending) return;
+  let entry = groupPeers.get(peerUserId);
+  if (!entry) return;
+  entry.recoveryAttempt += 1;
+  if (shouldInitiateOffer(account?.userId, peerUserId)) {
+    const freshIce = await getIceServers({ refresh: true });
+    if (hard || entry.pc.signalingState !== "stable") {
+      removeGroupPeer(peerUserId);
+      entry = await ensureGroupPeer(peerUserId, { iceServers: freshIce });
+      if (!entry) return;
+    } else {
+      try { entry.pc.restartIce?.(); } catch {}
+    }
+    await sendGroupOffer(entry, { iceRestart: true, recoveryMode: hard ? "rebuild" : "ice-restart" });
+  } else {
+    await sendSignal("resume", { reason, mode: hard ? "rebuild" : "ice-restart" }, { targetUserId: peerUserId }).catch(() => {});
+  }
+}
+
+async function recoverAllGroupPeers(reason, hard) {
+  for (const peerUserId of [...groupPeers.keys()]) {
+    await recoverGroupPeer(peerUserId, reason, hard);
+  }
+}
+
+function removeGroupPeer(peerUserId) {
+  const entry = groupPeers.get(peerUserId);
+  if (!entry) return;
+  groupPeers.delete(peerUserId);
+  clearTimeout(entry.disconnectTimer);
+  clearTimeout(entry.recoveryWatchdog);
+  entry.iceBatcher?.clear();
+  for (const sender of entry.pc?.getSenders?.() ?? []) stopAdaptiveBitrate(sender);
+  remoteAudioStopping = true;
+  try { entry.audioEl?.pause?.(); } catch {}
+  if (entry.audioEl) {
+    entry.audioEl.srcObject = null;
+    entry.audioEl.remove();
+  }
+  remoteAudioStopping = false;
+  try { entry.pc?.close?.(); } catch {}
+}
+
+function cleanupGroupPeers() {
+  for (const peerId of [...groupPeers.keys()]) {
+    removeGroupPeer(peerId);
+  }
+}
+
 function showIncoming(call) {
+  setCallActivityFlag(true);
   startCallTimer();
   elements.callPanel.hidden = false;
   setCallPresentation("incoming");
-  elements.callTitle.textContent = "Входящий звонок";
-  elements.callPeer.textContent = `${call.peer.displayName}, @${call.peer.username}`;
-  setCallStatus("Входящий аудиозвонок.");
+  const group = isGroupCall(call);
+  elements.callTitle.textContent = group ? "Входящий групповой звонок" : "Входящий звонок";
+  elements.callPeer.textContent = group
+    ? `${call.groupTitle || call.peer.displayName} · ${call.caller?.displayName ?? ""}`.trim()
+    : `${call.peer.displayName}, @${call.peer.username}`;
+  setCallStatus(group ? "Приглашение в групповой аудиозвонок." : "Входящий аудиозвонок.");
+  elements.callAnswerButton.textContent = group ? "Присоединиться" : "Ответить";
   elements.callAnswerButton.hidden = false;
   elements.callDeclineButton.hidden = false;
   elements.callResumeButton.hidden = true;
@@ -1648,11 +2961,14 @@ function showIncoming(call) {
   elements.callMuteButton.hidden = true;
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = true;
+  if (elements.callEndAllButton) elements.callEndAllButton.hidden = true;
+  renderCallParticipants();
   syncCallButton();
   elements.callAnswerButton.focus();
 }
 
 function showOutgoing(call) {
+  setCallActivityFlag(true);
   startCallTimer();
   elements.callPanel.hidden = false;
   setCallPresentation("outgoing");
@@ -1667,29 +2983,39 @@ function showOutgoing(call) {
   headsetControls?.activate(muted);
   elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = false;
+  elements.callEndButton.textContent = "Завершить звонок";
   elements.callEndButton.hidden = false;
+  if (elements.callEndAllButton) elements.callEndAllButton.hidden = true;
+  renderCallParticipants();
   syncCallButton();
   elements.callEndButton.focus();
 }
 
 function showConnectedControls(status) {
+  setCallActivityFlag(true);
   startCallTimer();
-  if (currentCall?.status === "accepted" && !audioConnectedOnce)
+  if (currentCall?.status === "accepted" && !audioConnectedOnce && !isGroupCall(currentCall))
     initialConnectionWatchdog.arm(currentCall.callId);
   elements.callPanel.hidden = false;
   const focusMoved = [elements.callAnswerButton, elements.callResumeButton].includes(document.activeElement);
   setCallPresentation("connected");
-  elements.callTitle.textContent = "Аудиозвонок";
+  const group = isGroupCall(currentCall);
+  elements.callTitle.textContent = group ? "Групповой звонок" : "Аудиозвонок";
+  if (group) {
+    elements.callPeer.textContent = currentCall.groupTitle || currentCall.peer?.displayName || "Группа";
+  }
   setCallStatus(status);
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
-  elements.callResumeButton.hidden = !remotePlaybackBlocked;
+  elements.callResumeButton.hidden = !isAnyRemoteAudioBlocked();
   elements.callHandoffButton.hidden = true;
   elements.callMuteButton.hidden = false;
   headsetControls?.activate(muted);
   elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = false;
+  elements.callEndButton.textContent = group ? "Покинуть звонок" : "Завершить звонок";
   elements.callEndButton.hidden = false;
+  renderCallParticipants();
   syncCallButton();
   if (focusMoved) elements.callEndButton.focus();
 }
@@ -1699,18 +3025,23 @@ function showRecoveredCall(status) {
   if (!currentCall) return;
   elements.callPanel.hidden = false;
   setCallPresentation("connected");
-  elements.callTitle.textContent = "Активный звонок";
-  elements.callPeer.textContent = `${currentCall.peer.displayName}, @${currentCall.peer.username}`;
+  const group = isGroupCall(currentCall);
+  elements.callTitle.textContent = group ? "Активный групповой звонок" : "Активный звонок";
+  elements.callPeer.textContent = group
+    ? (currentCall.groupTitle || currentCall.peer.displayName)
+    : `${currentCall.peer.displayName}, @${currentCall.peer.username}`;
   setCallStatus(status);
   elements.callAnswerButton.hidden = true;
   elements.callDeclineButton.hidden = true;
-  const moved = currentCall.status==="accepted" &&
-    currentCall.sessionOwnerId && currentCall.sessionOwnerId!==getCurrentSession()?.sessionId;
+  const moved = currentCall.status === "accepted" &&
+    currentCall.sessionOwnerId && currentCall.sessionOwnerId !== getCurrentSession()?.sessionId;
   elements.callResumeButton.hidden = Boolean(moved);
   elements.callHandoffButton.hidden = !moved;
   elements.callMuteButton.hidden = true;
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
+  elements.callEndButton.textContent = group ? "Покинуть звонок" : "Завершить звонок";
   elements.callEndButton.hidden = false;
+  renderCallParticipants();
   syncCallButton();
 }
 
@@ -1730,6 +3061,8 @@ function clearCallNotifications(callId) {
 
 function finishCall(message) {
   if (currentCall) {
+    callProfiler.mark("call_ended", activeProfileSessionId);
+    logProfilerSummaryOnce(activeProfileSessionId);
     clearCallNotifications(currentCall.callId);
     logCallEvent(message.includes("отклон") ? "звонок отклонён" : "звонок завершён");
     stopCallCues();
@@ -1741,6 +3074,8 @@ function finishCall(message) {
   offerStarted = false;
   recoveryPending = false;
   renderFinished(message);
+  renderCallParticipants();
+  renderGroupCallBanner();
   syncCallButton();
 }
 
@@ -1758,6 +3093,7 @@ function renderFinished(message) {
   elements.callMuteButton.hidden = true;
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = true;
+  if (elements.callEndAllButton) elements.callEndAllButton.hidden = true;
   elements.callDismissButton.focus();
 }
 
@@ -1773,6 +3109,8 @@ function renderIdle() {
   elements.callMuteButton.hidden = true;
   if (document.querySelector("#call-audio-cycle")) document.querySelector("#call-audio-cycle").hidden = true;
   elements.callEndButton.hidden = true;
+  if (elements.callEndAllButton) elements.callEndAllButton.hidden = true;
+  renderCallParticipants();
 }
 
 function setCallPresentation(mode) {
@@ -1856,7 +3194,6 @@ function setCallStatus(text) {
 
 function syncCallButton() {
   const chatSelected = Boolean(account) &&
-    elements.messageForm.dataset?.chatKind !== 'group' &&
     !elements.messageForm.hidden &&
     Boolean(elements.messageForm.dataset?.conversationId ||
       elements.conversationPeer.textContent.trim().startsWith("@"));
@@ -1866,19 +3203,50 @@ function syncCallButton() {
 function toggleMute() { setMuted(!muted); }
 
 function setMuted(nextMuted) {
-  if (!localStream || currentCall?.status !== "accepted") return;
+  if (!localStream || !currentCall) return;
+  if (currentCall.status !== "accepted" && currentCall.status !== "ringing") return;
   const next = Boolean(nextMuted);
-  if (next === muted) return;
+  if (next === muted) {
+    ensureRemoteAudioPlaying();
+    return;
+  }
   muted = next;
-  for (const track of localStream.getAudioTracks()) track.enabled = !muted;
+  const tracks = localStream.getAudioTracks();
+  const hasLiveTrack = tracks.some((track) => track.readyState !== "ended");
+  if (!muted && !hasLiveTrack) {
+    void recoverLocalMicrophoneTrack();
+  }
+  for (const track of tracks) track.enabled = !muted;
+  const allPcs = [peerConnection, ...[...groupPeers.values()].map((entry) => entry.pc)].filter(Boolean);
+  for (const pc of allPcs) {
+    for (const sender of pc.getSenders?.() ?? []) {
+      if (sender.track?.kind === "audio") sender.track.enabled = !muted;
+    }
+  }
   elements.callMuteButton.textContent = muted ? "Включить микрофон" : "Выключить микрофон";
   elements.callMuteButton.setAttribute?.("aria-pressed", String(muted));
   headsetControls?.updateMuted(muted);
+  ensureRemoteAudioPlaying();
   announce(muted ? "Микрофон выключен." : "Микрофон включён.");
+  if (isGroupCall(currentCall) && currentCall.status === "accepted" && currentCall.joined) {
+    if (Array.isArray(currentCall.participants)) {
+      currentCall.participants = currentCall.participants.map((entry) =>
+        entry.userId === account?.userId ? { ...entry, muted } : entry
+      );
+      renderCallParticipants();
+    }
+    void api(callPath("/mute"), {
+      method: "POST",
+      body: JSON.stringify({ muted })
+    }).catch(() => {});
+  }
 }
 
 function cleanupMedia() {
+  setCallActivityFlag(false);
+  abortCallRequests();
   initialConnectionWatchdog.disarm();
+  watchdogExtended = false;
   recoveryGate.reset();
   networkRestoration.reset();
   pendingFastRecovery = null;
@@ -1891,6 +3259,7 @@ function cleanupMedia() {
   ringTimeout = null;
   stopCallPolling();
   cleanupPeerConnection();
+  cleanupGroupPeers();
   stopLocalStream();
   clearNetworkRecoveryState();
   processedSignalSequences = new Set();
@@ -1913,13 +3282,17 @@ function cleanupMedia() {
   }
   elements.callMuteButton.textContent = "Выключить микрофон";
   elements.callMuteButton.setAttribute?.("aria-pressed", "false");
+  remoteAudioStopping = true;
   try { elements.callRemoteAudio.pause(); } catch {}
   elements.callRemoteAudio.srcObject = null;
+  remoteAudioStopping = false;
 }
 
 function cleanupPeerConnection() {
   peerCreationEpoch += 1;
+  stopFirstAudioFrameProbe();
   iceBatcher.clear();
+  jitterController.reset();
   if (peerConnection) {
     logCallEvent("WebRTC закрыт");
     for (const sender of peerConnection.getSenders?.() ?? []) stopAdaptiveBitrate(sender);
@@ -1927,8 +3300,10 @@ function cleanupPeerConnection() {
   peerConnectionPromise = null;
   stopQualityMonitoring();
   if (elements.callRemoteAudio) {
+    remoteAudioStopping = true;
     try { elements.callRemoteAudio.pause(); } catch {}
     elements.callRemoteAudio.srcObject = null;
+    remoteAudioStopping = false;
   }
   remotePlaybackBlocked = false;
   if (peerConnection) {
@@ -1945,9 +3320,11 @@ function clearNetworkRecoveryState() {
   clearAutomaticRecoveryTimers();
   stopQualityMonitoring();
   recoveryAttempt = 0;
-  jitterBufferTargetMs = null;
+  jitterController.reset();
   audioConnectedOnce = false;
   networkRecoveryActive = false;
+  lastConnectedAt = 0;
+  watchdogExtended = false;
 }
 
 function stopLocalStream() {
@@ -1958,7 +3335,10 @@ function stopLocalStream() {
 }
 
 function resetCallRuntime() {
+  setCallActivityFlag(false);
+  abortCallRequests();
   initialConnectionWatchdog.disarm();
+  watchdogExtended = false;
   recoveryGate.reset();
   networkRestoration.reset();
   pendingFastRecovery = null;
@@ -1972,6 +3352,7 @@ function resetCallRuntime() {
   ringTimeout = null;
   stopCallPolling();
   cleanupPeerConnection();
+  cleanupGroupPeers();
   stopLocalStream();
   processedSignalSequences = new Set();
   signalPollCursor = 0;

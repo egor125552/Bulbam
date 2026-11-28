@@ -42,6 +42,8 @@ test("caller may send SDP and ICE during ringing, but callee cannot answer SDP o
  expect(unrelated.status).toBe(404);
  const accepted=await post("/transition",{callId:call.callId,actorUserId:"bob",action:"answer"});
  expect(accepted.status).toBe(200);
+ const acceptedBody=await accepted.json();
+ expect(acceptedBody.signals.map(s=>s.kind)).toEqual(["offer","ice"]);
  const signals=await get("/signals?callId=call-1&viewerUserId=bob&after=0");
  expect((await signals.json()).signals.map(s=>s.kind)).toEqual(["offer","ice"]);
  const answer=await post("/signal",{callId:call.callId,actorUserId:"bob",kind:"answer",payload:{type:"answer",sdp:"v=0"}});
